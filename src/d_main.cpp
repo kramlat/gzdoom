@@ -807,6 +807,12 @@ void D_Display ()
 				break;
 			}
 
+			extern void ConfirmSendStats();
+			if (gamestate == GS_TITLELEVEL)
+			{
+				ConfirmSendStats();
+			}
+
 			if (StatusBar != NULL)
 			{
 				float blend[4] = { 0, 0, 0, 0 };
@@ -885,6 +891,7 @@ void D_Display ()
 			break;
 
 		case GS_DEMOSCREEN:
+			ConfirmSendStats();
 			screen->SetBlendingRect(0,0,0,0);
 			hw2d = screen->Begin2D(false);
 			D_PageDrawer ();

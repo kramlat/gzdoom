@@ -20,6 +20,14 @@ extern int sys_ostype;
 
 EXTERN_CVAR(Bool, vid_glswfb)
 extern int currentrenderer;
+
+void D_DoAnonStats();
+
+CUSTOM_CVAR(Int, sys_statsenabled, -1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOSET | CVAR_NOINITCALL)
+{
+	D_DoAnonStats();
+}
+
 CVAR(String, sys_statshost, "gzstats.drdteam.org", CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOSET)
 CVAR(Int, sys_statsport, 80, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOSET)
 
@@ -227,6 +235,11 @@ static void D_DoHTTPRequest(const char *request)
 
 void D_DoAnonStats()
 {
+	if (sys_statsenabled != 1)
+	{
+		return;
+	}
+
 	static bool done = false;	// do this only once per session.
 	if (done) return;
 	done = true;

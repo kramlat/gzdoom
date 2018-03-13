@@ -279,3 +279,34 @@ DEFINE_ACTION_FUNCTION(DMenu, StartMessage)
 	M_StartMessage(msg, mode, action);
 	return 0;
 }
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
+EXTERN_CVAR(Int, sys_statsenabled)
+
+void ConfirmSendStats()
+{
+	if (sys_statsenabled >= 0)
+	{
+		return;
+	}
+
+	const UCVarValue disabled = { 0 };
+	sys_statsenabled.ForceSet(disabled, CVAR_Int);
+
+	static const char *const message = "send stats?"; // TODO!
+
+	DMenu *newmenu = CreateMessageBoxMenu(CurrentMenu, message, 0, false, NAME_None, []()
+	{
+		const UCVarValue enabled = { 1 };
+		sys_statsenabled.ForceSet(enabled, CVAR_Int);
+
+		M_ClearMenus();
+	});
+
+	M_ActivateMenu(newmenu);
+}
