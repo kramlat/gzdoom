@@ -1,27 +1,41 @@
-// 
-//---------------------------------------------------------------------------
-//
-// Copyright(C) 2004-2016 Christoph Oelckers
-// All rights reserved.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//--------------------------------------------------------------------------
-//
 /*
 ** gl_portal.cpp
 **   Generalized portal maintenance classes for skyboxes, horizons etc.
+**   Requires a stencil buffer!
+**
+**---------------------------------------------------------------------------
+** Copyright 2004-2005 Christoph Oelckers
+** All rights reserved.
+**
+** Redistribution and use in source and binary forms, with or without
+** modification, are permitted provided that the following conditions
+** are met:
+**
+** 1. Redistributions of source code must retain the above copyright
+**    notice, this list of conditions and the following disclaimer.
+** 2. Redistributions in binary form must reproduce the above copyright
+**    notice, this list of conditions and the following disclaimer in the
+**    documentation and/or other materials provided with the distribution.
+** 3. The name of the author may not be used to endorse or promote products
+**    derived from this software without specific prior written permission.
+** 4. When not used as part of GZDoom or a GZDoom derivative, this code will be
+**    covered by the terms of the GNU Lesser General Public License as published
+**    by the Free Software Foundation; either version 2.1 of the License, or (at
+**    your option) any later version.
+** 5. Full disclosure of the entire project's source code, except for third
+**    party libraries is mandatory. (NOTE: This clause is non-negotiable!)
+**
+** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+**---------------------------------------------------------------------------
 **
 */
 
@@ -31,12 +45,6 @@
 #include "c_dispatch.h"
 #include "doomstat.h"
 #include "a_sharedglobal.h"
-#include "r_sky.h"
-#include "portal.h"
-#include "p_maputl.h"
-#include "d_player.h"
-#include "g_levellocals.h"
-#include "actorinlines.h"
 
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
@@ -44,19 +52,17 @@
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
-#include "gl/renderer/gl_quaddrawer.h"
 #include "gl/dynlights/gl_glow.h"
 #include "gl/data/gl_data.h"
 #include "gl/data/gl_vertexbuffer.h"
 #include "gl/scene/gl_clipper.h"
 #include "gl/scene/gl_drawinfo.h"
 #include "gl/scene/gl_portal.h"
-#include "gl/scene/gl_scenedrawer.h"
 #include "gl/shaders/gl_shader.h"
-#include "gl/stereo3d/scoped_color_mask.h"
 #include "gl/textures/gl_material.h"
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_templates.h"
+#include "gl/utility/gl_geometric.h"
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -72,7 +78,6 @@ EXTERN_CVAR(Bool, gl_portals)
 EXTERN_CVAR(Bool, gl_noquery)
 EXTERN_CVAR(Int, r_mirror_recursions)
 
-GLSceneDrawer *GLPortal::drawer;
 TArray<GLPortal *> GLPortal::portals;
 TArray<float> GLPortal::planestack;
 int GLPortal::recursion;
@@ -88,7 +93,8 @@ bool	 GLPortal::inskybox;
 UniqueList<GLSkyInfo> UniqueSkies;
 UniqueList<GLHorizonInfo> UniqueHorizons;
 UniqueList<secplane_t> UniquePlaneMirrors;
-UniqueList<FGLLinePortal> UniqueLineToLines;
+
+
 
 //==========================================================================
 //
@@ -101,7 +107,6 @@ void GLPortal::BeginScene()
 	UniqueSkies.Clear();
 	UniqueHorizons.Clear();
 	UniquePlaneMirrors.Clear();
-	UniqueLineToLines.Clear();
 }
 
 //==========================================================================
@@ -114,24 +119,16 @@ void GLPortal::ClearScreen()
 	bool multi = !!glIsEnabled(GL_MULTISAMPLE);
 	gl_MatrixStack.Push(gl_RenderState.mViewMatrix);
 	gl_MatrixStack.Push(gl_RenderState.mProjectionMatrix);
-
-	gl_RenderState.mViewMatrix.loadIdentity();
-	gl_RenderState.mProjectionMatrix.ortho(0, SCREENWIDTH, SCREENHEIGHT, 0, -1.0f, 1.0f);
-	gl_RenderState.ApplyMatrices();
-	gl_RenderState.SetColor(0, 0, 0);
-	gl_RenderState.Apply();
-
-	glDisable(GL_MULTISAMPLE);
-	glDisable(GL_DEPTH_TEST);
-
-	glDrawArrays(GL_TRIANGLE_STRIP, FFlatVertexBuffer::FULLSCREEN_INDEX, 4);
-
+	screen->Begin2D(false);
+	screen->Dim(0, 1.f, 0, 0, SCREENWIDTH, SCREENHEIGHT);
 	glEnable(GL_DEPTH_TEST);
 	gl_MatrixStack.Pop(gl_RenderState.mProjectionMatrix);
 	gl_MatrixStack.Pop(gl_RenderState.mViewMatrix);
 	gl_RenderState.ApplyMatrices();
 	if (multi) glEnable(GL_MULTISAMPLE);
+	gl_RenderState.Set2DMode(false);
 }
+
 
 //-----------------------------------------------------------------------------
 //
@@ -142,24 +139,35 @@ void GLPortal::DrawPortalStencil()
 {
 	if (mPrimIndices.Size() == 0)
 	{
-		mPrimIndices.Resize(2 * lines.Size());
+		bool cap = NeedCap() && lines.Size() > 1;
+		mPrimIndices.Resize(2 * lines.Size() + 4 * cap);
 
-		for (unsigned int i = 0; i < lines.Size(); i++)
+		for (unsigned int i = 0; i<lines.Size(); i++)
 		{
-			if (gl.buffermethod != BM_DEFERRED) lines[i].MakeVertices(false);
-			mPrimIndices[i * 2] = lines[i].vertindex;
-			mPrimIndices[i * 2 + 1] = lines[i].vertcount;
+			lines[i].RenderWall(GLWall::RWF_NORENDER, &mPrimIndices[i * 2]);
+		}
+
+		if (cap)
+		{
+			// Cap the stencil at the top and bottom
+			int n = lines.Size() * 2;
+			FFlatVertex *ptr = GLRenderer->mVBO->GetBuffer();
+			ptr->Set(-32767.0f, 32767.0f, -32767.0f, 0, 0);
+			ptr->Set(-32767.0f, 32767.0f, 32767.0f, 0, 0);
+			ptr->Set(32767.0f, 32767.0f, 32767.0f, 0, 0);
+			ptr->Set(32767.0f, 32767.0f, -32767.0f, 0, 0);
+			mPrimIndices[n + 1] = GLRenderer->mVBO->GetCount(ptr, &mPrimIndices[n]);
+			ptr->Set(-32767.0f, -32767.0f, -32767.0f, 0, 0);
+			ptr->Set(-32767.0f, -32767.0f, 32767.0f, 0, 0);
+			ptr->Set(32767.0f, -32767.0f, 32767.0f, 0, 0);
+			ptr->Set(32767.0f, -32767.0f, -32767.0f, 0, 0);
+			mPrimIndices[n + 3] = GLRenderer->mVBO->GetCount(ptr, &mPrimIndices[n + 2]);
 		}
 	}
 	gl_RenderState.Apply();
 	for (unsigned int i = 0; i < mPrimIndices.Size(); i += 2)
 	{
 		GLRenderer->mVBO->RenderArray(GL_TRIANGLE_FAN, mPrimIndices[i], mPrimIndices[i + 1]);
-	}
-	if (NeedCap() && lines.Size() > 1)
-	{
-		GLRenderer->mVBO->RenderArray(GL_TRIANGLE_FAN, FFlatVertexBuffer::STENCILTOP_INDEX, 4);
-		GLRenderer->mVBO->RenderArray(GL_TRIANGLE_FAN, FFlatVertexBuffer::STENCILBOTTOM_INDEX, 4);
 	}
 }
 
@@ -177,92 +185,88 @@ void GLPortal::DrawPortalStencil()
 bool GLPortal::Start(bool usestencil, bool doquery)
 {
 	rendered_portals++;
-//	PortalAll.Clock();
+	PortalAll.Clock();
 	if (usestencil)
 	{
 		if (!gl_portals) 
 		{
-//			PortalAll.Unclock();
+			PortalAll.Unclock();
 			return false;
 		}
 	
 		// Create stencil 
 		glStencilFunc(GL_EQUAL,recursion,~0);		// create stencil
-		glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);		// increment stencil of valid pixels
+		glStencilOp(GL_KEEP,GL_KEEP,GL_INCR);		// increment stencil of valid pixels
+		glColorMask(0,0,0,0);						// don't write to the graphics buffer
+		gl_RenderState.SetEffect(EFF_STENCIL);
+		gl_RenderState.EnableTexture(false);
+		gl_RenderState.ResetColor();
+		glDepthFunc(GL_LESS);
+		gl_RenderState.Apply();
+
+		if (NeedDepthBuffer())
 		{
-			ScopedColorMask colorMask(0, 0, 0, 0); // glColorMask(0,0,0,0);						// don't write to the graphics buffer
-			gl_RenderState.SetEffect(EFF_STENCIL);
-			gl_RenderState.EnableTexture(false);
-			gl_RenderState.ResetColor();
+			glDepthMask(false);							// don't write to Z-buffer!
+			if (!NeedDepthBuffer()) doquery = false;		// too much overhead and nothing to gain.
+			else if (gl_noquery) doquery = false;
+			
+			// If occlusion query is supported let's use it to avoid rendering portals that aren't visible
+			if (!QueryObject) glGenQueries(1, &QueryObject);
+			if (QueryObject) 
+			{
+				glBeginQuery(GL_SAMPLES_PASSED, QueryObject);
+			}
+			else doquery = false;	// some kind of error happened
+
+			DrawPortalStencil();
+
+			glEndQuery(GL_SAMPLES_PASSED);
+
+			// Clear Z-buffer
+			glStencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
+			glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
+			glDepthMask(true);							// enable z-buffer again
+			glDepthRange(1,1);
+			glDepthFunc(GL_ALWAYS);
+			DrawPortalStencil();
+
+			// set normal drawing mode
+			gl_RenderState.EnableTexture(true);
 			glDepthFunc(GL_LESS);
-			gl_RenderState.Apply();
+			glColorMask(1,1,1,1);
+			gl_RenderState.SetEffect(EFF_NONE);
+			glDepthRange(0, 1);
 
-			if (NeedDepthBuffer())
+			GLuint sampleCount;
+
+			glGetQueryObjectuiv(QueryObject, GL_QUERY_RESULT, &sampleCount);
+
+			if (sampleCount==0) 	// not visible
 			{
-				glDepthMask(false);							// don't write to Z-buffer!
-				if (!NeedDepthBuffer()) doquery = false;		// too much overhead and nothing to gain.
-				else if (gl_noquery) doquery = false;
-
-				// If occlusion query is supported let's use it to avoid rendering portals that aren't visible
-				if (QueryObject)
-				{
-					glBeginQuery(GL_SAMPLES_PASSED, QueryObject);
-				}
-				else doquery = false;	// some kind of error happened
-
-				DrawPortalStencil();
-
-				glEndQuery(GL_SAMPLES_PASSED);
-
-				// Clear Z-buffer
-				glStencilFunc(GL_EQUAL, recursion + 1, ~0);		// draw sky into stencil
-				glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);		// this stage doesn't modify the stencil
-				glDepthMask(true);							// enable z-buffer again
-				glDepthRange(1, 1);
-				glDepthFunc(GL_ALWAYS);
-				DrawPortalStencil();
-
-				// set normal drawing mode
-				gl_RenderState.EnableTexture(true);
-				glDepthFunc(GL_LESS);
-				// glColorMask(1, 1, 1, 1);
-				gl_RenderState.SetEffect(EFF_NONE);
-				glDepthRange(0, 1);
-
-				GLuint sampleCount;
-
-				if (QueryObject)
-				{
-					glGetQueryObjectuiv(QueryObject, GL_QUERY_RESULT, &sampleCount);
-
-					if (sampleCount == 0) 	// not visible
-					{
-						// restore default stencil op.
-						glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-						glStencilFunc(GL_EQUAL, recursion, ~0);		// draw sky into stencil
-						PortalAll.Unclock();
-						return false;
-					}
-				}
-				FDrawInfo::StartDrawInfo(drawer);
+				// restore default stencil op.
+				glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
+				glStencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
+				PortalAll.Unclock();
+				return false;
 			}
-			else
-			{
-				// No z-buffer is needed therefore we can skip all the complicated stuff that is involved
-				// No occlusion queries will be done here. For these portals the overhead is far greater
-				// than the benefit.
-				// Note: We must draw the stencil with z-write enabled here because there is no second pass!
+			FDrawInfo::StartDrawInfo();
+		}
+		else
+		{
+			// No z-buffer is needed therefore we can skip all the complicated stuff that is involved
+			// No occlusion queries will be done here. For these portals the overhead is far greater
+			// than the benefit.
+			// Note: We must draw the stencil with z-write enabled here because there is no second pass!
 
-				glDepthMask(true);
-				DrawPortalStencil();
-				glStencilFunc(GL_EQUAL, recursion + 1, ~0);		// draw sky into stencil
-				glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);		// this stage doesn't modify the stencil
-				gl_RenderState.EnableTexture(true);
-				// glColorMask(1,1,1,1);
-				gl_RenderState.SetEffect(EFF_NONE);
-				glDisable(GL_DEPTH_TEST);
-				glDepthMask(false);							// don't write to Z-buffer!
-			}
+			glDepthMask(true);
+			DrawPortalStencil();
+			glStencilFunc(GL_EQUAL,recursion+1,~0);		// draw sky into stencil
+			glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);		// this stage doesn't modify the stencil
+			gl_RenderState.EnableTexture(true);
+			glColorMask(1,1,1,1);
+			gl_RenderState.SetEffect(EFF_NONE);
+			glDisable(GL_DEPTH_TEST);
+			glDepthMask(false);							// don't write to Z-buffer!
 		}
 		recursion++;
 
@@ -272,7 +276,7 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 	{
 		if (NeedDepthBuffer())
 		{
-			FDrawInfo::StartDrawInfo(drawer);
+			FDrawInfo::StartDrawInfo();
 		}
 		else
 		{
@@ -280,55 +284,58 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 			glDisable(GL_DEPTH_TEST);
 		}
 	}
+	planestack.Push(gl_RenderState.GetClipHeightTop());
+	planestack.Push(gl_RenderState.GetClipHeightBottom());
+	glDisable(GL_CLIP_DISTANCE0);
+	glDisable(GL_CLIP_DISTANCE1);
+	gl_RenderState.SetClipHeightBottom(-65536.f);
+	gl_RenderState.SetClipHeightTop(65536.f);
 
 	// save viewpoint
-	savedViewPos = r_viewpoint.Pos;
-	savedViewActorPos = r_viewpoint.ActorPos;
-	savedshowviewer = r_viewpoint.showviewer;
-	savedAngles = r_viewpoint.Angles;
+	savedviewx=viewx;
+	savedviewy=viewy;
+	savedviewz=viewz;
 	savedviewactor=GLRenderer->mViewActor;
-	savedviewarea=drawer->in_area;
-	savedviewpath[0] = r_viewpoint.Path[0];
-	savedviewpath[1] = r_viewpoint.Path[1];
-	savedvisibility = r_viewpoint.camera ? r_viewpoint.camera->renderflags & RF_MAYBEINVISIBLE : ActorRenderFlags::FromInt(0);
+	savedviewangle=viewangle;
+	savedviewarea=in_area;
 
-
-	PrevPortal = GLRenderer->mCurrentPortal;
-	PrevClipPortal = GLRenderer->mClipPortal;
-	GLRenderer->mClipPortal = NULL;	// Portals which need this have to set it themselves
-	GLRenderer->mCurrentPortal = this;
-
-	if (PrevPortal != NULL) PrevPortal->PushState();
-//	PortalAll.Unclock();
+	NextPortal = GLRenderer->mCurrentPortal;
+	GLRenderer->mCurrentPortal = NULL;	// Portals which need this have to set it themselves
+	PortalAll.Unclock();
 	return true;
 }
 
 
 inline void GLPortal::ClearClipper()
 {
-	DAngle angleOffset = deltaangle(savedAngles.Yaw, r_viewpoint.Angles.Yaw);
+	fixed_t angleOffset = viewangle - savedviewangle;
 
-	drawer->clipper.Clear();
+	clipper.Clear();
+
+	static int call=0;
 
 	// Set the clipper to the minimal visible area
-	drawer->clipper.SafeAddClipRange(0,0xffffffff);
-	for (unsigned int i = 0; i < lines.Size(); i++)
+	clipper.SafeAddClipRange(0,0xffffffff);
+	for(unsigned int i=0;i<lines.Size();i++)
 	{
-		DAngle startAngle = (DVector2(lines[i].glseg.x2, lines[i].glseg.y2) - savedViewPos).Angle() + angleOffset;
-		DAngle endAngle = (DVector2(lines[i].glseg.x1, lines[i].glseg.y1) - savedViewPos).Angle() + angleOffset;
+		angle_t startAngle = R_PointToAnglePrecise(savedviewx, savedviewy, 
+												FLOAT2FIXED(lines[i].glseg.x2), FLOAT2FIXED(lines[i].glseg.y2));
 
-		if (deltaangle(endAngle, startAngle) < 0)
+		angle_t endAngle = R_PointToAnglePrecise(savedviewx, savedviewy, 
+												FLOAT2FIXED(lines[i].glseg.x1), FLOAT2FIXED(lines[i].glseg.y1));
+
+		if (startAngle-endAngle>0) 
 		{
-			drawer->clipper.SafeRemoveClipRangeRealAngles(startAngle.BAMs(), endAngle.BAMs());
+			clipper.SafeRemoveClipRangeRealAngles(startAngle + angleOffset, endAngle + angleOffset);
 		}
 	}
 
 	// and finally clip it to the visible area
-	angle_t a1 = drawer->FrustumAngle();
-	if (a1 < ANGLE_180) drawer->clipper.SafeAddClipRangeRealAngles(r_viewpoint.Angles.Yaw.BAMs() + a1, r_viewpoint.Angles.Yaw.BAMs() - a1);
+	angle_t a1 = GLRenderer->FrustumAngle();
+	if (a1<ANGLE_180) clipper.SafeAddClipRangeRealAngles(viewangle+a1, viewangle-a1);
 
 	// lock the parts that have just been clipped out.
-	drawer->clipper.SetSilhouette();
+	clipper.SetSilhouette();
 }
 
 //-----------------------------------------------------------------------------
@@ -341,57 +348,59 @@ void GLPortal::End(bool usestencil)
 	bool needdepth = NeedDepthBuffer();
 
 	PortalAll.Clock();
-	if (PrevPortal != NULL) PrevPortal->PopState();
-	GLRenderer->mCurrentPortal = PrevPortal;
-	GLRenderer->mClipPortal = PrevClipPortal;
+	GLRenderer->mCurrentPortal = NextPortal;
+
+	float f;
+	planestack.Pop(f);
+	gl_RenderState.SetClipHeightBottom(f);
+	if (f > -65535.f) glEnable(GL_CLIP_DISTANCE0);
+	planestack.Pop(f);
+	gl_RenderState.SetClipHeightTop(f);
+	if (f < 65535.f) glEnable(GL_CLIP_DISTANCE1);
 
 	if (usestencil)
 	{
 		if (needdepth) FDrawInfo::EndDrawInfo();
 
 		// Restore the old view
-		r_viewpoint.Path[0] = savedviewpath[0];
-		r_viewpoint.Path[1] = savedviewpath[1];
-		r_viewpoint.Pos = savedViewPos;
-		r_viewpoint.showviewer = savedshowviewer;
-		r_viewpoint.ActorPos = savedViewActorPos;
-		r_viewpoint.Angles = savedAngles;
+		viewx=savedviewx;
+		viewy=savedviewy;
+		viewz=savedviewz;
+		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
-		drawer->in_area=savedviewarea;
-		if (r_viewpoint.camera != nullptr) r_viewpoint.camera->renderflags = (r_viewpoint.camera->renderflags & ~RF_MAYBEINVISIBLE) | savedvisibility;
-		drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag & 1), !!(PlaneMirrorFlag & 1));
+		in_area=savedviewarea;
+		GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
+		glColorMask(0,0,0,0);						// no graphics
+		gl_RenderState.SetEffect(EFF_NONE);
+		gl_RenderState.ResetColor();
+		gl_RenderState.EnableTexture(false);
+		gl_RenderState.Apply();
+
+		if (needdepth) 
 		{
-			ScopedColorMask colorMask(0, 0, 0, 0); // glColorMask(0, 0, 0, 0);						// no graphics
-			gl_RenderState.SetEffect(EFF_NONE);
-			gl_RenderState.ResetColor();
-			gl_RenderState.EnableTexture(false);
-			gl_RenderState.Apply();
-
-			if (needdepth)
-			{
-				// first step: reset the depth buffer to max. depth
-				glDepthRange(1, 1);							// always
-				glDepthFunc(GL_ALWAYS);						// write the farthest depth value
-				DrawPortalStencil();
-			}
-			else
-			{
-				glEnable(GL_DEPTH_TEST);
-			}
-
-			// second step: restore the depth buffer to the previous values and reset the stencil
-			glDepthFunc(GL_LEQUAL);
-			glDepthRange(0, 1);
-			glStencilOp(GL_KEEP, GL_KEEP, GL_DECR);
-			glStencilFunc(GL_EQUAL, recursion, ~0);		// draw sky into stencil
+			// first step: reset the depth buffer to max. depth
+			glDepthRange(1,1);							// always
+			glDepthFunc(GL_ALWAYS);						// write the farthest depth value
 			DrawPortalStencil();
-			glDepthFunc(GL_LESS);
+		}
+		else
+		{
+			glEnable(GL_DEPTH_TEST);
+		}
+		
+		// second step: restore the depth buffer to the previous values and reset the stencil
+		glDepthFunc(GL_LEQUAL);
+		glDepthRange(0,1);
+		glStencilOp(GL_KEEP,GL_KEEP,GL_DECR);
+		glStencilFunc(GL_EQUAL,recursion,~0);		// draw sky into stencil
+		DrawPortalStencil();
+		glDepthFunc(GL_LESS);
 
 
-			gl_RenderState.EnableTexture(true);
-			gl_RenderState.SetEffect(EFF_NONE);
-		}  // glColorMask(1, 1, 1, 1);
+		gl_RenderState.EnableTexture(true);
+		gl_RenderState.SetEffect(EFF_NONE);
+		glColorMask(1, 1, 1, 1);
 		recursion--;
 
 		// restore old stencil op.
@@ -411,32 +420,27 @@ void GLPortal::End(bool usestencil)
 			glDepthMask(true);
 		}
 		// Restore the old view
-		r_viewpoint.showviewer = savedshowviewer;
-		r_viewpoint.ActorPos = savedViewActorPos;
-		r_viewpoint.Pos = savedViewPos;
-		r_viewpoint.Angles = savedAngles;
+		viewx=savedviewx;
+		viewy=savedviewy;
+		viewz=savedviewz;
+		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
-		drawer->in_area=savedviewarea;
-		if (r_viewpoint.camera != nullptr) r_viewpoint.camera->renderflags |= savedvisibility;
-		drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		in_area=savedviewarea;
+		GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
 		// This draws a valid z-buffer into the stencil's contents to ensure it
 		// doesn't get overwritten by the level's geometry.
 
 		gl_RenderState.ResetColor();
 		glDepthFunc(GL_LEQUAL);
-		glDepthRange(0, 1);
-		{
-			ScopedColorMask colorMask(0, 0, 0, 1); // mark portal in alpha channel but don't touch color
-			gl_RenderState.SetEffect(EFF_STENCIL);
-			gl_RenderState.EnableTexture(false);
-			gl_RenderState.BlendFunc(GL_ONE, GL_ZERO);
-			gl_RenderState.BlendEquation(GL_FUNC_ADD);
-			gl_RenderState.Apply();
-			DrawPortalStencil();
-			gl_RenderState.SetEffect(EFF_NONE);
-			gl_RenderState.EnableTexture(true);
-		}
+		glDepthRange(0,1);
+		glColorMask(0,0,0,0);						// no graphics
+		gl_RenderState.SetEffect(EFF_STENCIL);
+		gl_RenderState.EnableTexture(false);
+		DrawPortalStencil();
+		gl_RenderState.SetEffect(EFF_NONE);
+		gl_RenderState.EnableTexture(true);
+		glColorMask(1,1,1,1);
 		glDepthFunc(GL_LESS);
 	}
 	PortalAll.Unclock();
@@ -523,7 +527,7 @@ void GLPortal::EndFrame()
 //-----------------------------------------------------------------------------
 //
 // Renders one sky portal without a stencil.
-// In more complex scenes using a stencil for skies can severely stall
+// In more complex scenes using a stencil for skies can severly stall
 // the GPU and there's rarely more than one sky visible at a time.
 //
 //-----------------------------------------------------------------------------
@@ -614,53 +618,56 @@ void GLPortal::RestoreMapSection()
 static int skyboxrecursion=0;
 void GLSkyboxPortal::DrawContents()
 {
-	int old_pm = PlaneMirrorMode;
-	int saved_extralight = r_viewpoint.extralight;
+	int old_pm=PlaneMirrorMode;
+	int saved_extralight = extralight;
 
-	if (skyboxrecursion >= 3)
+	if (skyboxrecursion>=3)
 	{
 		ClearScreen();
 		return;
 	}
 
 	skyboxrecursion++;
-	AActor *origin = portal->mSkybox;
-	portal->mFlags |= PORTSF_INSKYBOX;
-	r_viewpoint.extralight = 0;
+	origin->flags|=MF_JUSTHIT;
+	extralight = 0;
 
-	PlaneMirrorMode = 0;
+	PlaneMirrorMode=0;
 
-	bool oldclamp = gl_RenderState.SetDepthClamp(false);
-	r_viewpoint.Pos = origin->InterpolatedPosition(r_viewpoint.TicFrac);
-	r_viewpoint.ActorPos = origin->Pos();
-	r_viewpoint.Angles.Yaw += (origin->PrevAngles.Yaw + deltaangle(origin->PrevAngles.Yaw, origin->Angles.Yaw) * r_viewpoint.TicFrac);
+	glDisable(GL_DEPTH_CLAMP);
 
-	// Don't let the viewpoint be too close to a floor or ceiling
-	double floorh = origin->Sector->floorplane.ZatPoint(origin->Pos());
-	double ceilh = origin->Sector->ceilingplane.ZatPoint(origin->Pos());
-	if (r_viewpoint.Pos.Z < floorh + 4) r_viewpoint.Pos.Z = floorh + 4;
-	if (r_viewpoint.Pos.Z > ceilh - 4) r_viewpoint.Pos.Z = ceilh - 4;
+	viewx = origin->PrevX + FixedMul(r_TicFrac, origin->x - origin->PrevX);
+	viewy = origin->PrevY + FixedMul(r_TicFrac, origin->y - origin->PrevY);
+	viewz = origin->PrevZ + FixedMul(r_TicFrac, origin->z - origin->PrevZ);
+	viewangle += origin->PrevAngle + FixedMul(r_TicFrac, origin->angle - origin->PrevAngle);
+
+	// Don't let the viewpoint be too close to a floor or ceiling!
+	fixed_t floorh = origin->Sector->floorplane.ZatPoint(origin->x, origin->y);
+	fixed_t ceilh = origin->Sector->ceilingplane.ZatPoint(origin->x, origin->y);
+	if (viewz<floorh+4*FRACUNIT) viewz=floorh+4*FRACUNIT;
+	if (viewz>ceilh-4*FRACUNIT) viewz=ceilh-4*FRACUNIT;
+
 
 	GLRenderer->mViewActor = origin;
 
-	inskybox = true;
-	drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag & 1), !!(PlaneMirrorFlag & 1));
-	drawer->SetViewArea();
+	validcount++;
+	inskybox=true;
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	GLRenderer->SetViewArea();
 	ClearClipper();
 
-	int mapsection = R_PointInSubsector(r_viewpoint.Pos)->mapsection;
+	int mapsection = R_PointInSubsector(viewx, viewy)->mapsection;
 
 	SaveMapSection();
-	currentmapsection[mapsection >> 3] |= 1 << (mapsection & 7);
+	currentmapsection[mapsection>>3] |= 1 << (mapsection & 7);
 
-	drawer->DrawScene(DM_SKYPORTAL);
-	portal->mFlags &= ~PORTSF_INSKYBOX;
-	inskybox = false;
-	gl_RenderState.SetDepthClamp(oldclamp);
+	GLRenderer->DrawScene();
+	origin->flags&=~MF_JUSTHIT;
+	inskybox=false;
+	glEnable(GL_DEPTH_CLAMP);
 	skyboxrecursion--;
 
-	PlaneMirrorMode = old_pm;
-	r_viewpoint.extralight = saved_extralight;
+	PlaneMirrorMode=old_pm;
+	extralight = saved_extralight;
 
 	RestoreMapSection();
 }
@@ -688,23 +695,23 @@ GLSectorStackPortal::~GLSectorStackPortal()
 //
 //-----------------------------------------------------------------------------
 
-static uint8_t SetCoverage(void *node)
+static BYTE SetCoverage(void *node)
 {
-	if (level.nodes.Size() == 0)
+	if (numnodes == 0)
 	{
 		return 0;
 	}
 	if (!((size_t)node & 1))  // Keep going until found a subsector
 	{
 		node_t *bsp = (node_t *)node;
-		uint8_t coverage = SetCoverage(bsp->children[0]) | SetCoverage(bsp->children[1]);
-		gl_drawinfo->no_renderflags[bsp->Index()] = coverage;
+		BYTE coverage = SetCoverage(bsp->children[0]) | SetCoverage(bsp->children[1]);
+		gl_drawinfo->no_renderflags[bsp-nodes] = coverage;
 		return coverage;
 	}
 	else
 	{
-		subsector_t *sub = (subsector_t *)((uint8_t *)node - 1);
-		return gl_drawinfo->ss_renderflags[sub->Index()] & SSRF_SEEN;
+		subsector_t *sub = (subsector_t *)((BYTE *)node - 1);
+		return gl_drawinfo->ss_renderflags[sub-subsectors] & SSRF_SEEN;
 	}
 }
 
@@ -716,12 +723,12 @@ void GLSectorStackPortal::SetupCoverage()
 		int plane = origin->plane;
 		for(int j=0;j<sub->portalcoverage[plane].sscount; j++)
 		{
-			subsector_t *dsub = &::level.subsectors[sub->portalcoverage[plane].subsectors[j]];
+			subsector_t *dsub = &::subsectors[sub->portalcoverage[plane].subsectors[j]];
 			currentmapsection[dsub->mapsection>>3] |= 1 << (dsub->mapsection&7);
-			gl_drawinfo->ss_renderflags[dsub->Index()] |= SSRF_SEEN;
+			gl_drawinfo->ss_renderflags[dsub-::subsectors] |= SSRF_SEEN;
 		}
 	}
-	SetCoverage(::level.HeadNode());
+	SetCoverage(&nodes[numnodes-1]);
 }
 
 //-----------------------------------------------------------------------------
@@ -733,28 +740,22 @@ void GLSectorStackPortal::DrawContents()
 {
 	FPortal *portal = origin;
 
-	r_viewpoint.Pos += origin->mDisplacement;
-	r_viewpoint.ActorPos += origin->mDisplacement;
+	viewx += origin->xDisplacement;
+	viewy += origin->yDisplacement;
 	GLRenderer->mViewActor = NULL;
+	GLRenderer->mCurrentPortal = this;
+
+
+	validcount++;
 
 	// avoid recursions!
 	if (origin->plane != -1) instack[origin->plane]++;
 
-	drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	SaveMapSection();
 	SetupCoverage();
 	ClearClipper();
-	
-	// If the viewpoint is not within the portal, we need to invalidate the entire clip area.
-	// The portal will re-validate the necessary parts when its subsectors get traversed.
-	subsector_t *sub = R_PointInSubsector(r_viewpoint.Pos);
-	if (!(gl_drawinfo->ss_renderflags[sub->Index()] & SSRF_SEEN))
-	{
-		drawer->clipper.SafeAddClipRange(0, ANGLE_MAX);
-		drawer->clipper.SetBlocked(true);
-	}
-
-	drawer->DrawScene(DM_PORTAL);
+	GLRenderer->DrawScene();
 	RestoreMapSection();
 
 	if (origin->plane != -1) instack[origin->plane]--;
@@ -778,108 +779,52 @@ void GLSectorStackPortal::DrawContents()
 
 void GLPlaneMirrorPortal::DrawContents()
 {
-	if (renderdepth > r_mirror_recursions)
+	if (renderdepth>r_mirror_recursions) 
 	{
 		ClearScreen();
 		return;
 	}
-	// A plane mirror needs to flip the portal exclusion logic because inside the mirror, up is down and down is up.
-	std::swap(instack[sector_t::floor], instack[sector_t::ceiling]);
 
-	int old_pm = PlaneMirrorMode;
+	int old_pm=PlaneMirrorMode;
 
-	// the player is always visible in a mirror.
-	r_viewpoint.showviewer = true;
-
-	double planez = origin->ZatPoint(r_viewpoint.Pos);
-	r_viewpoint.Pos.Z = 2 * planez - r_viewpoint.Pos.Z;
+	fixed_t planez = origin->ZatPoint(viewx, viewy);
+	viewz = 2*planez - viewz;
 	GLRenderer->mViewActor = NULL;
-	PlaneMirrorMode = origin->fC() < 0 ? -1 : 1;
+	PlaneMirrorMode = ksgn(origin->c);
+
+	validcount++;
 
 	PlaneMirrorFlag++;
-	drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag & 1), !!(PlaneMirrorFlag & 1));
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	ClearClipper();
 
-	gl_RenderState.SetClipHeight(planez, PlaneMirrorMode < 0 ? -1.f : 1.f);
-	drawer->DrawScene(DM_PORTAL);
-	gl_RenderState.SetClipHeight(0.f, 0.f);
+	float f = FIXED2FLOAT(planez);
+	if (PlaneMirrorMode < 0)
+	{
+		gl_RenderState.SetClipHeightTop(f);	// ceiling mirror: clip everytihng with a z lower than the portal's ceiling
+		glEnable(GL_CLIP_DISTANCE1);
+	}
+	else
+	{
+		gl_RenderState.SetClipHeightBottom(f);	// floor mirror: clip everything with a z higher than the portal's floor
+		glEnable(GL_CLIP_DISTANCE0);
+	}
+
+	GLRenderer->DrawScene();
+	glDisable(GL_CLIP_DISTANCE0);
+	glDisable(GL_CLIP_DISTANCE1);
+	gl_RenderState.SetClipHeightBottom(-65536.f);
+	gl_RenderState.SetClipHeightTop(65536.f);
 	PlaneMirrorFlag--;
-	PlaneMirrorMode = old_pm;
-	std::swap(instack[sector_t::floor], instack[sector_t::ceiling]);
-}
-
-void GLPlaneMirrorPortal::PushState()
-{
-	planestack.Push(gl_RenderState.GetClipHeight());
-	planestack.Push(gl_RenderState.GetClipHeightDirection());
-	gl_RenderState.SetClipHeight(0.f, 0.f);
-}
-
-void GLPlaneMirrorPortal::PopState()
-{
-	float d, f;
-	planestack.Pop(d);
-	planestack.Pop(f);
-	gl_RenderState.SetClipHeight(f, d);
+	PlaneMirrorMode=old_pm;
 }
 
 //-----------------------------------------------------------------------------
 //
-// Common code for line to line and mirror portals
+// GLPlaneMirrorPortal::DrawContents
 //
 //-----------------------------------------------------------------------------
 
-void GLLinePortal::PushState()
-{
-	FStateVec4 &v = gl_RenderState.GetClipLine();
-	planestack.Push(v.vec[0]);
-	planestack.Push(v.vec[1]);
-	planestack.Push(v.vec[2]);
-	planestack.Push(v.vec[3]);
-	planestack.Push(gl_RenderState.GetClipLineState());
-	gl_RenderState.EnableClipLine(false);
-}
-
-void GLLinePortal::PopState()
-{
-	FStateVec4 &v = gl_RenderState.GetClipLine();
-	float e = 0;
-	planestack.Pop(e);
-	planestack.Pop(v.vec[3]);
-	planestack.Pop(v.vec[2]);
-	planestack.Pop(v.vec[1]);
-	planestack.Pop(v.vec[0]);
-	gl_RenderState.EnableClipLine(e != 0);
-}
-
-int GLLinePortal::ClipSeg(seg_t *seg) 
-{ 
-	line_t *linedef = seg->linedef;
-	if (!linedef)
-	{
-		return PClip_Inside;	// should be handled properly.
-	}
-	return P_ClipLineToPortal(linedef, line(), r_viewpoint.Pos) ? PClip_InFront : PClip_Inside;
-}
-
-int GLLinePortal::ClipSubsector(subsector_t *sub)
-{ 
-	// this seg is completely behind the mirror!
-	for(unsigned int i=0;i<sub->numlines;i++)
-	{
-		if (P_PointOnLineSidePrecise(sub->firstline[i].v1->fPos(), line()) == 0) return PClip_Inside;
-	}
-	return PClip_InFront; 
-}
-
-int GLLinePortal::ClipPoint(const DVector2 &pos) 
-{ 
-	if (P_PointOnLineSidePrecise(pos, line())) 
-	{
-		return PClip_InFront;
-	}
-	return PClip_Inside; 
-}
 
 
 //-----------------------------------------------------------------------------
@@ -905,160 +850,104 @@ void GLMirrorPortal::DrawContents()
 		return;
 	}
 
-	GLRenderer->mClipPortal = this;
-	DAngle StartAngle = r_viewpoint.Angles.Yaw;
-	DVector3 StartPos = r_viewpoint.Pos;
+	GLRenderer->mCurrentPortal = this;
+	angle_t startang = viewangle;
+	fixed_t startx = viewx;
+	fixed_t starty = viewy;
 
 	vertex_t *v1 = linedef->v1;
 	vertex_t *v2 = linedef->v2;
 
-	// the player is always visible in a mirror.
-	r_viewpoint.showviewer = true;
 	// Reflect the current view behind the mirror.
-	if (linedef->Delta().X == 0)
-	{
+	if (linedef->dx == 0)
+	{ 
 		// vertical mirror
-		r_viewpoint.Pos.X = 2 * v1->fX() - StartPos.X;
+		viewx = v1->x - startx + v1->x;
 
 		// Compensation for reendering inaccuracies
-		if (StartPos.X < v1->fX()) r_viewpoint.Pos.X -= 0.1;
-		else r_viewpoint.Pos.X += 0.1;
+		if (startx<v1->x)  viewx -= FRACUNIT/2;
+		else viewx += FRACUNIT/2;
 	}
-	else if (linedef->Delta().Y == 0)
+	else if (linedef->dy == 0)
 	{ 
 		// horizontal mirror
-		r_viewpoint.Pos.Y = 2*v1->fY() - StartPos.Y;
+		viewy = v1->y - starty + v1->y;
 
 		// Compensation for reendering inaccuracies
-		if (StartPos.Y<v1->fY())  r_viewpoint.Pos.Y -= 0.1;
-		else r_viewpoint.Pos.Y += 0.1;
+		if (starty<v1->y)  viewy -= FRACUNIT/2;
+		else viewy += FRACUNIT/2;
 	}
 	else
 	{ 
 		// any mirror--use floats to avoid integer overflow. 
 		// Use doubles to avoid losing precision which is very important here.
 
-		double dx = v2->fX() - v1->fX();
-		double dy = v2->fY() - v1->fY();
-		double x1 = v1->fX();
-		double y1 = v1->fY();
-		double x = StartPos.X;
-		double y = StartPos.Y;
+		double dx = FIXED2DBL(v2->x - v1->x);
+		double dy = FIXED2DBL(v2->y - v1->y);
+		double x1 = FIXED2DBL(v1->x);
+		double y1 = FIXED2DBL(v1->y);
+		double x = FIXED2DBL(startx);
+		double y = FIXED2DBL(starty);
 
 		// the above two cases catch len == 0
 		double r = ((x - x1)*dx + (y - y1)*dy) / (dx*dx + dy*dy);
 
-		r_viewpoint.Pos.X = (x1 + r * dx)*2 - x;
-		r_viewpoint.Pos.Y = (y1 + r * dy)*2 - y;
+		viewx = FLOAT2FIXED((x1 + r * dx)*2 - x);
+		viewy = FLOAT2FIXED((y1 + r * dy)*2 - y);
 
 		// Compensation for reendering inaccuracies
 		FVector2 v(-dx, dy);
 		v.MakeUnit();
 
-		r_viewpoint.Pos.X+= v[1] * renderdepth / 2;
-		r_viewpoint.Pos.Y+= v[0] * renderdepth / 2;
+		viewx+= FLOAT2FIXED(v[1] * renderdepth / 2);
+		viewy+= FLOAT2FIXED(v[0] * renderdepth / 2);
 	}
-	r_viewpoint.Angles.Yaw = linedef->Delta().Angle() * 2. - StartAngle;
+	// we cannot afford any imprecisions caused by R_PointToAngle2 here. They'd be visible as seams around the mirror.
+	viewangle = 2*R_PointToAnglePrecise (linedef->v1->x, linedef->v1->y,
+										linedef->v2->x, linedef->v2->y) - startang;
 
 	GLRenderer->mViewActor = NULL;
 
+	validcount++;
+
 	MirrorFlag++;
-	drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
-	drawer->clipper.Clear();
+	clipper.Clear();
 
-	angle_t af = drawer->FrustumAngle();
-	if (af<ANGLE_180) drawer->clipper.SafeAddClipRangeRealAngles(r_viewpoint.Angles.Yaw.BAMs()+af, r_viewpoint.Angles.Yaw.BAMs()-af);
+	angle_t af = GLRenderer->FrustumAngle();
+	if (af<ANGLE_180) clipper.SafeAddClipRangeRealAngles(viewangle+af, viewangle-af);
 
 	angle_t a2 = linedef->v1->GetClipAngle();
 	angle_t a1 = linedef->v2->GetClipAngle();
-	drawer->clipper.SafeAddClipRange(a1,a2);
+	clipper.SafeAddClipRange(a1,a2);
 
-	gl_RenderState.SetClipLine(linedef);
-	gl_RenderState.EnableClipLine(true);
-	drawer->DrawScene(DM_PORTAL);
-	gl_RenderState.EnableClipLine(false);
+	GLRenderer->DrawScene();
 
 	MirrorFlag--;
 }
 
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-//
-//
-// Line to line Portal
-//
-//
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
 
-//-----------------------------------------------------------------------------
-//
-//
-//
-//-----------------------------------------------------------------------------
-void GLLineToLinePortal::DrawContents()
-{
-	// TODO: Handle recursion more intelligently
-	if (renderdepth>r_mirror_recursions) 
+int GLMirrorPortal::ClipSeg(seg_t *seg) 
+{ 
+	// this seg is completely behind the mirror!
+	if (P_PointOnLineSide(seg->v1->x, seg->v1->y, linedef) &&
+		P_PointOnLineSide(seg->v2->x, seg->v2->y, linedef)) 
 	{
-		ClearScreen();
-		return;
+		return PClip_InFront;
 	}
-
-	GLRenderer->mClipPortal = this;
-
-	line_t *origin = glport->lines[0]->mOrigin;
-	P_TranslatePortalXY(origin, r_viewpoint.Pos.X, r_viewpoint.Pos.Y);
-	P_TranslatePortalXY(origin, r_viewpoint.ActorPos.X, r_viewpoint.ActorPos.Y);
-	P_TranslatePortalAngle(origin, r_viewpoint.Angles.Yaw);
-	P_TranslatePortalZ(origin, r_viewpoint.Pos.Z);
-	P_TranslatePortalXY(origin, r_viewpoint.Path[0].X, r_viewpoint.Path[0].Y);
-	P_TranslatePortalXY(origin, r_viewpoint.Path[1].X, r_viewpoint.Path[1].Y);
-	if (!r_viewpoint.showviewer && r_viewpoint.camera != nullptr && P_PointOnLineSidePrecise(r_viewpoint.Path[0], glport->lines[0]->mDestination) != P_PointOnLineSidePrecise(r_viewpoint.Path[1], glport->lines[0]->mDestination))
-	{
-		double distp = (r_viewpoint.Path[0] - r_viewpoint.Path[1]).Length();
-		if (distp > EQUAL_EPSILON)
-		{
-			double dist1 = (r_viewpoint.Pos - r_viewpoint.Path[0]).Length();
-			double dist2 = (r_viewpoint.Pos - r_viewpoint.Path[1]).Length();
-
-			if (dist1 + dist2 < distp + 1)
-			{
-				r_viewpoint.camera->renderflags |= RF_MAYBEINVISIBLE;
-			}
-		}
-	}
-
-
-	SaveMapSection();
-
-	for (unsigned i = 0; i < lines.Size(); i++)
-	{
-		line_t *line = lines[i].seg->linedef->getPortalDestination();
-		subsector_t *sub;
-		if (line->sidedef[0]->Flags & WALLF_POLYOBJ) 
-			sub = R_PointInSubsector(line->v1->fixX(), line->v1->fixY());
-		else sub = line->frontsector->subsectors[0];
-		int mapsection = sub->mapsection;
-		currentmapsection[mapsection >> 3] |= 1 << (mapsection & 7);
-	}
-
-	GLRenderer->mViewActor = nullptr;
-	drawer->SetupView(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z, r_viewpoint.Angles.Yaw, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
-
-	ClearClipper();
-	gl_RenderState.SetClipLine(glport->lines[0]->mDestination);
-	gl_RenderState.EnableClipLine(true);
-	drawer->DrawScene(DM_PORTAL);
-	gl_RenderState.EnableClipLine(false);
-	RestoreMapSection();
+	return PClip_Inside; 
 }
 
-void GLLineToLinePortal::RenderAttached()
-{
-	drawer->RenderActorsInPortal(glport);
+int GLMirrorPortal::ClipPoint(fixed_t x, fixed_t y) 
+{ 
+	if (P_PointOnLineSide(x, y, linedef)) 
+	{
+		return PClip_InFront;
+	}
+	return PClip_Inside; 
 }
+
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -1081,27 +970,66 @@ void GLLineToLinePortal::RenderAttached()
 //
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
-
-GLHorizonPortal::GLHorizonPortal(GLHorizonInfo * pt, bool local)
-	: GLPortal(local)
+//-----------------------------------------------------------------------------
+//
+// GLHorizonPortal::DrawContents
+//
+//-----------------------------------------------------------------------------
+void GLHorizonPortal::DrawContents()
 {
-	origin = pt;
+	PortalAll.Clock();
 
-	// create the vertex data for this horizon portal.
-	GLSectorPlane * sp = &origin->plane;
-	const float vx = r_viewpoint.Pos.X;
-	const float vy = r_viewpoint.Pos.Y;
-	const float vz = r_viewpoint.Pos.Z;
-	const float z = sp->Texheight;
-	const float tz = (z - vz);
+	GLSectorPlane * sp=&origin->plane;
+	FMaterial * gltexture;
+	PalEntry color;
+	float z;
+	player_t * player=&players[consoleplayer];
+
+	gltexture=FMaterial::ValidateTexture(sp->texture, false, true);
+	if (!gltexture) 
+	{
+		ClearScreen();
+		PortalAll.Unclock();
+		return;
+	}
+
+
+	z=FIXED2FLOAT(sp->texheight);
+
+
+	if (gltexture && gltexture->tex->isFullbright())
+	{
+		// glowing textures are always drawn full bright without color
+		gl_SetColor(255, 0, origin->colormap, 1.f);
+		gl_SetFog(255, 0, &origin->colormap, false);
+	}
+	else 
+	{
+		int rel = getExtraLight();
+		gl_SetColor(origin->lightlevel, rel, origin->colormap, 1.0f);
+		gl_SetFog(origin->lightlevel, rel, &origin->colormap, false);
+	}
+
+
+	gl_RenderState.SetMaterial(gltexture, CLAMP_NONE, 0, -1, false);
+
+	gl_SetPlaneTextureRotation(sp, gltexture);
+	gl_RenderState.AlphaFunc(GL_GEQUAL, 0.f);
+	gl_RenderState.BlendFunc(GL_ONE,GL_ZERO);
+	gl_RenderState.Apply();
+
+
+
+	float vx=FIXED2FLOAT(viewx);
+	float vy=FIXED2FLOAT(viewy);
 
 	// Draw to some far away boundary
-	// This is not drawn as larger strips because it causes visual glitches.
-	FFlatVertex *ptr = GLRenderer->mVBO->GetBuffer();
-	for (float x = -32768 + vx; x<32768 + vx; x += 4096)
+	// This is not drawn as larher strips because it causes visual glitches.
+	for(float x=-32768+vx; x<32768+vx; x+=4096)
 	{
-		for (float y = -32768 + vy; y<32768 + vy; y += 4096)
+		for(float y=-32768+vy; y<32768+vy;y+=4096)
 		{
+			FFlatVertex *ptr = GLRenderer->mVBO->GetBuffer();
 			ptr->Set(x, z, y, x / 64, -y / 64);
 			ptr++;
 			ptr->Set(x + 4096, z, y, x / 64 + 64, -y / 64);
@@ -1110,12 +1038,18 @@ GLHorizonPortal::GLHorizonPortal(GLHorizonInfo * pt, bool local)
 			ptr++;
 			ptr->Set(x + 4096, z, y + 4096, x / 64 + 64, -y / 64 - 64);
 			ptr++;
+			GLRenderer->mVBO->RenderCurrent(ptr, GL_TRIANGLE_STRIP);
 		}
 	}
+
+	float vz=FIXED2FLOAT(viewz);
+	float tz=(z-vz);///64.0f;
 
 	// fill the gap between the polygon and the true horizon
 	// Since I can't draw into infinity there can always be a
 	// small gap
+
+	FFlatVertex *ptr = GLRenderer->mVBO->GetBuffer();
 	ptr->Set(-32768 + vx, z, -32768 + vy, 512.f, 0);
 	ptr++;
 	ptr->Set(-32768 + vx, vz, -32768 + vy, 512.f, tz);
@@ -1136,148 +1070,11 @@ GLHorizonPortal::GLHorizonPortal(GLHorizonInfo * pt, bool local)
 	ptr++;
 	ptr->Set(-32768 + vx, vz, -32768 + vy, 512.f, tz);
 	ptr++;
-
-	vcount = GLRenderer->mVBO->GetCount(ptr, &voffset) - 10;
-
-}
-
-//-----------------------------------------------------------------------------
-//
-// GLHorizonPortal::DrawContents
-//
-//-----------------------------------------------------------------------------
-void GLHorizonPortal::DrawContents()
-{
-	PortalAll.Clock();
-
-	FMaterial * gltexture;
-	PalEntry color;
-	player_t * player=&players[consoleplayer];
-	GLSectorPlane * sp = &origin->plane;
-
-	gltexture=FMaterial::ValidateTexture(sp->texture, false, true);
-	if (!gltexture) 
-	{
-		ClearScreen();
-		PortalAll.Unclock();
-		return;
-	}
-	gl_RenderState.SetCameraPos(r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z);
-
-
-	if (gltexture && gltexture->tex->isFullbright())
-	{
-		// glowing textures are always drawn full bright without color
-		drawer->SetColor(255, 0, origin->colormap, 1.f);
-		drawer->SetFog(255, 0, &origin->colormap, false);
-	}
-	else 
-	{
-		int rel = getExtraLight();
-		drawer->SetColor(origin->lightlevel, rel, origin->colormap, 1.0f);
-		drawer->SetFog(origin->lightlevel, rel, &origin->colormap, false);
-	}
-
-
-	gl_RenderState.SetMaterial(gltexture, CLAMP_NONE, 0, -1, false);
-	gl_RenderState.SetObjectColor(origin->specialcolor);
-
-	gl_SetPlaneTextureRotation(sp, gltexture);
-	gl_RenderState.AlphaFunc(GL_GEQUAL, 0.f);
-	gl_RenderState.BlendFunc(GL_ONE,GL_ZERO);
-	gl_RenderState.Apply();
-
-
-	for (unsigned i = 0; i < vcount; i += 4)
-	{
-		GLRenderer->mVBO->RenderArray(GL_TRIANGLE_STRIP, voffset + i, 4);
-	}
-	GLRenderer->mVBO->RenderArray(GL_TRIANGLE_STRIP, voffset + vcount, 10);
+	GLRenderer->mVBO->RenderCurrent(ptr, GL_TRIANGLE_STRIP);
 
 	gl_RenderState.EnableTextureMatrix(false);
 	PortalAll.Unclock();
 
-}
-
-
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-//
-//
-// Eternity-style horizon portal
-//
-// To the rest of the engine these masquerade as a skybox portal
-// Internally they need to draw two horizon or sky portals
-// and will use the respective classes to achieve that.
-//
-//
-//-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-
-//-----------------------------------------------------------------------------
-//
-// 
-//
-//-----------------------------------------------------------------------------
-
-void GLEEHorizonPortal::DrawContents()
-{
-	PortalAll.Clock();
-	sector_t *sector = portal->mOrigin;
-	if (sector->GetTexture(sector_t::floor) == skyflatnum ||
-		sector->GetTexture(sector_t::ceiling) == skyflatnum)
-	{
-		GLSkyInfo skyinfo;
-		skyinfo.init(sector->sky, 0);
-		GLSkyPortal sky(&skyinfo, true);
-		sky.DrawContents();
-	}
-	if (sector->GetTexture(sector_t::ceiling) != skyflatnum)
-	{
-		GLHorizonInfo horz;
-		horz.plane.GetFromSector(sector, sector_t::ceiling);
-		horz.lightlevel = gl_ClampLight(sector->GetCeilingLight());
-		horz.colormap = sector->Colormap;
-		horz.specialcolor = 0xffffffff;
-		if (portal->mType == PORTS_PLANE)
-		{
-			horz.plane.Texheight = r_viewpoint.Pos.Z + fabs(horz.plane.Texheight);
-		}
-		GLHorizonPortal ceil(&horz, true);
-		ceil.DrawContents();
-	}
-	if (sector->GetTexture(sector_t::floor) != skyflatnum)
-	{
-		GLHorizonInfo horz;
-		horz.plane.GetFromSector(sector, sector_t::floor);
-		horz.lightlevel = gl_ClampLight(sector->GetFloorLight());
-		horz.colormap = sector->Colormap;
-		horz.specialcolor = 0xffffffff;
-		if (portal->mType == PORTS_PLANE)
-		{
-			horz.plane.Texheight = r_viewpoint.Pos.Z - fabs(horz.plane.Texheight);
-		}
-		GLHorizonPortal floor(&horz, true);
-		floor.DrawContents();
-	}
-
-
-
-}
-
-void GLPortal::Initialize()
-{
-	assert(0 == QueryObject);
-	glGenQueries(1, &QueryObject);
-}
-
-void GLPortal::Shutdown()
-{
-	if (0 != QueryObject)
-	{
-		glDeleteQueries(1, &QueryObject);
-		QueryObject = 0;
-	}
 }
 
 const char *GLSkyPortal::GetName() { return "Sky"; }
@@ -1285,7 +1082,4 @@ const char *GLSkyboxPortal::GetName() { return "Skybox"; }
 const char *GLSectorStackPortal::GetName() { return "Sectorstack"; }
 const char *GLPlaneMirrorPortal::GetName() { return "Planemirror"; }
 const char *GLMirrorPortal::GetName() { return "Mirror"; }
-const char *GLLineToLinePortal::GetName() { return "LineToLine"; }
 const char *GLHorizonPortal::GetName() { return "Horizon"; }
-const char *GLEEHorizonPortal::GetName() { return "EEHorizon"; }
-

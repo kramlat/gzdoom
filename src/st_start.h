@@ -1,4 +1,3 @@
-#pragma once
 /*
 ** st_start.h
 ** Interface for the startup screen.

@@ -1,7 +1,10 @@
 #ifndef __SECTORE_H
 #define __SECTORE_H
 
-#include "r_data/colormaps.h"
+
+#define CenterSpot(sec) (vertex_t*)&(sec)->soundorg[0]
+
+#define _3DFLOORS
 
 // 3D floor flags. Most are the same as in Legacy but I added some for EDGE's and Vavoom's features as well.
 typedef enum
@@ -34,11 +37,14 @@ typedef enum
   FF_ADDITIVETRANS	   = 0x10000000, // Render this floor with additive translucency
   FF_FLOOD			   = 0x20000000, // extends towards the next lowest flooding or solid 3D floor or the bottom of the sector
   FF_THISINSIDE		   = 0x40000000, // hack for software 3D with FF_BOTHPLANES
-  FF_RESET			   = 0x80000000, // light effect is completely reset, once interrupted  
 } ffloortype_e;
 
 // This is for the purpose of Sector_SetContents:
-enum : unsigned int
+#ifdef _MSC_VER
+enum : unsigned int // MSVC is apparently the only compiler that supports this syntax
+#else
+enum
+#endif
 {
 	VC_EMPTY = 0, // Here's the original values of the color shifts in Vavoom, and in ARGB:
 	VC_WATER	 = 0x80825032,	// 130, 80, 50, 128		-> 80.82.50.32 (was 0x101080)
@@ -54,12 +60,12 @@ enum : unsigned int
 	VC_COLORMASK = 0x00FFFFFF,
 };
 
+#ifdef _3DFLOORS
+
 
 struct secplane_t;
 struct FDynamicColormap;
-struct line_t;
-struct sector_t;
-class AActor;
+
 
 struct F3DFloor
 {
@@ -67,17 +73,10 @@ struct F3DFloor
 	{
 		secplane_t *	plane;
 		const FTextureID *	texture;
+		const fixed_t *		texheight;
 		sector_t *		model;
-		PalEntry *		flatcolor;
 		int				isceiling;
 		int				vindex;
-		bool			copied;
-
-		void copyPlane(planeref * other)
-		{
-			*this = *other;
-			copied = true;
-		}
 	};
 
 	planeref			bottom;
@@ -85,7 +84,9 @@ struct F3DFloor
 
 	short				*toplightlevel;
 	
-	unsigned int		flags;
+	fixed_t				delta;
+	
+	int					flags;
 	line_t*				master;
 	
 	sector_t *			model;
@@ -94,8 +95,13 @@ struct F3DFloor
 	int					lastlight;
 	int					alpha;
 
-	FColormap GetColormap();
-	void UpdateColormap(FColormap &map);
+	// kg3D - for software
+	short	*floorclip;
+	short	*ceilingclip;
+	int	validcount;
+
+	FDynamicColormap *GetColormap();
+	void UpdateColormap(FDynamicColormap *&map);
 	PalEntry GetBlend();
 };
 
@@ -105,7 +111,7 @@ struct lightlist_t
 {
 	secplane_t				plane;
 	short *					p_lightlevel;
-	FColormap				extra_colormap;
+	FDynamicColormap *		extra_colormap;
 	PalEntry				blend;
 	int						flags;
 	F3DFloor*				lightsource;
@@ -114,11 +120,12 @@ struct lightlist_t
 
 
 
-class player_t;
+class player_s;
 void P_PlayerOnSpecial3DFloor(player_t* player);
 
-bool P_CheckFor3DFloorHit(AActor * mo, double z);
-bool P_CheckFor3DCeilingHit(AActor * mo, double z);
+void P_Get3DFloorAndCeiling(AActor * thing, sector_t * sector, fixed_t * floorz, fixed_t * ceilingz, int * floorpic);
+bool P_CheckFor3DFloorHit(AActor * mo);
+bool P_CheckFor3DCeilingHit(AActor * mo);
 void P_Recalculate3DFloors(sector_t *);
 void P_RecalculateAttached3DFloors(sector_t * sec);
 void P_RecalculateLights(sector_t *sector);
@@ -130,9 +137,44 @@ void P_Spawn3DFloors( void );
 struct FLineOpening;
 
 void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *linedef, 
-							double x, double y, bool restrict);
+							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, bool restrict);
 
-secplane_t P_FindFloorPlane(sector_t * sector, const DVector3 &pos);
-int	P_Find3DFloor(sector_t * sec, const DVector3 &pos, bool above, bool floor, double &cmpz);
+secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z);
+int	P_Find3DFloor(sector_t * sec, fixed_t x, fixed_t y, fixed_t z, bool above, bool floor, fixed_t &cmpz);
+							
+#else
+
+// Dummy definitions for disabled 3D floor code
+
+struct F3DFloor
+{
+	int dummy;
+};
+
+struct lightlist_t
+{
+	int dummy;
+};
+
+class player_s;
+inline void P_PlayerOnSpecial3DFloor(player_t* player) {}
+
+inline void P_Get3DFloorAndCeiling(AActor * thing, sector_t * sector, fixed_t * floorz, fixed_t * ceilingz, int * floorpic) {}
+inline bool P_CheckFor3DFloorHit(AActor * mo) { return false; }
+inline bool P_CheckFor3DCeilingHit(AActor * mo) { return false; }
+inline void P_Recalculate3DFloors(sector_t *) {}
+inline void P_RecalculateAttached3DFloors(sector_t * sec) {}
+inline lightlist_t * P_GetPlaneLight(sector_t * , secplane_t * plane, bool underside) { return NULL; }
+inline void P_Spawn3DFloors( void ) {}
+
+struct FLineOpening;
+
+inline void P_LineOpening_XFloors (FLineOpening &open, AActor * thing, const line_t *linedef, 
+							fixed_t x, fixed_t y, fixed_t refx, fixed_t refy, bool restrict) {}
+
+//secplane_t P_FindFloorPlane(sector_t * sector, fixed_t x, fixed_t y, fixed_t z){return sector->floorplane;}
+
+#endif
+
 
 #endif

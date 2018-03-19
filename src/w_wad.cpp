@@ -56,8 +56,6 @@
 #include "doomerrors.h"
 #include "resourcefiles/resourcefile.h"
 #include "md5.h"
-#include "doomstat.h"
-#include "vm.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -185,13 +183,12 @@ void FWadCollection::InitMultipleFiles (TArray<FString> &filenames)
 	}
 	RenameNerve();
 	RenameSprites();
-	FixMacHexen();
 
 	// [RH] Set up hash table
-	FirstLumpIndex = new uint32_t[NumLumps];
-	NextLumpIndex = new uint32_t[NumLumps];
-	FirstLumpIndex_FullName = new uint32_t[NumLumps];
-	NextLumpIndex_FullName = new uint32_t[NumLumps];
+	FirstLumpIndex = new DWORD[NumLumps];
+	NextLumpIndex = new DWORD[NumLumps];
+	FirstLumpIndex_FullName = new DWORD[NumLumps];
+	NextLumpIndex_FullName = new DWORD[NumLumps];
 	InitHashChains ();
 	LumpInfo.ShrinkToFit();
 	Files.ShrinkToFit();
@@ -225,50 +222,54 @@ int FWadCollection::AddExternalFile(const char *filename)
 // [RH] Removed reload hack
 //==========================================================================
 
-void FWadCollection::AddFile (const char *filename, FileReader *wadr)
+void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 {
 	int startlump;
 	bool isdir = false;
-	FileReader wadreader;
 
-	if (wadr == nullptr)
+	if (wadinfo == NULL)
 	{
 		// Does this exist? If so, is it a directory?
-		if (!DirEntryExists(filename, &isdir))
+		struct stat info;
+		if (stat(filename, &info) != 0)
 		{
-			Printf(TEXTCOLOR_RED "%s: File or Directory not found\n", filename);
+			Printf(TEXTCOLOR_RED "Could not stat %s\n", filename);
 			PrintLastError();
 			return;
 		}
+		isdir = (info.st_mode & S_IFDIR) != 0;
 
 		if (!isdir)
 		{
-			if (!wadreader.OpenFile(filename))
+			try
+			{
+				wadinfo = new FileReader(filename);
+			}
+			catch (CRecoverableError &err)
 			{ // Didn't find file
-				Printf (TEXTCOLOR_RED "%s: File not found\n", filename);
+				Printf (TEXTCOLOR_RED "%s\n", err.GetMessage());
 				PrintLastError ();
 				return;
 			}
 		}
 	}
-	else wadreader = std::move(*wadr);
 
-	if (!batchrun) Printf (" adding %s", filename);
+	Printf (" adding %s", filename);
 	startlump = NumLumps;
 
 	FResourceFile *resfile;
 	
 	if (!isdir)
-		resfile = FResourceFile::OpenResourceFile(filename, wadreader);
+		resfile = FResourceFile::OpenResourceFile(filename, wadinfo);
 	else
 		resfile = FResourceFile::OpenDirectory(filename);
 
 	if (resfile != NULL)
 	{
-		uint32_t lumpstart = LumpInfo.Size();
+		DWORD lumpstart = LumpInfo.Size();
 
 		resfile->SetFirstLump(lumpstart);
-		for (uint32_t i=0; i < resfile->LumpCount(); i++)
+		for (DWORD i=0; i < resfile->LumpCount(); i++)
 		{
 			FResourceLump *lump = resfile->GetLump(i);
 			FWadCollection::LumpRecord *lump_p = &LumpInfo[LumpInfo.Reserve(1)];
@@ -277,68 +278,26 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadr)
 			lump_p->wadnum = Files.Size();
 		}
 
-		if (static_cast<int>(Files.Size()) == GetIwadNum() && gameinfo.gametype == GAME_Strife && gameinfo.flags & GI_SHAREWARE)
+		if (Files.Size() == IWAD_FILENUM && gameinfo.gametype == GAME_Strife && gameinfo.flags & GI_SHAREWARE)
 		{
 			resfile->FindStrifeTeaserVoices();
 		}
 		Files.Push(resfile);
 
-		for (uint32_t i=0; i < resfile->LumpCount(); i++)
+		for (DWORD i=0; i < resfile->LumpCount(); i++)
 		{
 			FResourceLump *lump = resfile->GetLump(i);
 			if (lump->Flags & LUMPF_EMBEDDED)
 			{
-				FString path;
-				path.Format("%s:%s", filename, lump->FullName.GetChars());
-				auto embedded = lump->NewReader();
-				AddFile(path, &embedded);
-			}
-		}
+				char path[256];
 
-		if (hashfile)
-		{
-			uint8_t cksum[16];
-			char cksumout[33];
-			memset(cksumout, 0, sizeof(cksumout));
+				mysnprintf(path, countof(path), "%s:", filename);
+				char *wadstr = path + strlen(path);
 
-			if (wadreader.isOpen())
-			{
-				MD5Context md5;
-				wadreader.Seek(0, FileReader::SeekSet);
-				md5.Update(wadreader, (unsigned)wadreader.GetLength());
-				md5.Final(cksum);
+				FileReader *embedded = lump->NewReader();
+				strcpy(wadstr, lump->FullName);
 
-				for (size_t j = 0; j < sizeof(cksum); ++j)
-				{
-					sprintf(cksumout + (j * 2), "%02X", cksum[j]);
-				}
-
-				fprintf(hashfile, "file: %s, hash: %s, size: %d\n", filename, cksumout, (int)wadreader.GetLength());
-			}
-
-			else
-				fprintf(hashfile, "file: %s, Directory structure\n", filename);
-
-			for (uint32_t i = 0; i < resfile->LumpCount(); i++)
-			{
-				FResourceLump *lump = resfile->GetLump(i);
-
-				if (!(lump->Flags & LUMPF_EMBEDDED))
-				{
-					MD5Context md5;
-					auto reader = lump->NewReader();
-					md5.Update(reader, lump->LumpSize);
-					md5.Final(cksum);
-
-					for (size_t j = 0; j < sizeof(cksum); ++j)
-					{
-						sprintf(cksumout + (j * 2), "%02X", cksum[j]);
-					}
-
-					fprintf(hashfile, "file: %s, lump: %s, hash: %s, size: %d\n", filename,
-						lump->FullName.IsNotEmpty() ? lump->FullName.GetChars() : lump->Name,
-						cksumout, lump->LumpSize);
-				}
+				AddFile(path, embedded);
 			}
 		}
 		return;
@@ -421,9 +380,9 @@ int FWadCollection::CheckNumForName (const char *name, int space)
 	union
 	{
 		char uname[8];
-		uint64_t qname;
+		QWORD qname;
 	};
-	uint32_t i;
+	DWORD i;
 
 	if (name == NULL)
 	{
@@ -467,9 +426,9 @@ int FWadCollection::CheckNumForName (const char *name, int space, int wadnum, bo
 	union
 	{
 		char uname[8];
-		uint64_t qname;
+		QWORD qname;
 	};
-	uint32_t i;
+	DWORD i;
 
 	if (wadnum < 0)
 	{
@@ -493,15 +452,6 @@ int FWadCollection::CheckNumForName (const char *name, int space, int wadnum, bo
 	return i != NULL_INDEX ? i : -1;
 }
 
-DEFINE_ACTION_FUNCTION(_Wads, CheckNumForName)
-{
-	PARAM_PROLOGUE;
-	PARAM_STRING(name);
-	PARAM_INT(ns);
-	PARAM_INT_DEF(wadnum);
-	PARAM_BOOL_DEF(exact);
-	ACTION_RETURN_INT(Wads.CheckNumForName(name, ns, wadnum, exact));
-}
 //==========================================================================
 //
 // W_GetNumForName
@@ -535,7 +485,7 @@ int FWadCollection::GetNumForName (const char *name, int space)
 
 int FWadCollection::CheckNumForFullName (const char *name, bool trynormal, int namespc)
 {
-	uint32_t i;
+	DWORD i;
 
 	if (name == NULL)
 	{
@@ -558,16 +508,9 @@ int FWadCollection::CheckNumForFullName (const char *name, bool trynormal, int n
 	return -1;
 }
 
-DEFINE_ACTION_FUNCTION(_Wads, CheckNumForFullName)
-{
-	PARAM_PROLOGUE;
-	PARAM_STRING(name);
-	ACTION_RETURN_INT(Wads.CheckNumForFullName(name));
-}
-
 int FWadCollection::CheckNumForFullName (const char *name, int wadnum)
 {
-	uint32_t i;
+	DWORD i;
 
 	if (wadnum < 0)
 	{
@@ -701,10 +644,10 @@ int FWadCollection::GetLumpFlags (int lump)
 //
 //==========================================================================
 
-uint32_t FWadCollection::LumpNameHash (const char *s)
+DWORD FWadCollection::LumpNameHash (const char *s)
 {
-	const uint32_t *table = GetCRCTable ();;
-	uint32_t hash = 0xffffffff;
+	const DWORD *table = GetCRCTable ();;
+	DWORD hash = 0xffffffff;
 	int i;
 
 	for (i = 8; i > 0 && *s; --i, ++s)
@@ -743,7 +686,7 @@ void FWadCollection::InitHashChains (void)
 		FirstLumpIndex[j] = i;
 
 		// Do the same for the full paths
-		if (LumpInfo[i].lump->FullName.IsNotEmpty())
+		if (LumpInfo[i].lump->FullName!=NULL)
 		{
 			j = MakeKey(LumpInfo[i].lump->FullName) % NumLumps;
 			NextLumpIndex_FullName[i] = FirstLumpIndex_FullName[j];
@@ -768,11 +711,11 @@ void FWadCollection::RenameSprites ()
 	bool renameAll;
 	bool MNTRZfound = false;
 
-	static const uint32_t HereticRenames[] =
+	static const DWORD HereticRenames[] =
 	{ MAKE_ID('H','E','A','D'), MAKE_ID('L','I','C','H'),		// Ironlich
 	};
 
-	static const uint32_t HexenRenames[] =
+	static const DWORD HexenRenames[] =
 	{ MAKE_ID('B','A','R','L'), MAKE_ID('Z','B','A','R'),		// ZBarrel
 	  MAKE_ID('A','R','M','1'), MAKE_ID('A','R','_','1'),		// MeshArmor
 	  MAKE_ID('A','R','M','2'), MAKE_ID('A','R','_','2'),		// FalconShield
@@ -789,7 +732,7 @@ void FWadCollection::RenameSprites ()
 	  MAKE_ID('I','N','V','U'), MAKE_ID('D','E','F','N'),		// Icon of the Defender
 	};
 
-	static const uint32_t StrifeRenames[] =
+	static const DWORD StrifeRenames[] =
 	{ MAKE_ID('M','I','S','L'), MAKE_ID('S','M','I','S'),		// lots of places
 	  MAKE_ID('A','R','M','1'), MAKE_ID('A','R','M','3'),		// MetalArmor
 	  MAKE_ID('A','R','M','2'), MAKE_ID('A','R','M','4'),		// LeatherArmor
@@ -809,7 +752,7 @@ void FWadCollection::RenameSprites ()
 	  MAKE_ID('S','P','I','D'), MAKE_ID('S','T','L','K'),		// Stalker
 	};
 
-	const uint32_t *renames;
+	const DWORD *renames;
 	int numrenames;
 
 	switch (gameinfo.gametype)
@@ -836,7 +779,7 @@ void FWadCollection::RenameSprites ()
 	}
 
 
-	for (uint32_t i=0; i< LumpInfo.Size(); i++)
+	for (DWORD i=0; i< LumpInfo.Size(); i++)
 	{
 		// check for full Minotaur animations. If this is not found
 		// some frames need to be renamed.
@@ -852,12 +795,12 @@ void FWadCollection::RenameSprites ()
 
 	renameAll = !!Args->CheckParm ("-oldsprites") || nospriterename;
 	
-	for (uint32_t i = 0; i < LumpInfo.Size(); i++)
+	for (DWORD i = 0; i < LumpInfo.Size(); i++)
 	{
 		if (LumpInfo[i].lump->Namespace == ns_sprites)
 		{
 			// Only sprites in the IWAD normally get renamed
-			if (renameAll || LumpInfo[i].wadnum == GetIwadNum())
+			if (renameAll || LumpInfo[i].wadnum == IWAD_FILENUM)
 			{
 				for (int j = 0; j < numrenames; ++j)
 				{
@@ -915,14 +858,14 @@ void FWadCollection::RenameNerve ()
 		return;
 
 	bool found = false;
-	uint8_t cksum[16];
-	static const uint8_t nerve[16] = { 0x96, 0x7d, 0x5a, 0xe2, 0x3d, 0xaf, 0x45, 0x19,
+	BYTE cksum[16];
+	static const BYTE nerve[16] = { 0x96, 0x7d, 0x5a, 0xe2, 0x3d, 0xaf, 0x45, 0x19,
 		0x62, 0x12, 0xae, 0x1b, 0x60, 0x5d, 0xa3, 0xb0 };
 	size_t nervesize = 3819855; // NERVE.WAD's file size
-	int w = GetIwadNum();
+	int w = IWAD_FILENUM;
 	while (++w < GetNumWads())
 	{
-		auto fr = GetFileReader(w);
+		FileReader *fr = GetFileReader(w);
 		if (fr == NULL)
 		{
 			continue;
@@ -933,9 +876,9 @@ void FWadCollection::RenameNerve ()
 			// cheaper way to know this is not the file
 			continue;
 		}
-		fr->Seek(0, FileReader::SeekSet);
+		fr->Seek(0, SEEK_SET);
 		MD5Context md5;
-		md5.Update(*fr, (unsigned)fr->GetLength());
+		md5.Update(fr, fr->GetLength());
 		md5.Final(cksum);
 		if (memcmp(nerve, cksum, 16) == 0)
 		{
@@ -967,87 +910,6 @@ void FWadCollection::RenameNerve ()
 
 //==========================================================================
 //
-// FixMacHexen
-//
-// Discard all extra lumps in Mac version of Hexen IWAD (demo or full)
-// to avoid any issues caused by names of these lumps, including:
-//  * Wrong height of small font
-//  * Broken life bar of mage class
-//
-//==========================================================================
-
-void FWadCollection::FixMacHexen()
-{
-	if (GAME_Hexen != gameinfo.gametype)
-	{
-		return;
-	}
-
-	FileReader *reader = GetFileReader(GetIwadNum());
-	auto iwadSize = reader->GetLength();
-
-	static const long DEMO_SIZE = 13596228;
-	static const long BETA_SIZE = 13749984;
-	static const long FULL_SIZE = 21078584;
-
-	if (   DEMO_SIZE != iwadSize
-		&& BETA_SIZE != iwadSize
-		&& FULL_SIZE != iwadSize)
-	{
-		return;
-	}
-
-	reader->Seek(0, FileReader::SeekSet);
-
-	uint8_t checksum[16];
-	MD5Context md5;
-
-	md5.Update(*reader, (unsigned)iwadSize);
-	md5.Final(checksum);
-
-	static const uint8_t HEXEN_DEMO_MD5[16] =
-	{
-		0x92, 0x5f, 0x9f, 0x50, 0x00, 0xe1, 0x7d, 0xc8,
-		0x4b, 0x0a, 0x6a, 0x3b, 0xed, 0x3a, 0x6f, 0x31
-	};
-
-	static const uint8_t HEXEN_BETA_MD5[16] =
-	{
-		0x2a, 0xf1, 0xb2, 0x7c, 0xd1, 0x1f, 0xb1, 0x59,
-		0xe6, 0x08, 0x47, 0x2a, 0x1b, 0x53, 0xe4, 0x0e
-	};
-
-	static const uint8_t HEXEN_FULL_MD5[16] =
-	{
-		0xb6, 0x81, 0x40, 0xa7, 0x96, 0xf6, 0xfd, 0x7f,
-		0x3a, 0x5d, 0x32, 0x26, 0xa3, 0x2b, 0x93, 0xbe
-	};
-
-	const bool isBeta = 0 == memcmp(HEXEN_BETA_MD5, checksum, sizeof checksum);
-
-	if (   !isBeta
-		&& 0 != memcmp(HEXEN_DEMO_MD5, checksum, sizeof checksum)
-		&& 0 != memcmp(HEXEN_FULL_MD5, checksum, sizeof checksum))
-	{
-		return;
-	}
-
-	static const int EXTRA_LUMPS = 299;
-
-	// Hexen Beta is very similar to Demo but it has MAP41: Maze at the end of the WAD
-	// So keep this map if it's present but discard all extra lumps
-
-	const int lastLump = GetLastLump(GetIwadNum()) - (isBeta ? 12 : 0);
-	assert(GetFirstLump(GetIwadNum()) + 299 < lastLump);
-
-	for (int i = lastLump - EXTRA_LUMPS + 1; i <= lastLump; ++i)
-	{
-		LumpInfo[i].lump->Name[0] = '\0';
-	}
-}
-
-//==========================================================================
-//
 // W_FindLump
 //
 // Find a named lump. Specifically allows duplicates for merging of e.g.
@@ -1060,7 +922,7 @@ int FWadCollection::FindLump (const char *name, int *lastlump, bool anyns)
 	union
 	{
 		char name8[8];
-		uint64_t qname;
+		QWORD qname;
 	};
 	LumpRecord *lump_p;
 
@@ -1083,16 +945,6 @@ int FWadCollection::FindLump (const char *name, int *lastlump, bool anyns)
 
 	*lastlump = NumLumps;
 	return -1;
-}
-
-DEFINE_ACTION_FUNCTION(_Wads, FindLump)
-{
-	PARAM_PROLOGUE;
-	PARAM_STRING(name);
-	PARAM_INT_DEF(startlump);
-	PARAM_INT_DEF(ns);
-	const bool isLumpValid = startlump >= 0 && startlump < Wads.GetNumLumps();
-	ACTION_RETURN_INT(isLumpValid ? Wads.FindLump(name, &startlump, 0 != ns) : -1);
 }
 
 //==========================================================================
@@ -1185,7 +1037,7 @@ const char *FWadCollection::GetLumpFullName (int lump) const
 {
 	if ((size_t)lump >= NumLumps)
 		return NULL;
-	else if (LumpInfo[lump].lump->FullName.IsNotEmpty())
+	else if (LumpInfo[lump].lump->FullName != NULL)
 		return LumpInfo[lump].lump->FullName;
 	else
 		return LumpInfo[lump].lump->Name;
@@ -1257,19 +1109,6 @@ int FWadCollection::GetLumpFile (int lump) const
 
 //==========================================================================
 //
-// W_GetLumpFile
-//
-//==========================================================================
-
-FResourceLump *FWadCollection::GetLumpRecord(int lump) const
-{
-	if ((size_t)lump >= LumpInfo.Size())
-		return nullptr;
-	return LumpInfo[lump].lump;
-}
-
-//==========================================================================
-//
 // W_ReadLump
 //
 // Loads the lump into the given buffer, which must be >= W_LumpLength().
@@ -1278,9 +1117,9 @@ FResourceLump *FWadCollection::GetLumpRecord(int lump) const
 
 void FWadCollection::ReadLump (int lump, void *dest)
 {
-	auto lumpr = OpenLumpReader (lump);
-	auto size = lumpr.GetLength ();
-	auto numread = lumpr.Read (dest, size);
+	FWadLump lumpr = OpenLumpNum (lump);
+	long size = lumpr.GetLength ();
+	long numread = lumpr.Read (dest, size);
 
 	if (numread != size)
 	{
@@ -1302,81 +1141,60 @@ FMemLump FWadCollection::ReadLump (int lump)
 	return FMemLump(FString(ELumpNum(lump)));
 }
 
-DEFINE_ACTION_FUNCTION(_Wads, ReadLump)
+//==========================================================================
+//
+// OpenLumpNum
+//
+// Returns a copy of the file object for a lump's wad and positions its
+// file pointer at the beginning of the lump.
+//
+//==========================================================================
+
+FWadLump FWadCollection::OpenLumpNum (int lump)
 {
-	PARAM_PROLOGUE;
-	PARAM_INT(lump);
-	const bool isLumpValid = lump >= 0 && lump < Wads.GetNumLumps();
-	ACTION_RETURN_STRING(isLumpValid ? Wads.ReadLump(lump).GetString() : FString());
+	if ((unsigned)lump >= (unsigned)LumpInfo.Size())
+	{
+		I_Error ("W_OpenLumpNum: %u >= NumLumps", lump);
+	}
+
+	return FWadLump(LumpInfo[lump].lump);
 }
 
 //==========================================================================
 //
-// OpenLumpReader
+// ReopenLumpNum
 //
-// uses a more abstract interface to allow for easier low level optimization later
+// Similar to OpenLumpNum, except a new, independant file object is created
+// for the lump's wad. Use this when you won't read the lump's data all at
+// once (e.g. for streaming an Ogg Vorbis stream from a wad as music).
 //
 //==========================================================================
 
-
-FileReader FWadCollection::OpenLumpReader(int lump)
+FWadLump *FWadCollection::ReopenLumpNum (int lump)
 {
 	if ((unsigned)lump >= (unsigned)LumpInfo.Size())
 	{
-		I_Error("W_OpenLumpNum: %u >= NumLumps", lump);
+		I_Error ("W_ReopenLumpNum: %u >= NumLumps", lump);
 	}
 
-	auto rl = LumpInfo[lump].lump;
-	auto rd = rl->GetReader();
-
-	if (rl->RefCount == 0 && rd != nullptr && !rd->GetBuffer() && !(rl->Flags & (LUMPF_BLOODCRYPT | LUMPF_COMPRESSED)))
-	{
-		FileReader rdr;
-		rdr.OpenFilePart(*rd, rl->GetFileOffset(), rl->LumpSize);
-		return rdr;
-	}
-	return rl->NewReader();	// This always gets a reader to the cache
-}
-
-FileReader FWadCollection::ReopenLumpReader(int lump, bool alwayscache)
-{
-	if ((unsigned)lump >= (unsigned)LumpInfo.Size())
-	{
-		I_Error("ReopenLumpReader: %u >= NumLumps", lump);
-	}
-
-	auto rl = LumpInfo[lump].lump;
-	auto rd = rl->GetReader();
-
-	if (rl->RefCount == 0 && rd != nullptr && !rd->GetBuffer() && !alwayscache && !(rl->Flags & (LUMPF_BLOODCRYPT|LUMPF_COMPRESSED)))
-	{
-		int fileno = Wads.GetLumpFile(lump);
-		const char *filename = Wads.GetWadFullName(fileno);
-		FileReader fr;
-		if (fr.OpenFile(filename, rl->GetFileOffset(), rl->LumpSize))
-		{
-			return fr;
-		}
-	}
-	return rl->NewReader();	// This always gets a reader to the cache
+	return new FWadLump(LumpInfo[lump].lump, true);
 }
 
 //==========================================================================
 //
 // GetFileReader
 //
-// Retrieves the File reader object to access the given WAD
+// Retrieves the FileReader object to access the given WAD
 // Careful: This is only useful for real WAD files!
 //
 //==========================================================================
 
 FileReader *FWadCollection::GetFileReader(int wadnum)
 {
-	if ((uint32_t)wadnum >= Files.Size())
+	if ((DWORD)wadnum >= Files.Size())
 	{
 		return NULL;
 	}
-
 	return Files[wadnum]->GetReader();
 }
 
@@ -1392,7 +1210,7 @@ const char *FWadCollection::GetWadName (int wadnum) const
 {
 	const char *name, *slash;
 
-	if ((uint32_t)wadnum >= Files.Size())
+	if ((DWORD)wadnum >= Files.Size())
 	{
 		return NULL;
 	}
@@ -1409,7 +1227,7 @@ const char *FWadCollection::GetWadName (int wadnum) const
 
 int FWadCollection::GetFirstLump (int wadnum) const
 {
-	if ((uint32_t)wadnum >= Files.Size())
+	if ((DWORD)wadnum >= Files.Size())
 	{
 		return 0;
 	}
@@ -1424,29 +1242,13 @@ int FWadCollection::GetFirstLump (int wadnum) const
 
 int FWadCollection::GetLastLump (int wadnum) const
 {
-	if ((uint32_t)wadnum >= Files.Size())
+	if ((DWORD)wadnum >= Files.Size())
 	{
 		return 0;
 	}
 
 	return Files[wadnum]->GetFirstLump() + Files[wadnum]->LumpCount() - 1;
 }
-
-//==========================================================================
-//
-//
-//==========================================================================
-
-int FWadCollection::GetLumpCount (int wadnum) const
-{
-	if ((uint32_t)wadnum >= Files.Size())
-	{
-		return 0;
-	}
-	
-	return Files[wadnum]->LumpCount();
-}
-
 
 //==========================================================================
 //
@@ -1469,6 +1271,31 @@ const char *FWadCollection::GetWadFullName (int wadnum) const
 
 //==========================================================================
 //
+// IsUncompressedFile
+//
+// Returns true when the lump is available as an uncompressed portion of
+// a file. The music player can play such lumps by streaming but anything
+// else has to be loaded into memory first.
+//
+//==========================================================================
+
+bool FWadCollection::IsUncompressedFile(int lump) const
+{
+	if ((unsigned)lump >= (unsigned)NumLumps)
+	{
+		I_Error ("IsUncompressedFile: %u >= NumLumps",lump);
+	}
+
+	FResourceLump *l = LumpInfo[lump].lump;
+	FileReader *f = l->GetReader();
+	
+	// We can access the file only if we get the FILE pointer from the FileReader here.
+	// Any other case means it won't work.
+	return (f != NULL && f->GetFile() != NULL);
+}
+
+//==========================================================================
+//
 // IsEncryptedFile
 //
 // Returns true if the first 256 bytes of the lump are encrypted for Blood.
@@ -1484,6 +1311,129 @@ bool FWadCollection::IsEncryptedFile(int lump) const
 	return !!(LumpInfo[lump].lump->Flags & LUMPF_BLOODCRYPT);
 }
 
+
+// FWadLump -----------------------------------------------------------------
+
+FWadLump::FWadLump ()
+: FileReader(), Lump(NULL)
+{
+}
+
+FWadLump::FWadLump (const FWadLump &copy)
+: FileReader()
+{
+	// This must be defined isn't called.
+	File = copy.File;
+	Length = copy.Length;
+	FilePos = copy.FilePos;
+	StartPos = copy.StartPos;
+	CloseOnDestruct = false;
+	if ((Lump = copy.Lump)) Lump->CacheLump();
+}
+
+#ifdef _DEBUG
+FWadLump & FWadLump::operator= (const FWadLump &copy)
+{
+	// Only the debug build actually calls this!
+	File = copy.File;
+	Length = copy.Length;
+	FilePos = copy.FilePos;
+	StartPos = copy.StartPos;
+	CloseOnDestruct = false;
+	if ((Lump = copy.Lump)) Lump->CacheLump();
+	return *this;
+}
+#endif
+
+
+FWadLump::FWadLump(FResourceLump *lump, bool alwayscache)
+: FileReader()
+{
+	FileReader *f = lump->GetReader();
+
+	if (f != NULL && f->GetFile() != NULL && !alwayscache)
+	{
+		// Uncompressed lump in a file
+		File = f->GetFile();
+		Length = lump->LumpSize;
+		StartPos = FilePos = lump->GetFileOffset();
+		Lump = NULL;
+	}
+	else
+	{
+		File = NULL;
+		Length = lump->LumpSize;
+		StartPos = FilePos = 0;
+		Lump = lump;
+		Lump->CacheLump();
+	}
+}
+
+FWadLump::~FWadLump()
+{
+	if (Lump != NULL)
+	{
+		Lump->ReleaseCache();
+	}
+}
+
+long FWadLump::Seek (long offset, int origin)
+{
+	if (Lump != NULL)
+	{
+		switch (origin)
+		{
+		case SEEK_CUR:
+			offset += FilePos;
+			break;
+
+		case SEEK_END:
+			offset += Length;
+			break;
+
+		default:
+			break;
+		}
+		FilePos = clamp<long> (offset, 0, Length);
+		return 0;
+	}
+	return FileReader::Seek(offset, origin);
+}
+
+long FWadLump::Read (void *buffer, long len)
+{
+	long numread;
+	long startread = FilePos;
+
+	if (Lump != NULL)
+	{
+		if (FilePos + len > Length)
+		{
+			len = Length - FilePos;
+		}
+		memcpy(buffer, Lump->Cache + FilePos, len);
+		FilePos += len;
+		numread = len;
+	}
+	else
+	{
+		numread = FileReader::Read(buffer, len);
+	}
+	return numread;
+}
+
+char *FWadLump::Gets(char *strbuf, int len)
+{
+	if (Lump != NULL)
+	{
+		return GetsFromBuffer(Lump->Cache, strbuf, len);
+	}
+	else
+	{
+		return FileReader::Gets(strbuf, len);
+	}
+	return strbuf;
+}
 
 // FMemLump -----------------------------------------------------------------
 
@@ -1513,10 +1463,10 @@ FMemLump::~FMemLump ()
 
 FString::FString (ELumpNum lumpnum)
 {
-	auto lumpr = Wads.OpenLumpReader ((int)lumpnum);
-	auto size = lumpr.GetLength ();
+	FWadLump lumpr = Wads.OpenLumpNum ((int)lumpnum);
+	long size = lumpr.GetLength ();
 	AllocBuffer (1 + size);
-	auto numread = lumpr.Read (&Chars[0], size);
+	long numread = lumpr.Read (&Chars[0], size);
 	Chars[size] = '\0';
 
 	if (numread != size)
@@ -1571,35 +1521,5 @@ static void PrintLastError ()
 static void PrintLastError ()
 {
 	Printf (TEXTCOLOR_RED "  %s\n", strerror(errno));
-}
-#endif
-
-#ifdef _DEBUG
-//==========================================================================
-//
-// CCMD LumpNum
-//
-//==========================================================================
-
-CCMD(lumpnum)
-{
-	for (int i = 1; i < argv.argc(); ++i)
-	{
-		Printf("%s: %d\n", argv[i], Wads.CheckNumForName(argv[i]));
-	}
-}
-
-//==========================================================================
-//
-// CCMD LumpNumFull
-//
-//==========================================================================
-
-CCMD(lumpnumfull)
-{
-	for (int i = 1; i < argv.argc(); ++i)
-	{
-		Printf("%s: %d\n", argv[i], Wads.CheckNumForFullName(argv[i]));
-	}
 }
 #endif

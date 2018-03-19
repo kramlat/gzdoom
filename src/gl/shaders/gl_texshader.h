@@ -5,7 +5,7 @@
 
 #include "tarray.h"
 #include "zstring.h"
-#include "cycler.h"
+#include "gl/utility/gl_cycler.h"
 
 
 enum

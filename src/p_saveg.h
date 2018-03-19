@@ -34,16 +34,20 @@
 #ifndef __P_SAVEG_H__
 #define __P_SAVEG_H__
 
-class FSerializer;
+class FArchive;
+struct PNGHandle;
 
 // Persistent storage/archiving.
 // These are the load / save game routines.
 // Also see farchive.(h|cpp)
-void P_DestroyThinkers(bool hubLoad);
+void P_SerializePlayers (FArchive &arc, bool fakeload);
+void P_SerializeWorld (FArchive &arc);
+void P_SerializeThinkers (FArchive &arc, bool);
+void P_SerializePolyobjs (FArchive &arc);
+void P_SerializeSubsectors(FArchive &arc);
+void P_SerializeSounds (FArchive &arc);
 
-void P_ReadACSDefereds (FSerializer &);
-void P_WriteACSDefereds (FSerializer &);
-
-void G_SerializeLevel(FSerializer &arc, bool hubLoad);
+void P_ReadACSDefereds (PNGHandle *png);
+void P_WriteACSDefereds (FILE *file);
 
 #endif // __P_SAVEG_H__

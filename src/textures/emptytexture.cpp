@@ -1,8 +1,7 @@
 /*
-** emptytexture.cpp
+** flattexture.cpp
 ** Texture class for empty placeholder textures
 ** (essentially patches with dimensions and offsets of (0,0) )
-** These need special treatment because a texture size of 0 is illegal
 **
 **---------------------------------------------------------------------------
 ** Copyright 2009 Christoph Oelckers
@@ -42,21 +41,30 @@
 
 //==========================================================================
 //
-// 
+// A texture defined between F_START and F_END markers
 //
 //==========================================================================
 
-class FEmptyTexture : public FWorldTexture
+class FEmptyTexture : public FTexture
 {
-	uint8_t Pixel = 0;
 public:
 	FEmptyTexture (int lumpnum);
-	uint8_t *MakeTexture(FRenderStyle style) override;
+
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload() {}
+
+protected:
+	BYTE Pixels[1];
+	Span DummySpans[1];
 };
+
+
 
 //==========================================================================
 //
-// 
+// Since there is no way to detect the validity of a flat
+// they can't be used anywhere else but between F_START and F_END
 //
 //==========================================================================
 
@@ -64,7 +72,7 @@ FTexture *EmptyTexture_TryCreate(FileReader & file, int lumpnum)
 {
 	char check[8];
 	if (file.GetLength() != 8) return NULL;
-	file.Seek(0, FileReader::SeekSet);
+	file.Seek(0, SEEK_SET);
 	if (file.Read(check, 8) != 8) return NULL;
 	if (memcmp(check, "\0\0\0\0\0\0\0\0", 8)) return NULL;
 
@@ -78,13 +86,15 @@ FTexture *EmptyTexture_TryCreate(FileReader & file, int lumpnum)
 //==========================================================================
 
 FEmptyTexture::FEmptyTexture (int lumpnum)
-: FWorldTexture(NULL, lumpnum)
+: FTexture(NULL, lumpnum)
 {
 	bMasked = true;
 	WidthBits = HeightBits = 1;
 	Width = Height = 1;
 	WidthMask = 0;
-	PixelsAreStatic = 3;
+	DummySpans[0].TopOffset = 0;
+	DummySpans[0].Length = 0;
+	Pixels[0] = 0;
 }
 
 //==========================================================================
@@ -93,8 +103,23 @@ FEmptyTexture::FEmptyTexture (int lumpnum)
 //
 //==========================================================================
 
-uint8_t *FEmptyTexture::MakeTexture(FRenderStyle style)
+const BYTE *FEmptyTexture::GetColumn (unsigned int column, const Span **spans_out)
 {
-	return &Pixel;
+	if (spans_out != NULL)
+	{
+		*spans_out = DummySpans;
+	}
+	return Pixels;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FEmptyTexture::GetPixels ()
+{
+	return Pixels;
 }
 

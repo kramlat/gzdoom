@@ -1,3 +1,4 @@
+uniform float timer;
 
 vec4 ProcessTexel()
 {

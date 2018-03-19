@@ -5,56 +5,19 @@
 #include "v_video.h"
 #include "vectors.h"
 #include "r_renderer.h"
-#include "r_data/matrix.h"
-#include "gl/dynlights/gl_shadowmap.h"
-#include <functional>
 
 struct particle_t;
 class FCanvasTexture;
 class FFlatVertexBuffer;
 class FSkyVertexBuffer;
+class FModelVertexBuffer;
 class OpenGLFrameBuffer;
 struct FDrawInfo;
+struct pspdef_t;
 class FShaderManager;
 class GLPortal;
 class FLightBuffer;
 class FSamplerManager;
-class DPSprite;
-class FGLRenderBuffers;
-class FLinearDepthShader;
-class FDepthBlurShader;
-class FSSAOShader;
-class FSSAOCombineShader;
-class FBloomExtractShader;
-class FBloomCombineShader;
-class FExposureExtractShader;
-class FExposureAverageShader;
-class FExposureCombineShader;
-class FBlurShader;
-class FTonemapShader;
-class FColormapShader;
-class FLensShader;
-class FFXAALumaShader;
-class FFXAAShader;
-class FPresentShader;
-class FPresent3DCheckerShader;
-class FPresent3DColumnShader; 
-class FPresent3DRowShader;
-class F2DDrawer;
-class FHardwareTexture;
-class FShadowMapShader;
-class FCustomPostProcessShaders;
-class GLSceneDrawer;
-
-inline float DEG2RAD(float deg)
-{
-	return deg * float(M_PI / 180.0);
-}
-
-inline float RAD2DEG(float deg)
-{
-	return deg * float(180. / M_PI);
-}
 
 enum SectorRenderFlags
 {
@@ -80,20 +43,12 @@ struct GL_IRECT
 	}
 };
 
-enum
-{
-	DM_MAINVIEW,
-	DM_OFFSCREEN,
-	DM_PORTAL,
-	DM_SKYPORTAL
-};
 
 class FGLRenderer
 {
 public:
 
 	OpenGLFrameBuffer *framebuffer;
-	GLPortal *mClipPortal;
 	GLPortal *mCurrentPortal;
 	int mMirrorCount;
 	int mPlaneMirrorCount;
@@ -104,120 +59,102 @@ public:
 	FSamplerManager *mSamplerManager;
 	int gl_spriteindex;
 	unsigned int mFBID;
-	unsigned int mVAOID;
-	int mOldFBID;
 
-	FGLRenderBuffers *mBuffers;
-	FLinearDepthShader *mLinearDepthShader;
-	FSSAOShader *mSSAOShader;
-	FDepthBlurShader *mDepthBlurShader;
-	FSSAOCombineShader *mSSAOCombineShader;
-	FBloomExtractShader *mBloomExtractShader;
-	FBloomCombineShader *mBloomCombineShader;
-	FExposureExtractShader *mExposureExtractShader;
-	FExposureAverageShader *mExposureAverageShader;
-	FExposureCombineShader *mExposureCombineShader;
-	FBlurShader *mBlurShader;
-	FTonemapShader *mTonemapShader;
-	FColormapShader *mColormapShader;
-	FHardwareTexture *mTonemapPalette;
-	FLensShader *mLensShader;
-	FFXAALumaShader *mFXAALumaShader;
-	FFXAAShader *mFXAAShader;
-	FPresentShader *mPresentShader;
-	FPresent3DCheckerShader *mPresent3dCheckerShader;
-	FPresent3DColumnShader *mPresent3dColumnShader;
-	FPresent3DRowShader *mPresent3dRowShader;
-	FShadowMapShader *mShadowMapShader;
-	FCustomPostProcessShaders *mCustomPostProcessShaders;
-
-	FShadowMap mShadowMap;
-
-	FTextureID glLight;
-	FTextureID glPart2;
-	FTextureID glPart;
-	FTextureID mirrorTexture;
+	FTexture *glpart2;
+	FTexture *glpart;
+	FTexture *mirrortexture;
 	
 	float mSky1Pos, mSky2Pos;
 
 	FRotator mAngles;
 	FVector2 mViewVector;
+	FVector3 mCameraPos;
 
 	FFlatVertexBuffer *mVBO;
 	FSkyVertexBuffer *mSkyVBO;
+	FModelVertexBuffer *mModelVBO;
 	FLightBuffer *mLights;
-	F2DDrawer *m2DDrawer;
 
-	GL_IRECT mScreenViewport;
-	GL_IRECT mSceneViewport;
-	GL_IRECT mOutputLetterbox;
-	bool mDrawingScene2D = false;
-
-	float mSceneClearColor[3];
-
-	float mGlobVis = 0.0f;
 
 	FGLRenderer(OpenGLFrameBuffer *fb);
 	~FGLRenderer() ;
 
-	void SetOutputViewport(GL_IRECT *bounds);
-	int ScreenToWindowX(int x);
-	int ScreenToWindowY(int y);
+	angle_t FrustumAngle();
+	void SetViewArea();
+	void ResetViewport();
+	void SetViewport(GL_IRECT *bounds);
+	sector_t *RenderViewpoint (AActor * camera, GL_IRECT * bounds, float fov, float ratio, float fovratio, bool mainview, bool toscreen);
+	void RenderView(player_t *player);
+	void SetCameraPos(fixed_t viewx, fixed_t viewy, fixed_t viewz, angle_t viewangle);
+	void SetupView(fixed_t viewx, fixed_t viewy, fixed_t viewz, angle_t viewangle, bool mirror, bool planemirror);
 
-	void Initialize(int width, int height);
+	void Initialize();
+
+	void CreateScene();
+	void RenderScene(int recursion);
+	void RenderTranslucent();
+	void DrawScene(bool toscreen = false);
+	void DrawBlend(sector_t * viewsector);
+
+	void DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, bool hudModelStep, int OverrideShader, bool alphatexture);
+	void DrawPlayerSprites(sector_t * viewsector, bool hudModelStep);
+	void DrawTargeterSprites();
 
 	void Begin2D();
 	void ClearBorders();
+	void DrawTexture(FTexture *img, DCanvas::DrawParms &parms);
+	void DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 color);
+	void DrawPixel(int x1, int y1, int palcolor, uint32 color);
+	void Dim(PalEntry color, float damount, int x1, int y1, int w, int h);
+	void FlatFill (int left, int top, int right, int bottom, FTexture *src, bool local_origin);
+	void Clear(int left, int top, int right, int bottom, int palcolor, uint32 color);
 
+	void ProcessLowerMiniseg(seg_t *seg, sector_t * frontsector, sector_t * backsector);
+	void ProcessSprite(AActor *thing, sector_t *sector);
+	void ProcessParticle(particle_t *part, sector_t *sector);
+	void ProcessSector(sector_t *fakesector);
 	void FlushTextures();
 	unsigned char *GetTextureBuffer(FTexture *tex, int &w, int &h);
 	void SetupLevel();
 
-	void RenderView(player_t* player);
+	void SetFixedColormap (player_t *player);
+	void WriteSavePic (player_t *player, FILE *file, int width, int height);
+	void EndDrawScene(sector_t * viewsector);
+	void Flush() {}
 
-	void RenderScreenQuad();
-	void PostProcessScene(int fixedcm, const std::function<void()> &afterBloomDrawEndScene2D);
-	void AmbientOccludeScene();
-	void UpdateCameraExposure();
-	void BloomScene(int fixedcm);
-	void TonemapScene();
-	void ColormapScene(int fixedcm);
-	void CreateTonemapPalette();
-	void ClearTonemapPalette();
-	void LensDistortScene();
-	void ApplyFXAA();
-	void BlurScene(float gameinfobluramount);
-	void CopyToBackbuffer(const GL_IRECT *bounds, bool applyGamma);
-	void DrawPresentTexture(const GL_IRECT &box, bool applyGamma);
-	void Flush();
-	void GetSpecialTextures();
-
+	void SetProjection(float fov, float ratio, float fovratio);
+	void SetViewMatrix(bool mirror, bool planemirror);
+	void ProcessScene(bool toscreen = false);
 
 	bool StartOffscreen();
 	void EndOffscreen();
 
 	void FillSimplePoly(FTexture *texture, FVector2 *points, int npoints,
 		double originx, double originy, double scalex, double scaley,
-		DAngle rotation, const FColormap &colormap, PalEntry flatcolor, int lightlevel, int bottomclip);
-
-	int PTM_BestColor (const uint32_t *pal_in, int r, int g, int b, int first, int num);
-
-	static float GetZNear() { return 5.f; }
-	static float GetZFar() { return 65536.f; }
+		angle_t rotation, FDynamicColormap *colormap, int lightlevel);
 };
-
-enum area_t
-{
-	area_normal,
-	area_below,
-	area_above,
-	area_default
-};
-
 
 // Global functions. Make them members of GLRenderer later?
+void gl_RenderBSPNode (void *node);
 bool gl_CheckClip(side_t * sidedef, sector_t * frontsector, sector_t * backsector);
+void gl_CheckViewArea(vertex_t *v1, vertex_t *v2, sector_t *frontsector, sector_t *backsector);
+
+typedef enum
+{
+        area_normal,
+        area_below,
+        area_above,
+		area_default
+} area_t;
+
+extern area_t			in_area;
+
+
 sector_t * gl_FakeFlat(sector_t * sec, sector_t * dest, area_t in_area, bool back);
+inline sector_t * gl_FakeFlat(sector_t * sec, sector_t * dest, bool back)
+{
+	return gl_FakeFlat(sec, dest, in_area, back);
+}
 
 struct TexFilter_s
 {

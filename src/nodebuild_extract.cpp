@@ -43,7 +43,6 @@
 
 #include "nodebuild.h"
 #include "templates.h"
-#include "g_levellocals.h"
 
 #if 0
 #define D(x) x
@@ -53,30 +52,31 @@
 #undef DD
 #endif
 
-void FNodeBuilder::Extract (FLevelLocals &level)
+void FNodeBuilder::Extract (node_t *&outNodes, int &nodeCount,
+	seg_t *&outSegs, glsegextra_t *&outSegExtras, int &segCount,
+	subsector_t *&outSubs, int &subCount,
+	vertex_t *&outVerts, int &vertCount)
 {
 	int i;
 
-	auto &outVerts = level.vertexes; 
-	int vertCount = Vertices.Size ();
-	outVerts.Alloc(vertCount);
+	vertCount = Vertices.Size ();
+	outVerts = new vertex_t[vertCount];
 
 	for (i = 0; i < vertCount; ++i)
 	{
-		outVerts[i].set(Vertices[i].x, Vertices[i].y);
+		outVerts[i].x = Vertices[i].x;
+		outVerts[i].y = Vertices[i].y;
 	}
 
-	auto &outSubs = level.subsectors;
-	auto subCount = Subsectors.Size();
-	outSubs.Alloc(subCount);
-	memset(&outSubs[0], 0, subCount * sizeof(subsector_t));
+	subCount = Subsectors.Size();
+	outSubs = new subsector_t[subCount];
+	memset(outSubs, 0, subCount * sizeof(subsector_t));
 
-	auto &outNodes = level.nodes;
-	auto nodeCount = Nodes.Size ();
-	outNodes.Alloc(nodeCount);
+	nodeCount = Nodes.Size ();
+	outNodes = new node_t[nodeCount];
 
-	memcpy (&outNodes[0], &Nodes[0], nodeCount*sizeof(node_t));
-	for (unsigned i = 0; i < nodeCount; ++i)
+	memcpy (outNodes, &Nodes[0], nodeCount*sizeof(node_t));
+	for (i = 0; i < nodeCount; ++i)
 	{
 		D(Printf(PRINT_LOG, "Node %d:  Splitter[%08x,%08x] [%08x,%08x]\n", i,
 			outNodes[i].x, outNodes[i].y, outNodes[i].dx, outNodes[i].dy));
@@ -87,75 +87,67 @@ void FNodeBuilder::Extract (FLevelLocals &level)
 			if (outNodes[i].intchildren[j] & 0x80000000)
 			{
 				D(Printf(PRINT_LOG, "  subsector %d\n", outNodes[i].intchildren[j] & 0x7FFFFFFF));
-				outNodes[i].children[j] = (uint8_t *)(&outSubs[(outNodes[i].intchildren[j] & 0x7fffffff)]) + 1;
+				outNodes[i].children[j] = (BYTE *)(outSubs + (outNodes[i].intchildren[j] & 0x7fffffff)) + 1;
 			}
 			else
 			{
 				D(Printf(PRINT_LOG, "  node %d\n", outNodes[i].intchildren[j]));
-				outNodes[i].children[j] = &outNodes[outNodes[i].intchildren[j]];
-			}
-		}
-		for (int j = 0; j < 2; ++j)
-		{
-			for (int k = 0; k < 4; ++k)
-			{
-				outNodes[i].bbox[j][k] = FIXED2FLOAT(outNodes[i].nb_bbox[j][k]);
+				outNodes[i].children[j] = outNodes + outNodes[i].intchildren[j];
 			}
 		}
 	}
 
-	auto &outSegs = level.segs;
 	if (GLNodes)
 	{
 		TArray<glseg_t> segs (Segs.Size()*5/4);
 
-		for (unsigned i = 0; i < subCount; ++i)
+		for (i = 0; i < subCount; ++i)
 		{
-			uint32_t numsegs = CloseSubsector (segs, i, &outVerts[0]);
+			DWORD numsegs = CloseSubsector (segs, i, outVerts);
 			outSubs[i].numlines = numsegs;
 			outSubs[i].firstline = (seg_t *)(size_t)(segs.Size() - numsegs);
 		}
 
-		auto segCount = segs.Size ();
-		outSegs.Alloc(segCount);
+		segCount = segs.Size ();
+		outSegs = new seg_t[segCount];
+		outSegExtras = new glsegextra_t[segCount];
 
-		for (unsigned i = 0; i < segCount; ++i)
+		for (i = 0; i < segCount; ++i)
 		{
 			outSegs[i] = *(seg_t *)&segs[i];
 
 			if (segs[i].Partner != DWORD_MAX)
 			{
-				const uint32_t storedseg = Segs[segs[i].Partner].storedseg;
-				outSegs[i].PartnerSeg = DWORD_MAX == storedseg ? nullptr : &outSegs[storedseg];
+				outSegExtras[i].PartnerSeg = Segs[segs[i].Partner].storedseg;
 			}
 			else
 			{
-				outSegs[i].PartnerSeg = nullptr;
+				outSegExtras[i].PartnerSeg = DWORD_MAX;
 			}
 		}
 	}
 	else
 	{
-		memcpy (&outSubs[0], &Subsectors[0], subCount*sizeof(subsector_t));
-		auto segCount = Segs.Size ();
-		outSegs.Alloc(segCount);
-		for (unsigned i = 0; i < segCount; ++i)
+		memcpy (outSubs, &Subsectors[0], subCount*sizeof(subsector_t));
+		segCount = Segs.Size ();
+		outSegs = new seg_t[segCount];
+		outSegExtras = NULL;
+		for (i = 0; i < segCount; ++i)
 		{
 			const FPrivSeg *org = &Segs[SegList[i].SegNum];
 			seg_t *out = &outSegs[i];
 
 			D(Printf(PRINT_LOG, "Seg %d: v1(%d) -> v2(%d)\n", i, org->v1, org->v2));
 
-			out->v1 = &outVerts[org->v1];
-			out->v2 = &outVerts[org->v2];
+			out->v1 = outVerts + org->v1;
+			out->v2 = outVerts + org->v2;
 			out->backsector = org->backsector;
 			out->frontsector = org->frontsector;
 			out->linedef = Level.Lines + org->linedef;
 			out->sidedef = Level.Sides + org->sidedef;
-			out->PartnerSeg = nullptr;
 		}
 	}
-	for (unsigned i = 0; i < subCount; ++i)
+	for (i = 0; i < subCount; ++i)
 	{
 		outSubs[i].firstline = &outSegs[(size_t)outSubs[i].firstline];
 	}
@@ -164,8 +156,8 @@ void FNodeBuilder::Extract (FLevelLocals &level)
 
 	for (i = 0; i < Level.NumLines; ++i)
 	{
-		Level.Lines[i].v1 = &outVerts[(size_t)Level.Lines[i].v1];
-		Level.Lines[i].v2 = &outVerts[(size_t)Level.Lines[i].v2];
+		Level.Lines[i].v1 = outVerts + (size_t)Level.Lines[i].v1;
+		Level.Lines[i].v2 = outVerts + (size_t)Level.Lines[i].v2;
 	}
 }
 
@@ -177,7 +169,8 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 	bsp->Verts.Resize(Vertices.Size());
 	for (i = 0; i < Vertices.Size(); ++i)
 	{
-		bsp->Verts[i].set(Vertices[i].x, Vertices[i].y);
+		bsp->Verts[i].x = Vertices[i].x;
+		bsp->Verts[i].y = Vertices[i].y;
 	}
 
 	bsp->Subsectors.Resize(Subsectors.Size());
@@ -195,19 +188,12 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 			if (bsp->Nodes[i].intchildren[j] & 0x80000000)
 			{
 				D(Printf(PRINT_LOG, "  subsector %d\n", bsp->Nodes[i].intchildren[j] & 0x7FFFFFFF));
-				bsp->Nodes[i].children[j] = (uint8_t *)&bsp->Subsectors[bsp->Nodes[i].intchildren[j] & 0x7fffffff] + 1;
+				bsp->Nodes[i].children[j] = (BYTE *)&bsp->Subsectors[bsp->Nodes[i].intchildren[j] & 0x7fffffff] + 1;
 			}
 			else
 			{
 				D(Printf(PRINT_LOG, "  node %d\n", bsp->Nodes[i].intchildren[j]));
 				bsp->Nodes[i].children[j] = &bsp->Nodes[bsp->Nodes[i].intchildren[j]];
-			}
-		}
-		for (int j = 0; j < 2; ++j)
-		{
-			for (int k = 0; k < 4; ++k)
-			{
-				bsp->Nodes[i].bbox[j][k] = FIXED2FLOAT(bsp->Nodes[i].nb_bbox[j][k]);
 			}
 		}
 	}
@@ -217,7 +203,7 @@ void FNodeBuilder::ExtractMini (FMiniBSP *bsp)
 		TArray<glseg_t> glsegs;
 		for (i = 0; i < Subsectors.Size(); ++i)
 		{
-			uint32_t numsegs = CloseSubsector (glsegs, i, &bsp->Verts[0]);
+			DWORD numsegs = CloseSubsector (glsegs, i, &bsp->Verts[0]);
 			bsp->Subsectors[i].numlines = numsegs;
 			bsp->Subsectors[i].firstline = &bsp->Segs[bsp->Segs.Size() - numsegs];
 		}
@@ -267,11 +253,11 @@ int FNodeBuilder::CloseSubsector (TArray<glseg_t> &segs, int subsector, vertex_t
 	double accumx, accumy;
 	fixed_t midx, midy;
 	int firstVert;
-	uint32_t first, max, count, i, j;
+	DWORD first, max, count, i, j;
 	bool diffplanes;
 	int firstplane;
 
-	first = (uint32_t)(size_t)Subsectors[subsector].firstline;
+	first = (DWORD)(size_t)Subsectors[subsector].firstline;
 	max = first + Subsectors[subsector].numlines;
 	count = 0;
 
@@ -331,7 +317,7 @@ int FNodeBuilder::CloseSubsector (TArray<glseg_t> &segs, int subsector, vertex_t
 		{
 			angle_t bestdiff = ANGLE_MAX;
 			FPrivSeg *bestseg = NULL;
-			uint32_t bestj = DWORD_MAX;
+			DWORD bestj = DWORD_MAX;
 			j = first;
 			do
 			{
@@ -414,14 +400,14 @@ int FNodeBuilder::CloseSubsector (TArray<glseg_t> &segs, int subsector, vertex_t
 	{
 		Printf(PRINT_LOG, "  Seg %5d%c(%5d,%5d)-(%5d,%5d)  [%08x,%08x]-[%08x,%08x]\n", i,
 			segs[i].linedef == NULL ? '+' : ' ',
-			segs[i].v1->fixX()>>16,
-			segs[i].v1->fixY()>>16,
-			segs[i].v2->fixX()>>16,
-			segs[i].v2->fixY()>>16,
-			segs[i].v1->fixX(),
-			segs[i].v1->fixY(),
-			segs[i].v2->fixX(),
-			segs[i].v2->fixY());
+			segs[i].v1->x>>16,
+			segs[i].v1->y>>16,
+			segs[i].v2->x>>16,
+			segs[i].v2->y>>16,
+			segs[i].v1->x,
+			segs[i].v1->y,
+			segs[i].v2->x,
+			segs[i].v2->y);
 	}
 #endif
 
@@ -436,7 +422,7 @@ int FNodeBuilder::OutputDegenerateSubsector (TArray<glseg_t> &segs, int subsecto
 	double dot, x1, y1, dx, dy, dx2, dy2;
 	bool wantside;
 
-	first = (uint32_t)(size_t)Subsectors[subsector].firstline;
+	first = (DWORD)(size_t)Subsectors[subsector].firstline;
 	max = first + Subsectors[subsector].numlines;
 	count = 0;
 
@@ -495,7 +481,7 @@ int FNodeBuilder::OutputDegenerateSubsector (TArray<glseg_t> &segs, int subsecto
 	return count;
 }
 
-uint32_t FNodeBuilder::PushGLSeg (TArray<glseg_t> &segs, const FPrivSeg *seg, vertex_t *outVerts)
+DWORD FNodeBuilder::PushGLSeg (TArray<glseg_t> &segs, const FPrivSeg *seg, vertex_t *outVerts)
 {
 	glseg_t newseg;
 
@@ -514,7 +500,7 @@ uint32_t FNodeBuilder::PushGLSeg (TArray<glseg_t> &segs, const FPrivSeg *seg, ve
 		newseg.sidedef = NULL;
 	}
 	newseg.Partner = seg->partner;
-	return (uint32_t)segs.Push (newseg);
+	return (DWORD)segs.Push (newseg);
 }
 
 void FNodeBuilder::PushConnectingGLSeg (int subsector, TArray<glseg_t> &segs, vertex_t *v1, vertex_t *v2)

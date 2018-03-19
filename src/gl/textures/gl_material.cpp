@@ -1,24 +1,39 @@
-// 
-//---------------------------------------------------------------------------
-//
-// Copyright(C) 2004-2016 Christoph Oelckers
-// All rights reserved.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//--------------------------------------------------------------------------
-//
+/*
+** gl_material.cpp
+** 
+**---------------------------------------------------------------------------
+** Copyright 2004-2009 Christoph Oelckers
+** All rights reserved.
+**
+** Redistribution and use in source and binary forms, with or without
+** modification, are permitted provided that the following conditions
+** are met:
+**
+** 1. Redistributions of source code must retain the above copyright
+**    notice, this list of conditions and the following disclaimer.
+** 2. Redistributions in binary form must reproduce the above copyright
+**    notice, this list of conditions and the following disclaimer in the
+**    documentation and/or other materials provided with the distribution.
+** 3. The name of the author may not be used to endorse or promote products
+**    derived from this software without specific prior written permission.
+** 4. When not used as part of GZDoom or a GZDoom derivative, this code will be
+**    covered by the terms of the GNU Lesser General Public License as published
+**    by the Free Software Foundation; either version 2.1 of the License, or (at
+**    your option) any later version.
+**
+** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+**---------------------------------------------------------------------------
+**
+*/
 
 #include "gl/system/gl_system.h"
 #include "w_wad.h"
@@ -31,10 +46,7 @@
 #include "r_utility.h"
 #include "templates.h"
 #include "sc_man.h"
-#include "r_data/renderstyle.h"
 #include "colormatcher.h"
-#include "textures/warpbuffer.h"
-#include "textures/bitmap.h"
 
 //#include "gl/gl_intern.h"
 
@@ -45,6 +57,7 @@
 #include "gl/data/gl_data.h"
 #include "gl/textures/gl_texture.h"
 #include "gl/textures/gl_translate.h"
+#include "gl/textures/gl_bitmap.h"
 #include "gl/textures/gl_material.h"
 #include "gl/textures/gl_samplers.h"
 #include "gl/shaders/gl_shader.h"
@@ -75,9 +88,7 @@ FGLTexture::FGLTexture(FTexture * tx, bool expandpatches)
 	hirestexture = NULL;
 	bHasColorkey = false;
 	bIsTransparent = -1;
-	bExpandFlag = expandpatches;
-	lastSampler = 254;
-	lastTranslation = -1;
+	bExpand = expandpatches;
 	tex->gl_info.SystemTexture[expandpatches] = this;
 }
 
@@ -100,8 +111,6 @@ FGLTexture::~FGLTexture()
 //==========================================================================
 unsigned char *FGLTexture::LoadHiresTexture(FTexture *tex, int *width, int *height)
 {
-	if (bExpandFlag) return NULL;	// doesn't work for expanded textures
-
 	if (HiresLump==-1) 
 	{
 		bHasColorkey = false;
@@ -121,7 +130,7 @@ unsigned char *FGLTexture::LoadHiresTexture(FTexture *tex, int *width, int *heig
 		unsigned char * buffer=new unsigned char[w*(h+1)*4];
 		memset(buffer, 0, w * (h+1) * 4);
 
-		FBitmap bmp(buffer, w*4, w, h);
+		FGLBitmap bmp(buffer, w*4, w, h);
 		
 		int trans = hirestexture->CopyTrueColorPixels(&bmp, 0, 0);
 		hirestexture->CheckTrans(buffer, w*h, trans);
@@ -131,7 +140,7 @@ unsigned char *FGLTexture::LoadHiresTexture(FTexture *tex, int *width, int *heig
 		{
 			// This is a crappy Doomsday color keyed image
 			// We have to remove the key manually. :(
-			uint32_t * dwdata=(uint32_t*)buffer;
+			DWORD * dwdata=(DWORD*)buffer;
 			for (int i=(w*h);i>0;i--)
 			{
 				if (dwdata[i]==0xffffff00 || dwdata[i]==0xffff00ff) dwdata[i]=0;
@@ -152,28 +161,14 @@ unsigned char *FGLTexture::LoadHiresTexture(FTexture *tex, int *width, int *heig
 
 void FGLTexture::Clean(bool all)
 {
-	if (mHwTexture != nullptr) 
+	if (mHwTexture) 
 	{
 		if (!all) mHwTexture->Clean(false);
 		else
 		{
 			delete mHwTexture;
-			mHwTexture = nullptr;
+			mHwTexture = NULL;
 		}
-
-		lastSampler = 253;
-		lastTranslation = -1;
-	}
-}
-
-
-void FGLTexture::CleanUnused(SpriteHits &usedtranslations)
-{
-	if (mHwTexture != nullptr)
-	{
-		mHwTexture->CleanUnused(usedtranslations);
-		lastSampler = 253;
-		lastTranslation = -1;
 	}
 }
 
@@ -184,16 +179,15 @@ void FGLTexture::CleanUnused(SpriteHits &usedtranslations)
 //
 //===========================================================================
 
-unsigned char * FGLTexture::CreateTexBuffer(int translation, int & w, int & h, FTexture *hirescheck, bool createexpanded, bool alphatrans)
+unsigned char * FGLTexture::CreateTexBuffer(int translation, int & w, int & h, FTexture *hirescheck)
 {
 	unsigned char * buffer;
 	int W, H;
-	int isTransparent = -1;
 
 
 	// Textures that are already scaled in the texture lump will not get replaced
 	// by hires textures
-	if (gl_texture_usehires && hirescheck != NULL && !alphatrans)
+	if (gl_texture_usehires && hirescheck != NULL)
 	{
 		buffer = LoadHiresTexture (hirescheck, &w, &h);
 		if (buffer)
@@ -202,58 +196,49 @@ unsigned char * FGLTexture::CreateTexBuffer(int translation, int & w, int & h, F
 		}
 	}
 
-	int exx = bExpandFlag && createexpanded;
-
-	W = w = tex->GetWidth() + 2 * exx;
-	H = h = tex->GetHeight() + 2 * exx;
+	W = w = tex->GetWidth() + bExpand*2;
+	H = h = tex->GetHeight() + bExpand*2;
 
 
 	buffer=new unsigned char[W*(H+1)*4];
 	memset(buffer, 0, W * (H+1) * 4);
 
-	FBitmap bmp(buffer, W*4, W, H);
+	FGLBitmap bmp(buffer, W*4, W, H);
+	bmp.SetTranslationInfo(translation);
 
-	if (translation <= 0)
+	if (tex->bComplex)
 	{
-		// Q: Is this special treatment still needed? Needs to be checked.
-		if (tex->bComplex)
-		{
-			FBitmap imgCreate;
+		FBitmap imgCreate;
 
-			// The texture contains special processing so it must be fully composited before being converted as a whole.
-			if (imgCreate.Create(W, H))
-			{
-				memset(imgCreate.GetPixels(), 0, W * H * 4);
-				int trans = tex->CopyTrueColorPixels(&imgCreate, exx, exx);
-				bmp.CopyPixelDataRGB(0, 0, imgCreate.GetPixels(), W, H, 4, W * 4, 0, CF_BGRA);
-				tex->CheckTrans(buffer, W*H, trans);
-				isTransparent = tex->gl_info.mIsTransparent;
-				if (bIsTransparent == -1) bIsTransparent = isTransparent;
-			}
-		}
-		else
+		// The texture contains special processing so it must be composited using the
+		// base bitmap class and then be converted as a whole.
+		if (imgCreate.Create(W, H))
 		{
-			int trans = tex->CopyTrueColorPixels(&bmp, exx, exx);
+			memset(imgCreate.GetPixels(), 0, W * H * 4);
+			int trans = tex->CopyTrueColorPixels(&imgCreate, bExpand, bExpand);
+			bmp.CopyPixelDataRGB(0, 0, imgCreate.GetPixels(), W, H, 4, W * 4, 0, CF_BGRA);
 			tex->CheckTrans(buffer, W*H, trans);
-			isTransparent = tex->gl_info.mIsTransparent;
-			if (bIsTransparent == -1) bIsTransparent = isTransparent;
+			bIsTransparent = tex->gl_info.mIsTransparent;
 		}
+	}
+	else if (translation<=0)
+	{
+		int trans = tex->CopyTrueColorPixels(&bmp, bExpand, bExpand);
+		tex->CheckTrans(buffer, W*H, trans);
+		bIsTransparent = tex->gl_info.mIsTransparent;
 	}
 	else
 	{
 		// When using translations everything must be mapped to the base palette.
-		// so use CopyTrueColorTranslated
-		tex->CopyTrueColorTranslated(&bmp, exx, exx, 0, GLTranslationPalette::GetPalette(translation));
-		isTransparent = 0;
-		// This is not conclusive for setting the texture's transparency info.
+		// Since FTexture's method is doing exactly that by calling GetPixels let's use that here
+		// to do all the dirty work for us. ;)
+		tex->FTexture::CopyTrueColorPixels(&bmp, bExpand, bExpand);
+		bIsTransparent = 0;
 	}
-
-	// if we just want the texture for some checks there's no need for upsampling.
-	if (!createexpanded) return buffer;
 
 	// [BB] The hqnx upsampling (not the scaleN one) destroys partial transparency, don't upsamle textures using it.
 	// [BB] Potentially upsample the buffer.
-	return gl_CreateUpsampledTextureBuffer ( tex, buffer, W, H, w, h, !!isTransparent);
+	return gl_CreateUpsampledTextureBuffer ( tex, buffer, W, H, w, h, !!bIsTransparent);
 }
 
 
@@ -268,7 +253,7 @@ FHardwareTexture *FGLTexture::CreateHwTexture()
 	if (tex->UseType==FTexture::TEX_Null) return NULL;		// Cannot register a NULL texture
 	if (mHwTexture == NULL)
 	{
-		mHwTexture = new FHardwareTexture(tex->GetWidth() + bExpandFlag*2, tex->GetHeight() + bExpandFlag*2, tex->gl_info.bNoCompress);
+		mHwTexture = new FHardwareTexture(tex->GetWidth() + bExpand*2, tex->GetHeight() + bExpand*2, tex->gl_info.bNoCompress);
 	}
 	return mHwTexture; 
 }
@@ -282,14 +267,9 @@ FHardwareTexture *FGLTexture::CreateHwTexture()
 const FHardwareTexture *FGLTexture::Bind(int texunit, int clampmode, int translation, FTexture *hirescheck)
 {
 	int usebright = false;
-	bool alphatrans = false;
 
 	if (translation <= 0) translation = -translation;
-	else
-	{
-		alphatrans = (gl.legacyMode && uint32_t(translation) == TRANSLATION(TRANSLATION_Standard, 8));
-		translation = GLTranslationPalette::GetInternalTranslation(translation);
-	}
+	else translation = GLTranslationPalette::GetInternalTranslation(translation);
 
 	bool needmipmap = (clampmode <= CLAMP_XY);
 
@@ -298,7 +278,7 @@ const FHardwareTexture *FGLTexture::Bind(int texunit, int clampmode, int transla
 	if (hwtex)
 	{
 		// Texture has become invalid
-		if ((!tex->bHasCanvas && (!tex->bWarped || gl.legacyMode)) && tex->CheckModified(DefaultRenderStyle()))
+		if ((!tex->bHasCanvas && !tex->bWarped) && tex->CheckModified())
 		{
 			Clean(true);
 			hwtex = CreateHwTexture();
@@ -315,20 +295,10 @@ const FHardwareTexture *FGLTexture::Bind(int texunit, int clampmode, int transla
 			
 			if (!tex->bHasCanvas)
 			{
-				buffer = CreateTexBuffer(translation, w, h, hirescheck, true, alphatrans);
-				if (tex->bWarped && gl.legacyMode && w*h <= 256*256)	// do not software-warp larger textures, especially on the old systems that still need this fallback.
-				{
-					// need to do software warping
-					FWarpTexture *wt = static_cast<FWarpTexture*>(tex);
-					unsigned char *warpbuffer = new unsigned char[w*h*4];
-					WarpBuffer((uint32_t*)warpbuffer, (const uint32_t*)buffer, w, h, wt->WidthOffsetMultiplier, wt->HeightOffsetMultiplier, screen->FrameTime, wt->Speed, tex->bWarped);
-					delete[] buffer;
-					buffer = warpbuffer;
-					wt->GenTime[0] = screen->FrameTime;
-				}
+				buffer = CreateTexBuffer(translation, w, h, hirescheck);
 				tex->ProcessData(buffer, w, h, false);
 			}
-			if (!hwtex->CreateTexture(buffer, w, h, texunit, needmipmap, translation, "FGLTexture.Bind")) 
+			if (!hwtex->CreateTexture(buffer, w, h, texunit, needmipmap, translation)) 
 			{
 				// could not create texture
 				delete[] buffer;
@@ -336,11 +306,9 @@ const FHardwareTexture *FGLTexture::Bind(int texunit, int clampmode, int transla
 			}
 			delete[] buffer;
 		}
+
 		if (tex->bHasCanvas) static_cast<FCanvasTexture*>(tex)->NeedUpdate();
-		if (translation != lastTranslation) lastSampler = 254;
-		if (lastSampler != clampmode)
-			lastSampler = GLRenderer->mSamplerManager->Bind(texunit, clampmode, lastSampler);
-		lastTranslation = translation;
+		GLRenderer->mSamplerManager->Bind(texunit, clampmode);
 		return hwtex; 
 	}
 	return NULL;
@@ -352,20 +320,17 @@ const FHardwareTexture *FGLTexture::Bind(int texunit, int clampmode, int transla
 //
 //===========================================================================
 
-float FTexCoordInfo::RowOffset(float rowoffset) const
+fixed_t FTexCoordInfo::RowOffset(fixed_t rowoffset) const
 {
-	float tscale = fabs(mTempScale.Y);
-	float scale = fabs(mScale.Y);
-
-	if (tscale == 1.f)
+	if (mTempScaleY == FRACUNIT)
 	{
-		if (scale == 1.f || mWorldPanning) return rowoffset;
-		else return rowoffset / scale;
+		if (mScaleY==FRACUNIT || mWorldPanning) return rowoffset;
+		else return FixedDiv(rowoffset, mScaleY);
 	}
 	else
 	{
-		if (mWorldPanning) return rowoffset / tscale;
-		else return rowoffset / scale;
+		if (mWorldPanning) return FixedDiv(rowoffset, mTempScaleY);
+		else return FixedDiv(rowoffset, mScaleY);
 	}
 }
 
@@ -375,19 +340,17 @@ float FTexCoordInfo::RowOffset(float rowoffset) const
 //
 //===========================================================================
 
-float FTexCoordInfo::TextureOffset(float textureoffset) const
+fixed_t FTexCoordInfo::TextureOffset(fixed_t textureoffset) const
 {
-	float tscale = fabs(mTempScale.X);
-	float scale = fabs(mScale.X);
-	if (tscale == 1.f)
+	if (mTempScaleX == FRACUNIT)
 	{
-		if (scale == 1.f || mWorldPanning) return textureoffset;
-		else return textureoffset / scale;
+		if (mScaleX==FRACUNIT || mWorldPanning) return textureoffset;
+		else return FixedDiv(textureoffset, mScaleX);
 	}
 	else
 	{
-		if (mWorldPanning) return textureoffset / tscale;
-		else return textureoffset / scale;
+		if (mWorldPanning) return FixedDiv(textureoffset, mTempScaleX);
+		else return FixedDiv(textureoffset, mScaleX);
 	}
 }
 
@@ -397,13 +360,12 @@ float FTexCoordInfo::TextureOffset(float textureoffset) const
 //
 //===========================================================================
 
-float FTexCoordInfo::TextureAdjustWidth() const
+fixed_t FTexCoordInfo::TextureAdjustWidth() const
 {
 	if (mWorldPanning) 
 	{
-		float tscale = fabs(mTempScale.X);
-		if (tscale == 1.f) return mRenderWidth;
-		else return mWidth / fabs(tscale);
+		if (mTempScaleX == FRACUNIT) return mRenderWidth;
+		else return FixedDiv(mWidth, mTempScaleX);
 	}
 	else return mWidth;
 }
@@ -439,7 +401,7 @@ int FMaterial::mMaxBound;
 
 FMaterial::FMaterial(FTexture * tx, bool expanded)
 {
-	mShaderIndex = SHADER_Default;
+	mShaderIndex = 0;
 	tex = tx;
 
 	// TODO: apply custom shader object here
@@ -450,60 +412,35 @@ FMaterial::FMaterial(FTexture * tx, bool expanded)
 	*/
 	if (tx->bWarped)
 	{
-		mShaderIndex = tx->bWarped; // This picks SHADER_Warp1 or SHADER_Warp2
+		mShaderIndex = tx->bWarped;
+		expanded = false;
 		tx->gl_info.shaderspeed = static_cast<FWarpTexture*>(tx)->GetSpeed();
 	}
 	else if (tx->bHasCanvas)
 	{
-		if (tx->gl_info.shaderindex >= FIRST_USER_SHADER)
-		{
-			mShaderIndex = tx->gl_info.shaderindex;
-		}
-		// no brightmap for cameratexture
+		expanded = false;
 	}
 	else
 	{
 		if (tx->gl_info.shaderindex >= FIRST_USER_SHADER)
 		{
 			mShaderIndex = tx->gl_info.shaderindex;
+			expanded = false;
 		}
 		else
 		{
-			if (tx->gl_info.Normal && tx->gl_info.Specular)
-			{
-				for (auto &texture : { tx->gl_info.Normal, tx->gl_info.Specular })
-				{
-					ValidateSysTexture(texture, expanded);
-					mTextureLayers.Push({ texture, false });
-				}
-				mShaderIndex = SHADER_Specular;
-			}
-			else if (tx->gl_info.Normal && tx->gl_info.Metallic && tx->gl_info.Roughness && tx->gl_info.AmbientOcclusion)
-			{
-				for (auto &texture : { tx->gl_info.Normal, tx->gl_info.Metallic, tx->gl_info.Roughness, tx->gl_info.AmbientOcclusion })
-				{
-					ValidateSysTexture(texture, expanded);
-					mTextureLayers.Push({ texture, false });
-				}
-				mShaderIndex = SHADER_PBR;
-			}
-
 			tx->CreateDefaultBrightmap();
 			if (tx->gl_info.Brightmap != NULL)
 			{
 				ValidateSysTexture(tx->gl_info.Brightmap, expanded);
 				FTextureLayer layer = {tx->gl_info.Brightmap, false};
 				mTextureLayers.Push(layer);
-				if (mShaderIndex == SHADER_Specular)
-					mShaderIndex = SHADER_SpecularBrightmap;
-				else if (mShaderIndex == SHADER_PBR)
-					mShaderIndex = SHADER_PBRBrightmap;
-				else
-					mShaderIndex = SHADER_Brightmap;
+				mShaderIndex = 3;
 			}
 		}
 	}
-	mBaseLayer = ValidateSysTexture(tx, expanded);
+	assert(tx->gl_info.Material[expanded] == NULL);
+	mBaseLayer = ValidateSysTexture(tx, true);
 
 
 	mWidth = tx->GetWidth();
@@ -515,57 +452,39 @@ FMaterial::FMaterial(FTexture * tx, bool expanded)
 	mSpriteU[0] = mSpriteV[0] = 0.f;
 	mSpriteU[1] = mSpriteV[1] = 1.f;
 
-	FTexture *basetex = (tx->bWarped && gl.legacyMode)? tx : tx->GetRedirect(false);
-	// allow the redirect only if the texture is not expanded or the scale matches.
-	if (!expanded || (tx->Scale.X == basetex->Scale.X && tx->Scale.Y == basetex->Scale.Y))
-	{
-		mBaseLayer = ValidateSysTexture(basetex, expanded);
-	}
-
-	float fxScale = tx->Scale.X;
-	float fyScale = tx->Scale.Y;
+	FTexture *basetex = tx->GetRedirect(false);
+	mBaseLayer = ValidateSysTexture(basetex, expanded);
 
 	// mSpriteRect is for positioning the sprite in the scene.
-	mSpriteRect.left = -mLeftOffset / fxScale;
-	mSpriteRect.top = -mTopOffset / fyScale;
-	mSpriteRect.width = mWidth / fxScale;
-	mSpriteRect.height = mHeight / fyScale;
+	mSpriteRect.left = -mLeftOffset / FIXED2FLOAT(tx->xScale);
+	mSpriteRect.top = -mTopOffset / FIXED2FLOAT(tx->yScale);
+	mSpriteRect.width = mWidth / FIXED2FLOAT(tx->xScale);
+	mSpriteRect.height = mHeight / FIXED2FLOAT(tx->yScale);
 
 	if (expanded)
 	{
 		// a little adjustment to make sprites look better with texture filtering:
 		// create a 1 pixel wide empty frame around them.
-		int trim[4];
-		bool trimmed = TrimBorders(trim);	// get the trim size before adding the empty frame
-
-		int oldwidth = mWidth;
-		int oldheight = mHeight;
-
 		mWidth+=2;
 		mHeight+=2;
 		mLeftOffset+=1;
 		mTopOffset+=1;
-		mRenderWidth = mRenderWidth * mWidth / oldwidth;
-		mRenderHeight = mRenderHeight * mHeight / oldheight;
+		mRenderWidth = mRenderWidth * mWidth / (mWidth-2);
+		mRenderHeight = mRenderHeight * mHeight / (mHeight-2);
 
-		// Reposition the sprite with the frame considered
-		mSpriteRect.left = -mLeftOffset / fxScale;
-		mSpriteRect.top = -mTopOffset / fyScale;
-		mSpriteRect.width = mWidth / fxScale;
-		mSpriteRect.height = mHeight / fyScale;
+		int trim[4];
 
-		if (trimmed)
+		if (TrimBorders(trim))
 		{
-			mSpriteRect.left += trim[0] / fxScale;
-			mSpriteRect.top += trim[1] / fyScale;
-
-			mSpriteRect.width -= (oldwidth - trim[2]) / fxScale;
-			mSpriteRect.height -= (oldheight - trim[3]) / fyScale;
+			mSpriteRect.left = -(mLeftOffset - trim[0]) / FIXED2FLOAT(tx->xScale);
+			mSpriteRect.top = -(mTopOffset - trim[1]) / FIXED2FLOAT(tx->yScale);
+			mSpriteRect.width = (trim[2] + 2) / FIXED2FLOAT(tx->xScale);
+			mSpriteRect.height = (trim[3] + 2) / FIXED2FLOAT(tx->yScale);
 
 			mSpriteU[0] = trim[0] / (float)mWidth;
 			mSpriteV[0] = trim[1] / (float)mHeight;
-			mSpriteU[1] -= (oldwidth - trim[0] - trim[2]) / (float)mWidth; 
-			mSpriteV[1] -= (oldheight - trim[1] - trim[3]) / (float)mHeight; 
+			mSpriteU[1] *= (trim[0]+trim[2]+2) / (float)mWidth; 
+			mSpriteV[1] *= (trim[1]+trim[3]+2) / (float)mHeight; 
 		}
 	}
 
@@ -610,7 +529,7 @@ bool FMaterial::TrimBorders(int *rect)
 	int w;
 	int h;
 
-	unsigned char *buffer = CreateTexBuffer(0, w, h, false, false);
+	unsigned char *buffer = CreateTexBuffer(0, w, h);
 
 	if (buffer == NULL) 
 	{
@@ -624,16 +543,7 @@ bool FMaterial::TrimBorders(int *rect)
 	}
 
 	int size = w*h;
-	if (size == 1)
-	{
-		// nothing to be done here.
-		rect[0] = 0;
-		rect[1] = 0;
-		rect[2] = 1;
-		rect[3] = 1;
-		delete[] buffer;
-		return true;
-	}
+
 	int first, last;
 
 	for(first = 0; first < size; first++)
@@ -642,7 +552,6 @@ bool FMaterial::TrimBorders(int *rect)
 	}
 	if (first >= size)
 	{
-		// completely empty
 		rect[0] = 0;
 		rect[1] = 0;
 		rect[2] = 1;
@@ -703,12 +612,6 @@ static FMaterial *last;
 static int lastclamp;
 static int lasttrans;
 
-void FMaterial::InitGlobalState()
-{
-	last = nullptr;
-	lastclamp = 0;
-	lasttrans = 0;
-}
 
 void FMaterial::Bind(int clampmode, int translation)
 {
@@ -720,7 +623,7 @@ void FMaterial::Bind(int clampmode, int translation)
 
 	int usebright = false;
 	int maxbound = 0;
-	bool allowhires = tex->Scale.X == 1 && tex->Scale.Y == 1 && clampmode <= CLAMP_XY && !mExpanded;
+	bool allowhires = tex->xScale == FRACUNIT && tex->yScale == FRACUNIT && clampmode <= CLAMP_XY && !mExpanded;
 
 	if (tex->bHasCanvas) clampmode = CLAMP_CAMTEX;
 	else if (tex->bWarped && clampmode <= CLAMP_XY) clampmode = CLAMP_NONE;
@@ -766,55 +669,44 @@ void FMaterial::Precache()
 
 //===========================================================================
 //
-//
-//
-//===========================================================================
-void FMaterial::PrecacheList(SpriteHits &translations)
-{
-	if (mBaseLayer != nullptr) mBaseLayer->CleanUnused(translations);
-	SpriteHits::Iterator it(translations);
-	SpriteHits::Pair *pair;
-	while(it.NextPair(pair)) Bind(0, pair->Key);
-}
-
-//===========================================================================
-//
 // Retrieve texture coordinate info for per-wall scaling
 //
 //===========================================================================
 
-void FMaterial::GetTexCoordInfo(FTexCoordInfo *tci, float x, float y) const
+void FMaterial::GetTexCoordInfo(FTexCoordInfo *tci, fixed_t x, fixed_t y) const
 {
-	if (x == 1.f)
+	if (x == FRACUNIT)
 	{
 		tci->mRenderWidth = mRenderWidth;
-		tci->mScale.X = tex->Scale.X;
-		tci->mTempScale.X = 1.f;
+		tci->mScaleX = tex->xScale;
+		tci->mTempScaleX = FRACUNIT;
 	}
 	else
 	{
-		float scale_x = x * tex->Scale.X;
-		tci->mRenderWidth = xs_CeilToInt(mWidth / scale_x);
-		tci->mScale.X = scale_x;
-		tci->mTempScale.X = x;
+		fixed_t scale_x = FixedMul(x, tex->xScale);
+		int foo = (mWidth << 17) / scale_x; 
+		tci->mRenderWidth = (foo >> 1) + (foo & 1); 
+		tci->mScaleX = scale_x;
+		tci->mTempScaleX = x;
 	}
 
-	if (y == 1.f)
+	if (y == FRACUNIT)
 	{
 		tci->mRenderHeight = mRenderHeight;
-		tci->mScale.Y = tex->Scale.Y;
-		tci->mTempScale.Y = 1.f;
+		tci->mScaleY = tex->yScale;
+		tci->mTempScaleY = FRACUNIT;
 	}
 	else
 	{
-		float scale_y = y * tex->Scale.Y;
-		tci->mRenderHeight = xs_CeilToInt(mHeight / scale_y);
-		tci->mScale.Y = scale_y;
-		tci->mTempScale.Y = y;
+		fixed_t scale_y = FixedMul(y, tex->yScale);
+		int foo = (mHeight << 17) / scale_y; 
+		tci->mRenderHeight = (foo >> 1) + (foo & 1); 
+		tci->mScaleY = scale_y;
+		tci->mTempScaleY = y;
 	}
 	if (tex->bHasCanvas) 
 	{
-		tci->mScale.Y = -tci->mScale.Y;
+		tci->mScaleY = -tci->mScaleY;
 		tci->mRenderHeight = -tci->mRenderHeight;
 	}
 	tci->mWorldPanning = tex->bWorldPanning;
@@ -829,7 +721,7 @@ void FMaterial::GetTexCoordInfo(FTexCoordInfo *tci, float x, float y) const
 
 int FMaterial::GetAreas(FloatRect **pAreas) const
 {
-	if (mShaderIndex == SHADER_Default)	// texture splitting can only be done if there's no attached effects
+	if (mShaderIndex == 0)	// texture splitting can only be done if there's no attached effects
 	{
 		FTexture *tex = mBaseLayer->tex;
 		*pAreas = tex->gl_info.areas;
@@ -868,31 +760,11 @@ void FMaterial::BindToFrameBuffer()
 
 FMaterial * FMaterial::ValidateTexture(FTexture * tex, bool expand)
 {
-again:
 	if (tex	&& tex->UseType!=FTexture::TEX_Null)
 	{
-		if (tex->gl_info.bNoExpand) expand = false;
-
 		FMaterial *gltex = tex->gl_info.Material[expand];
 		if (gltex == NULL) 
 		{
-			if (expand)
-			{
-				if (tex->bWarped || tex->bHasCanvas || tex->gl_info.shaderindex >= FIRST_USER_SHADER)
-				{
-					tex->gl_info.bNoExpand = true;
-					goto again;
-				}
-				if (tex->gl_info.Brightmap != NULL &&
-					(tex->GetWidth() != tex->gl_info.Brightmap->GetWidth() ||
-					tex->GetHeight() != tex->gl_info.Brightmap->GetHeight())
-					)
-				{
-					// do not expand if the brightmap's size differs.
-					tex->gl_info.bNoExpand = true;
-					goto again;
-				}
-			}
 			gltex = new FMaterial(tex, expand);
 		}
 		return gltex;

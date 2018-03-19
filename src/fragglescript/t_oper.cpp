@@ -28,6 +28,19 @@
 //
 //---------------------------------------------------------------------------
 //
+// FraggleScript is from SMMU which is under the GPL. Technically, 
+// therefore, combining the FraggleScript code with the non-free 
+// ZDoom code is a violation of the GPL.
+//
+// As this may be a problem for you, I hereby grant an exception to my 
+// copyright on the SMMU source (including FraggleScript). You may use 
+// any code from SMMU in (G)ZDoom, provided that:
+//
+//    * For any binary release of the port, the source code is also made 
+//      available.
+//    * The copyright notice is kept on any file containing my code.
+//
+//
 
 /* includes ************************/
 #include "t_script.h"
@@ -347,7 +360,8 @@ void FParser::OPmultiply(svalue_t &result,int start, int n, int stop)
 	// haleyjd: 8-17
 	if(left.type == svt_fixed || right.type == svt_fixed)
 	{
-		result.setDouble(floatvalue(left) * floatvalue(right));
+		result.type = svt_fixed;
+		result.value.f = FixedMul(fixedvalue(left), fixedvalue(right));
 	}
 	else
 	{
@@ -371,20 +385,21 @@ void FParser::OPdivide(svalue_t &result, int start, int n, int stop)
 	// haleyjd: 8-17
 	if(left.type == svt_fixed || right.type == svt_fixed)
 	{
-		auto fr = floatvalue(right);
+		fixed_t fr;
 		
-		if(fr == 0)
+		if((fr = fixedvalue(right)) == 0)
 			script_error("divide by zero\n");
 		else
 		{
-			result.setDouble(floatvalue(left) / fr);
+			result.type = svt_fixed;
+			result.value.f = FixedDiv(fixedvalue(left), fr);
 		}
 	}
 	else
 	{
-		auto ir = intvalue(right);
+		int ir;
 		
-		if(!ir)
+		if(!(ir = intvalue(right)))
 			script_error("divide by zero\n");
 		else
 		{
@@ -494,7 +509,8 @@ void FParser::OPincrement(svalue_t &result, int start, int n, int stop)
 		}
 		else
 		{
-			result.setDouble(floatvalue(result)+1);
+			result.value.f = fixedvalue(result) + FRACUNIT;
+			result.type = svt_fixed;
 			var->SetValue (result);
 		}
     }
@@ -519,7 +535,8 @@ void FParser::OPincrement(svalue_t &result, int start, int n, int stop)
 		}
 		else
 		{
-			newvalue.setDouble(floatvalue(result)+1);
+			newvalue.type = svt_fixed;
+			newvalue.value.f = fixedvalue(result) + FRACUNIT;
 			var->SetValue (newvalue);
 		}
     }
@@ -557,7 +574,7 @@ void FParser::OPdecrement(svalue_t &result, int start, int n, int stop)
 		}
 		else
 		{
-			result.setDouble(floatvalue(result)-1);
+			result.value.f = fixedvalue(result) - FRACUNIT;
 			result.type = svt_fixed;
 			var->SetValue (result);
 		}
@@ -583,7 +600,8 @@ void FParser::OPdecrement(svalue_t &result, int start, int n, int stop)
 		}
 		else
 		{
-			newvalue.setDouble(floatvalue(result)-1);
+			newvalue.type = svt_fixed;
+			newvalue.value.f = fixedvalue(result) - FRACUNIT;
 			var->SetValue (newvalue);
 		}
     }

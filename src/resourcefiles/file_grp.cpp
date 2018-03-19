@@ -46,8 +46,8 @@
 
 struct GrpInfo
 {
-	uint32_t		Magic[3];
-	uint32_t		NumLumps;
+	DWORD		Magic[3];
+	DWORD		NumLumps;
 };
 
 struct GrpLump
@@ -57,7 +57,7 @@ struct GrpLump
 		struct
 		{
 			char		Name[12];
-			uint32_t		Size;
+			DWORD		Size;
 		};
 		char NameWithZero[13];
 	};
@@ -73,7 +73,7 @@ struct GrpLump
 class FGrpFile : public FUncompressedFile
 {
 public:
-	FGrpFile(const char * filename, FileReader &file);
+	FGrpFile(const char * filename, FileReader *file);
 	bool Open(bool quiet);
 };
 
@@ -84,7 +84,7 @@ public:
 //
 //==========================================================================
 
-FGrpFile::FGrpFile(const char *filename, FileReader &file)
+FGrpFile::FGrpFile(const char *filename, FileReader *file)
 : FUncompressedFile(filename, file)
 {
 	Lumps = NULL;
@@ -100,17 +100,17 @@ bool FGrpFile::Open(bool quiet)
 {
 	GrpInfo header;
 
-	Reader.Read(&header, sizeof(header));
+	Reader->Read(&header, sizeof(header));
 	NumLumps = LittleLong(header.NumLumps);
 	
 	GrpLump *fileinfo = new GrpLump[NumLumps];
-	Reader.Read (fileinfo, NumLumps * sizeof(GrpLump));
+	Reader->Read (fileinfo, NumLumps * sizeof(GrpLump));
 
 	Lumps = new FUncompressedLump[NumLumps];
 
 	int Position = sizeof(GrpInfo) + NumLumps * sizeof(GrpLump);
 
-	for(uint32_t i = 0; i < NumLumps; i++)
+	for(DWORD i = 0; i < NumLumps; i++)
 	{
 		Lumps[i].Owner = this;
 		Lumps[i].Position = Position;
@@ -121,7 +121,7 @@ bool FGrpFile::Open(bool quiet)
 		fileinfo[i].NameWithZero[12] = '\0';	// Be sure filename is null-terminated
 		Lumps[i].LumpNameSetup(fileinfo[i].NameWithZero);
 	}
-	if (!quiet && !batchrun) Printf(", %d lumps\n", NumLumps);
+	if (!quiet) Printf(", %d lumps\n", NumLumps);
 
 	delete[] fileinfo;
 	return true;
@@ -134,21 +134,21 @@ bool FGrpFile::Open(bool quiet)
 //
 //==========================================================================
 
-FResourceFile *CheckGRP(const char *filename, FileReader &file, bool quiet)
+FResourceFile *CheckGRP(const char *filename, FileReader *file, bool quiet)
 {
 	char head[12];
 
-	if (file.GetLength() >= 12)
+	if (file->GetLength() >= 12)
 	{
-		file.Seek(0, FileReader::SeekSet);
-		file.Read(&head, 12);
-		file.Seek(0, FileReader::SeekSet);
+		file->Seek(0, SEEK_SET);
+		file->Read(&head, 12);
+		file->Seek(0, SEEK_SET);
 		if (!memcmp(head, "KenSilverman", 12))
 		{
 			FResourceFile *rf = new FGrpFile(filename, file);
 			if (rf->Open(quiet)) return rf;
 
-			file = std::move(rf->Reader); // to avoid destruction of reader
+			rf->Reader = NULL; // to avoid destruction of reader
 			delete rf;
 		}
 	}

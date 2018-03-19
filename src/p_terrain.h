@@ -37,26 +37,24 @@
 #include "s_sound.h"
 #include "textures/textures.h"
 
-class PClass;
+struct PClass;
 
-extern uint16_t DefaultTerrainType;
+extern WORD DefaultTerrainType;
 
 
 class FTerrainTypeArray
 {
 public:
-	TArray<uint16_t> Types;
+	TArray<WORD> Types;
 
-	uint16_t operator [](FTextureID tex) const
+	WORD operator [](FTextureID tex) const
 	{
-		if ((unsigned)tex.GetIndex() >= Types.Size()) return DefaultTerrainType;
-		uint16_t type = Types[tex.GetIndex()];
+		WORD type = Types[tex.GetIndex()];
 		return type == 0xffff? DefaultTerrainType : type;
 	}
-	uint16_t operator [](int texnum) const
+	WORD operator [](int texnum) const
 	{
-		if ((unsigned)texnum >= Types.Size()) return DefaultTerrainType;
-		uint16_t type = Types[texnum];
+		WORD type = Types[texnum];
 		return type == 0xffff? DefaultTerrainType : type;
 	}
 	void Resize(unsigned newsize)
@@ -65,16 +63,10 @@ public:
 	}
 	void Clear()
 	{
-		memset (&Types[0], 0xff, Types.Size()*sizeof(uint16_t));
+		memset (&Types[0], 0xff, Types.Size()*sizeof(WORD));
 	}
 	void Set(int index, int value)
 	{
-		if ((unsigned)index >= Types.Size())
-		{
-			int oldsize = Types.Size();
-			Resize(index + 1);
-			memset(&Types[oldsize], 0xff, (index + 1 - oldsize)*sizeof(uint16_t));
-		}
 		Types[index] = value;
 	}
 };
@@ -89,15 +81,15 @@ struct FSplashDef
 	FName Name;
 	FSoundID SmallSplashSound;
 	FSoundID NormalSplashSound;
-	PClassActor *SmallSplash;
-	PClassActor *SplashBase;
-	PClassActor *SplashChunk;
-	uint8_t ChunkXVelShift;
-	uint8_t ChunkYVelShift;
-	uint8_t ChunkZVelShift;
+	const PClass *SmallSplash;
+	const PClass *SplashBase;
+	const PClass *SplashChunk;
+	BYTE ChunkXVelShift;
+	BYTE ChunkYVelShift;
+	BYTE ChunkZVelShift;
+	fixed_t ChunkBaseZVel;
+	fixed_t SmallSplashClip;
 	bool NoAlert;
-	double ChunkBaseZVel;
-	double SmallSplashClip;
 };
 
 struct FTerrainDef
@@ -107,7 +99,7 @@ struct FTerrainDef
 	int DamageAmount;
 	FName DamageMOD;
 	int DamageTimeMask;
-	double FootClip;
+	fixed_t FootClip;
 	float StepVolume;
 	int WalkStepTics;
 	int RunStepTics;
@@ -115,14 +107,11 @@ struct FTerrainDef
 	FSoundID RightStepSound;
 	bool IsLiquid;
 	bool AllowProtection;
-	double Friction;
-	double MoveFactor;
+	fixed_t Friction;
+	fixed_t MoveFactor;
 };
 
 extern TArray<FSplashDef> Splashes;
 extern TArray<FTerrainDef> Terrains;
-
-int P_FindTerrain(FName name);
-FName P_GetTerrainName(int terrainnum);
 
 #endif //__P_TERRAIN_H__

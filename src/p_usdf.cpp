@@ -41,7 +41,6 @@
 #include "doomerrors.h"
 #include "cmdlib.h"
 #include "actor.h"
-#include "a_pickups.h"
 #include "w_wad.h"
 
 #define Zd 1
@@ -51,43 +50,41 @@ class USDFParser : public UDMFParserBase
 {
 	//===========================================================================
 	//
-	// Checks an actor type (different representation depending on namespace)
+	// Checks an actor type (different representation depending on manespace)
 	//
 	//===========================================================================
 
-	PClassActor *CheckActorType(const char *key)
+	const PClass *CheckActorType(const char *key)
 	{
-		PClassActor *type = nullptr;
 		if (namespace_bits == St)
 		{
-			type = GetStrifeType(CheckInt(key));
+			return GetStrifeType(CheckInt(key));
 		}
 		else if (namespace_bits == Zd)
 		{
-			PClassActor *cls = PClass::FindActor(CheckString(key));
-			if (cls == nullptr)
+			const PClass *cls = PClass::FindClass(CheckString(key));
+			if (cls == NULL)
 			{
 				sc.ScriptMessage("Unknown actor class '%s'", key);
-				return nullptr;
+				return NULL;
 			}
-			type = cls;
+			if (!cls->IsDescendantOf(RUNTIME_CLASS(AActor)))
+			{
+				sc.ScriptMessage("'%s' is not an actor type", key);
+				return NULL;
+			}
+			return cls;
 		}
-		return type;
-	}
-
-	PClassActor *CheckInventoryActorType(const char *key)
-	{
-		PClassActor* const type = CheckActorType(key);
-		return nullptr != type && type->IsDescendantOf(RUNTIME_CLASS(AInventory)) ? type : nullptr;
+		return NULL;
 	}
 
 	//===========================================================================
 	//
-	// Parse a cost/require/exclude block
+	// Parse a cost block
 	//
 	//===========================================================================
 
-	bool ParseCostRequireExclude(FStrifeDialogueReply *response, FName type)
+	bool ParseCost(FStrifeDialogueReply *response)
 	{
 		FStrifeDialogueItemCheck check;
 		check.Item = NULL;
@@ -99,7 +96,7 @@ class USDFParser : public UDMFParserBase
 			switch(key)
 			{
 			case NAME_Item:
-				check.Item = CheckInventoryActorType(key);
+				check.Item = CheckActorType(key);
 				break;
 
 			case NAME_Amount:
@@ -108,12 +105,7 @@ class USDFParser : public UDMFParserBase
 			}
 		}
 
-		switch (type)
-		{
-		case NAME_Cost:		response->ItemCheck.Push(check);	break;
-		case NAME_Require:	response->ItemCheckRequire.Push(check); break;
-		case NAME_Exclude:	response->ItemCheckExclude.Push(check); break;
-		}
+		response->ItemCheck.Push(check);
 		return true;
 	}
 
@@ -126,6 +118,7 @@ class USDFParser : public UDMFParserBase
 	bool ParseChoice(FStrifeDialogueReply **&replyptr)
 	{
 		FStrifeDialogueReply *reply = new FStrifeDialogueReply;
+		memset(reply, 0, sizeof(*reply));
 
 		reply->Next = *replyptr;
 		*replyptr = reply;
@@ -142,6 +135,7 @@ class USDFParser : public UDMFParserBase
 		while (!sc.CheckToken('}'))
 		{
 			bool block = false;
+			int costs = 0;
 			FName key = ParseKey(true, &block);
 			if (!block)
 			{
@@ -197,13 +191,8 @@ class USDFParser : public UDMFParserBase
 
 				case NAME_Special:
 					reply->ActionSpecial = CheckInt(key);
-					if (reply->ActionSpecial < 0)
+					if (reply->ActionSpecial < 0 || reply->ActionSpecial > 255)
 						reply->ActionSpecial = 0;
-					break;
-
-				case NAME_SpecialName:
-					if (namespace_bits == Zd)
-						reply->ActionSpecial = P_FindLineSpecial(CheckString(key));
 					break;
 
 				case NAME_Arg0:
@@ -222,15 +211,8 @@ class USDFParser : public UDMFParserBase
 				switch(key)
 				{
 				case NAME_Cost:
-				case NAME_Require:
-				case NAME_Exclude:
-					// Require and Exclude are exclusive to namespace ZDoom. [FishyClockwork]
-					if (key == NAME_Cost || namespace_bits == Zd)
-					{
-						ParseCostRequireExclude(reply, key);
-						break;
-					}
-					// Intentional fall-through
+					ParseCost(reply);
+					break;
 
 				default:
 					sc.UnGet();
@@ -241,21 +223,20 @@ class USDFParser : public UDMFParserBase
 		// Todo: Finalize
 		if (reply->ItemCheck.Size() > 0)
 		{
-			reply->PrintAmount = reply->ItemCheck[0].Amount;
-			if (reply->PrintAmount <= 0) reply->NeedsGold = false;
+			if (reply->ItemCheck[0].Amount <= 0) reply->NeedsGold = false;
 		}
 
-		reply->Reply = ReplyString;
-		reply->QuickYes = QuickYes;
+		reply->Reply = ncopystring(ReplyString);
+		reply->QuickYes = ncopystring(QuickYes);
 		if (reply->ItemCheck.Size() > 0 && reply->ItemCheck[0].Item != NULL)
 		{
-			reply->QuickNo = QuickNo;
+			reply->QuickNo = ncopystring(QuickNo);
 		}
 		else
 		{
-			reply->QuickNo = "";
+			reply->QuickNo = NULL;
 		}
-		reply->LogString = LogString;
+		reply->LogString = ncopystring(LogString);
 		if(!closeDialog) reply->NextNode *= -1;
 		return true;
 	}
@@ -278,7 +259,7 @@ class USDFParser : public UDMFParserBase
 			switch(key)
 			{
 			case NAME_Item:
-				check.Item = CheckInventoryActorType(key);
+				check.Item = CheckActorType(key);
 				break;
 
 			case NAME_Count:
@@ -302,13 +283,14 @@ class USDFParser : public UDMFParserBase
 	{
 		FStrifeDialogueNode *node = new FStrifeDialogueNode;
 		FStrifeDialogueReply **replyptr = &node->Children;
+		memset(node, 0, sizeof(*node));
+		//node->ItemCheckCount[0] = node->ItemCheckCount[1] = node->ItemCheckCount[2] = -1;
 
 		node->ThisNodeNum = StrifeDialogues.Push(node);
 		node->ItemCheckNode = -1;
 
 		FString SpeakerName;
 		FString Dialogue;
-		FString Goodbye;
 
 		while (!sc.CheckToken('}'))
 		{
@@ -323,14 +305,7 @@ class USDFParser : public UDMFParserBase
 					break;
 
 				case NAME_Panel:
-					node->Backdrop = CheckString(key);
-					break;
-
-				case NAME_Userstring:
-					if (namespace_bits == Zd)
-					{
-						node->UserData = CheckString(key);
-					}
+					node->Backdrop = TexMan.CheckForTexture (CheckString(key), FTexture::TEX_MiscPatch);
 					break;
 
 				case NAME_Voice:
@@ -361,13 +336,7 @@ class USDFParser : public UDMFParserBase
 					node->ItemCheckNode = CheckInt(key);
 					break;
 
-				case NAME_Goodbye:
-					// Custom goodbyes are exclusive to namespace ZDoom. [FishyClockwork]
-					if (namespace_bits == Zd)
-					{
-						Goodbye = CheckString(key);
-					}
-					break;
+
 				}
 			}
 			else
@@ -388,9 +357,8 @@ class USDFParser : public UDMFParserBase
 				}
 			}
 		}
-		node->SpeakerName = SpeakerName;
-		node->Dialogue = Dialogue;
-		node->Goodbye = Goodbye;
+		node->SpeakerName = ncopystring(SpeakerName);
+		node->Dialogue = ncopystring(Dialogue);
 		return true;
 	}
 
@@ -403,9 +371,8 @@ class USDFParser : public UDMFParserBase
 
 	bool ParseConversation()
 	{
-		PClassActor *type = NULL;
+		const PClass *type = NULL;
 		int dlgid = -1;
-		FName clsid;
 		unsigned int startpos = StrifeDialogues.Size();
 
 		while (!sc.CheckToken('}'))
@@ -428,13 +395,6 @@ class USDFParser : public UDMFParserBase
 					if (namespace_bits == Zd)
 					{
 						dlgid = CheckInt(key);
-					}
-					break;
-
-				case NAME_Class:
-					if (namespace_bits == Zd)
-					{
-						clsid = CheckString(key);
 					}
 					break;
 				}
@@ -462,7 +422,6 @@ class USDFParser : public UDMFParserBase
 		for(;startpos < StrifeDialogues.Size(); startpos++)
 		{
 			StrifeDialogues[startpos]->SpeakerType = type;
-			StrifeDialogues[startpos]->MenuClassName = clsid;
 		}
 		return true;
 	}
@@ -474,10 +433,10 @@ class USDFParser : public UDMFParserBase
 	//===========================================================================
 
 public:
-	bool Parse(int lumpnum, FileReader &lump, int lumplen)
+	bool Parse(int lumpnum, FileReader *lump, int lumplen)
 	{
 		char *buffer = new char[lumplen];
-		lump.Read(buffer, lumplen);
+		lump->Read(buffer, lumplen);
 		sc.OpenMem(Wads.GetLumpFullName(lumpnum), buffer, lumplen);
 		delete [] buffer;
 		sc.SetCMode(true);
@@ -532,7 +491,7 @@ public:
 
 
 
-bool P_ParseUSDF(int lumpnum, FileReader &lump, int lumplen)
+bool P_ParseUSDF(int lumpnum, FileReader *lump, int lumplen)
 {
 	USDFParser parse;
 

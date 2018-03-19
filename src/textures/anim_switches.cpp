@@ -43,9 +43,10 @@
 #include "cmdlib.h"
 #include "sc_man.h"
 #include "gi.h"
+#include "farchive.h"
 
 
-static int SortSwitchDefs (const void *a, const void *b)
+static int STACK_ARGS SortSwitchDefs (const void *a, const void *b)
 {
 	return (*(FSwitchDef **)a)->PreTexture - (*(FSwitchDef **)b)->PreTexture;
 }
@@ -395,5 +396,26 @@ FSwitchDef *FTextureManager::FindSwitch (FTextureID texture)
 		} while (low <= high);
 	}
 	return NULL;
+}
+
+//==========================================================================
+//
+// operator<<
+//
+//==========================================================================
+
+template<> FArchive &operator<< (FArchive &arc, FSwitchDef* &Switch)
+{
+	if (arc.IsStoring())
+	{
+		arc << Switch->PreTexture;
+	}
+	else
+	{
+		FTextureID tex;
+		arc << tex;
+		Switch = TexMan.FindSwitch(tex);
+	}
+	return arc;
 }
 

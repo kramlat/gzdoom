@@ -46,12 +46,11 @@
 //
 //===========================================================================
 template<class TSrc, class TDest, class TBlend>
-void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyInfo *inf,
-	uint8_t tr, uint8_t tg, uint8_t tb)
+void iCopyColors(BYTE *pout, const BYTE *pin, int count, int step, FCopyInfo *inf)
 {
 	int i;
 	int fac;
-	uint8_t r,g,b;
+	BYTE r,g,b;
 	int gray;
 	int a;
 
@@ -60,7 +59,7 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 	case BLEND_NONE:
 		for(i=0;i<count;i++)
 		{
-			a = TSrc::A(pin, tr, tg, tb);
+			a = TSrc::A(pin);
 			if (TBlend::ProcessAlpha0() || a)
 			{
 				TBlend::OpC(pout[TDest::RED], TSrc::R(pin), a, inf);
@@ -78,7 +77,7 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 		// Since this is done in True Color the purplish tint is fully preserved - even in Doom!
 		for(i=0;i<count;i++)
 		{
-			a = TSrc::A(pin, tr, tg, tb);
+			a = TSrc::A(pin);
 			if (TBlend::ProcessAlpha0() || a)
 			{
 				int gray = TSrc::Gray(pin)>>4;
@@ -100,7 +99,7 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 			FSpecialColormap *cm = &SpecialColormaps[inf->blend - BLEND_SPECIALCOLORMAP1];
 			for(i=0;i<count;i++)
 			{
-				a = TSrc::A(pin, tr, tg, tb);
+				a = TSrc::A(pin);
 				if (TBlend::ProcessAlpha0() || a)
 				{
 					gray = clamp<int>(TSrc::Gray(pin),0,255);
@@ -121,7 +120,7 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 			fac=inf->blend-BLEND_DESATURATE1+1;
 			for(i=0;i<count;i++)
 			{
-			a = TSrc::A(pin, tr, tg, tb);
+			a = TSrc::A(pin);
 			if (TBlend::ProcessAlpha0() || a)
 				{
 					gray = TSrc::Gray(pin);
@@ -143,12 +142,12 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 	case BLEND_MODULATE:
 		for(i=0;i<count;i++)
 		{
-			a = TSrc::A(pin, tr, tg, tb);
+			a = TSrc::A(pin);
 			if (TBlend::ProcessAlpha0() || a)
 			{
-				r = (TSrc::R(pin)*inf->blendcolor[0])>>BLENDBITS;
-				g = (TSrc::G(pin)*inf->blendcolor[1])>>BLENDBITS;
-				b = (TSrc::B(pin)*inf->blendcolor[2])>>BLENDBITS;
+				r = (TSrc::R(pin)*inf->blendcolor[0])>>FRACBITS;
+				g = (TSrc::G(pin)*inf->blendcolor[1])>>FRACBITS;
+				b = (TSrc::B(pin)*inf->blendcolor[2])>>FRACBITS;
 
 				TBlend::OpC(pout[TDest::RED],   r, a, inf);
 				TBlend::OpC(pout[TDest::GREEN], g, a, inf);
@@ -164,12 +163,12 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 		for(i=0;i<count;i++)
 		{
 			// color blend
-			a = TSrc::A(pin, tr, tg, tb);
+			a = TSrc::A(pin);
 			if (TBlend::ProcessAlpha0() || a)
 			{
-				r = (TSrc::R(pin)*inf->blendcolor[3] + inf->blendcolor[0]) >> BLENDBITS;
-				g = (TSrc::G(pin)*inf->blendcolor[3] + inf->blendcolor[1]) >> BLENDBITS;
-				b = (TSrc::B(pin)*inf->blendcolor[3] + inf->blendcolor[2]) >> BLENDBITS;
+				r = (TSrc::R(pin)*inf->blendcolor[3] + inf->blendcolor[0]) >> FRACBITS;
+				g = (TSrc::G(pin)*inf->blendcolor[3] + inf->blendcolor[1]) >> FRACBITS;
+				b = (TSrc::B(pin)*inf->blendcolor[3] + inf->blendcolor[2]) >> FRACBITS;
 
 				TBlend::OpC(pout[TDest::RED],   r, a, inf);
 				TBlend::OpC(pout[TDest::GREEN], g, a, inf);
@@ -184,23 +183,21 @@ void iCopyColors(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyIn
 	}
 }
 
-typedef void (*CopyFunc)(uint8_t *pout, const uint8_t *pin, int count, int step, FCopyInfo *inf, uint8_t r, uint8_t g, uint8_t b);
+typedef void (*CopyFunc)(BYTE *pout, const BYTE *pin, int count, int step, FCopyInfo *inf);
 
 #define COPY_FUNCS(op) \
 	{ \
 		iCopyColors<cRGB, cBGRA, op>, \
-		iCopyColors<cRGBT, cBGRA, op>, \
 		iCopyColors<cRGBA, cBGRA, op>, \
 		iCopyColors<cIA, cBGRA, op>, \
 		iCopyColors<cCMYK, cBGRA, op>, \
-		iCopyColors<cYCbCr, cBGRA, op>, \
 		iCopyColors<cBGR, cBGRA, op>, \
 		iCopyColors<cBGRA, cBGRA, op>, \
 		iCopyColors<cI16, cBGRA, op>, \
 		iCopyColors<cRGB555, cBGRA, op>, \
 		iCopyColors<cPalEntry, cBGRA, op> \
 	}
-static const CopyFunc copyfuncs[][11]={
+static const CopyFunc copyfuncs[][9]={
 	COPY_FUNCS(bCopy),
 	COPY_FUNCS(bBlend),
 	COPY_FUNCS(bAdd),
@@ -220,7 +217,7 @@ static const CopyFunc copyfuncs[][11]={
 //
 //===========================================================================
 bool ClipCopyPixelRect(const FClipRect *cr, int &originx, int &originy,
-						const uint8_t *&patch, int &srcwidth, int &srcheight, 
+						const BYTE *&patch, int &srcwidth, int &srcheight, 
 						int &pstep_x, int &pstep_y, int rotate)
 {
 	int pixxoffset;
@@ -372,24 +369,23 @@ bool FClipRect::Intersect(int ix, int iy, int iw, int ih)
 // True Color texture copy function
 //
 //===========================================================================
-void FBitmap::CopyPixelDataRGB(int originx, int originy, const uint8_t *patch, int srcwidth, 
-							   int srcheight, int step_x, int step_y, int rotate, int ct, FCopyInfo *inf,
-							   int r, int g, int b)
+void FBitmap::CopyPixelDataRGB(int originx, int originy, const BYTE *patch, int srcwidth, 
+							   int srcheight, int step_x, int step_y, int rotate, int ct, FCopyInfo *inf)
 {
 	if (ClipCopyPixelRect(&ClipRect, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
 	{
-		uint8_t *buffer = data + 4 * originx + Pitch * originy;
+		BYTE *buffer = data + 4 * originx + Pitch * originy;
 		int op = inf==NULL? OP_COPY : inf->op;
 		for (int y=0;y<srcheight;y++)
 		{
-			copyfuncs[op][ct](&buffer[y*Pitch], &patch[y*step_y], srcwidth, step_x, inf, r, g, b);
+			copyfuncs[op][ct](&buffer[y*Pitch], &patch[y*step_y], srcwidth, step_x, inf);
 		}
 	}
 }
 
 
 template<class TDest, class TBlend> 
-void iCopyPaletted(uint8_t *buffer, const uint8_t * patch, int srcwidth, int srcheight, int Pitch,
+void iCopyPaletted(BYTE *buffer, const BYTE * patch, int srcwidth, int srcheight, int Pitch,
 					int step_x, int step_y, int rotate, PalEntry * palette, FCopyInfo *inf)
 {
 	int x,y,pos;
@@ -413,7 +409,7 @@ void iCopyPaletted(uint8_t *buffer, const uint8_t * patch, int srcwidth, int src
 	}
 }
 
-typedef void (*CopyPalettedFunc)(uint8_t *buffer, const uint8_t * patch, int srcwidth, int srcheight, int Pitch,
+typedef void (*CopyPalettedFunc)(BYTE *buffer, const BYTE * patch, int srcwidth, int srcheight, int Pitch,
 					int step_x, int step_y, int rotate, PalEntry * palette, FCopyInfo *inf);
 
 
@@ -436,26 +432,19 @@ static const CopyPalettedFunc copypalettedfuncs[]=
 // Paletted to True Color texture copy function
 //
 //===========================================================================
-void FBitmap::CopyPixelData(int originx, int originy, const uint8_t * patch, int srcwidth, int srcheight, 
+void FBitmap::CopyPixelData(int originx, int originy, const BYTE * patch, int srcwidth, int srcheight, 
 										int step_x, int step_y, int rotate, PalEntry * palette, FCopyInfo *inf)
 {
 	if (ClipCopyPixelRect(&ClipRect, originx, originy, patch, srcwidth, srcheight, step_x, step_y, rotate))
 	{
-		uint8_t *buffer = data + 4*originx + Pitch*originy;
+		BYTE *buffer = data + 4*originx + Pitch*originy;
 		PalEntry penew[256];
 
 		memset(penew, 0, sizeof(penew));
-		if (inf)
+		if (inf && inf->blend)
 		{
-			if (inf->blend)
-			{
-				iCopyColors<cPalEntry, cBGRA, bCopy>((uint8_t*)penew, (const uint8_t*)palette, 256, 4, inf, 0, 0, 0);
-				palette = penew;
-			}
-			else if (inf->palette)
-			{
-				palette = inf->palette;
-			}
+			iCopyColors<cPalEntry, cBGRA, bCopy>((BYTE*)penew, (const BYTE*)palette, 256, 4, inf);
+			palette = penew;
 		}
 
 		copypalettedfuncs[inf==NULL? OP_COPY : inf->op](buffer, patch, srcwidth, srcheight, Pitch, 
@@ -470,7 +459,7 @@ void FBitmap::CopyPixelData(int originx, int originy, const uint8_t * patch, int
 //===========================================================================
 void FBitmap::Zero()
 {
-	uint8_t *buffer = data;
+	BYTE *buffer = data;
 	for (int y = ClipRect.y; y < ClipRect.height; ++y)
 	{
 		memset(buffer + ClipRect.x, 0, ClipRect.width*4);

@@ -1,37 +1,3 @@
-/*
-**
-**
-**---------------------------------------------------------------------------
-** Copyright 1999 Martin Colberg
-** Copyright 1999-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
 /********************************
 * B_Think.c                     *
 * Description:                  *
@@ -44,19 +10,27 @@
 #include "p_local.h"
 #include "b_bot.h"
 #include "g_game.h"
-#include "d_protocol.h"
+#include "d_ticcmd.h"
 #include "m_random.h"
 #include "i_system.h"
 #include "p_lnspec.h"
 #include "gi.h"
 #include "a_keys.h"
 #include "d_event.h"
-#include "p_enemy.h"
-#include "d_player.h"
-#include "p_spec.h"
-#include "p_checkposition.h"
-#include "actorinlines.h"
-#include "math/cmath.h"
+
+enum dirtype_t
+{
+    DI_EAST,
+    DI_NORTHEAST,
+    DI_NORTH,
+    DI_NORTHWEST,
+    DI_WEST,
+    DI_SOUTHWEST,
+    DI_SOUTH,
+    DI_SOUTHEAST,
+    DI_NODIR,
+    NUMDIRS
+};
 
 static FRandom pr_botopendoor ("BotOpenDoor");
 static FRandom pr_bottrywalk ("BotTryWalk");
@@ -65,78 +39,80 @@ static FRandom pr_botnewchasedir ("BotNewChaseDir");
 // borrow some tables from p_enemy.cpp
 extern dirtype_t opposite[9];
 extern dirtype_t diags[4];
+extern fixed_t xspeed[8];
+extern fixed_t yspeed[8];
 
-//Called while the bot moves after its dest mobj
+extern TArray<line_t *> spechit;
+
+//Called while the bot moves after its player->dest mobj
 //which can be a weapon/enemy/item whatever.
-void DBot::Roam (ticcmd_t *cmd)
+void FCajunMaster::Roam (AActor *actor, ticcmd_t *cmd)
 {
+	int delta;
 
-	if (Reachable(dest))
+	if (Reachable(actor, actor->player->dest))
 	{ // Straight towards it.
-		Angle = player->mo->AngleTo(dest);
+		actor->player->angle = R_PointToAngle2(actor->x, actor->y, actor->player->dest->x, actor->player->dest->y);
 	}
-	else if (player->mo->movedir < 8) // turn towards movement direction if not there yet
+	else if (actor->movedir < 8) // turn towards movement direction if not there yet
 	{
-		// no point doing this with floating point angles...
-		unsigned angle = Angle.BAMs() & (unsigned)(7 << 29);
-		int delta = angle - (player->mo->movedir << 29);
+		actor->player->angle &= (angle_t)(7<<29);
+		delta = actor->player->angle - (actor->movedir << 29);
 
 		if (delta > 0)
-			Angle -= 45;
+			actor->player->angle -= ANG45;
 		else if (delta < 0)
-			Angle += 45;
+			actor->player->angle += ANG45;
 	}
 
 	// chase towards destination.
-	if (--player->mo->movecount < 0 || !Move (cmd))
+	if (--actor->movecount < 0 || !Move (actor, cmd))
 	{
-		NewChaseDir (cmd);
+		NewChaseDir (actor, cmd);
 	}
 }
 
-bool DBot::Move (ticcmd_t *cmd)
+bool FCajunMaster::Move (AActor *actor, ticcmd_t *cmd)
 {
-	double tryx, tryy;
+	fixed_t tryx, tryy;
 	bool try_ok;
 	int good;
 
-	if (player->mo->movedir >= DI_NODIR)
-	{
-		player->mo->movedir = DI_NODIR;	// make sure it's valid.
+	if (actor->movedir == DI_NODIR)
 		return false;
-	}
 
-	tryx = player->mo->X() + 8*xspeed[player->mo->movedir];
-	tryy = player->mo->Y() + 8*yspeed[player->mo->movedir];
+	if ((unsigned)actor->movedir >= 8)
+		I_Error ("Weird bot movedir!");
 
-	try_ok = bglobal.CleanAhead (player->mo, tryx, tryy, cmd);
+	tryx = actor->x + 8*xspeed[actor->movedir];
+	tryy = actor->y + 8*yspeed[actor->movedir];
+
+	try_ok = CleanAhead (actor, tryx, tryy, cmd);
 
 	if (!try_ok) //Anything blocking that could be opened etc..
 	{
 		if (!spechit.Size ())
 			return false;
 
-		player->mo->movedir = DI_NODIR;
+		actor->movedir = DI_NODIR;
 
 		good = 0;
-		spechit_t spechit1;
 		line_t *ld;
 
-		while (spechit.Pop (spechit1))
+		while (spechit.Pop (ld))
 		{
-			ld = spechit1.line;
 			bool tryit = true;
 
-			if (ld->special == Door_LockedRaise && !P_CheckKeys (player->mo, ld->args[3], false))
+			if (ld->special == Door_LockedRaise && !P_CheckKeys (actor, ld->args[3], false))
 				tryit = false;
-			else if (ld->special == Generic_Door && !P_CheckKeys (player->mo, ld->args[4], false))
+			else if (ld->special == Generic_Door && !P_CheckKeys (actor, ld->args[4], false))
 				tryit = false;
 
 			if (tryit &&
-				(P_TestActivateLine (ld, player->mo, 0, SPAC_Use) ||
-				 P_TestActivateLine (ld, player->mo, 0, SPAC_Push)))
+				(P_TestActivateLine (ld, actor, 0, SPAC_Use) ||
+				 P_TestActivateLine (ld, actor, 0, SPAC_Push)))
 			{
-				good |= ld == player->mo->BlockingLine ? 1 : 2;
+				good |= ld == actor->BlockingLine ? 1 : 2;
 			}
 		}
 		if (good && ((pr_botopendoor() >= 203) ^ (good & 1)))
@@ -154,17 +130,20 @@ bool DBot::Move (ticcmd_t *cmd)
 	return true;
 }
 
-bool DBot::TryWalk (ticcmd_t *cmd)
+bool FCajunMaster::TryWalk (AActor *actor, ticcmd_t *cmd)
 {
-    if (!Move (cmd))
+    if (!Move (actor, cmd))
         return false;
 
-    player->mo->movecount = pr_bottrywalk() & 60;
+    actor->movecount = pr_bottrywalk() & 60;
     return true;
 }
 
-void DBot::NewChaseDir (ticcmd_t *cmd)
+void FCajunMaster::NewChaseDir (AActor *actor, ticcmd_t *cmd)
 {
+    fixed_t     deltax;
+    fixed_t     deltay;
+
     dirtype_t   d[3];
 
     int         tdir;
@@ -172,7 +151,7 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
 
     dirtype_t   turnaround;
 
-    if (!dest)
+    if (!actor->player->dest)
 	{
 #ifndef BOT_RELEASE_COMPILE
         Printf ("Bot tried move without destination\n");
@@ -180,21 +159,22 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
 		return;
 	}
 
-    olddir = (dirtype_t)player->mo->movedir;
+    olddir = (dirtype_t)actor->movedir;
     turnaround = opposite[olddir];
 
-	DVector2 delta = player->mo->Vec2To(dest);
+    deltax = actor->player->dest->x - actor->x;
+    deltay = actor->player->dest->y - actor->y;
 
-    if (delta.X > 10)
+    if (deltax > 10*FRACUNIT)
         d[1] = DI_EAST;
-    else if (delta.X < -10)
+    else if (deltax < -10*FRACUNIT)
         d[1] = DI_WEST;
     else
         d[1] = DI_NODIR;
 
-    if (delta.Y < -10)
+    if (deltay < -10*FRACUNIT)
         d[2] = DI_SOUTH;
-    else if (delta.Y > 10)
+    else if (deltay > 10*FRACUNIT)
         d[2] = DI_NORTH;
     else
         d[2] = DI_NODIR;
@@ -202,19 +182,19 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
     // try direct route
     if (d[1] != DI_NODIR && d[2] != DI_NODIR)
     {
-		player->mo->movedir = diags[((delta.Y < 0) << 1) + (delta.X > 0)];
-        if (player->mo->movedir != turnaround && TryWalk(cmd))
+        actor->movedir = diags[((deltay<0)<<1)+(deltax>0)];
+        if (actor->movedir != turnaround && TryWalk(actor, cmd))
             return;
     }
 
     // try other directions
-	if (pr_botnewchasedir() > 200
-		|| fabs(delta.Y) > fabs(delta.X))
-	{
-		tdir = d[1];
-		d[1] = d[2];
-		d[2] = (dirtype_t)tdir;
-	}
+    if (pr_botnewchasedir() > 200
+        || abs(deltay)>abs(deltax))
+    {
+        tdir=d[1];
+        d[1]=d[2];
+        d[2]=(dirtype_t)tdir;
+    }
 
     if (d[1]==turnaround)
         d[1]=DI_NODIR;
@@ -223,16 +203,16 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
 
     if (d[1]!=DI_NODIR)
     {
-        player->mo->movedir = d[1];
-        if (TryWalk (cmd))
+        actor->movedir = d[1];
+        if (TryWalk (actor, cmd))
             return;
     }
 
     if (d[2]!=DI_NODIR)
     {
-        player->mo->movedir = d[2];
+        actor->movedir = d[2];
 
-        if (TryWalk(cmd))
+        if (TryWalk(actor, cmd))
             return;
     }
 
@@ -240,9 +220,9 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
     // so pick another direction.
     if (olddir!=DI_NODIR)
     {
-        player->mo->movedir = olddir;
+        actor->movedir = olddir;
 
-        if (TryWalk(cmd))
+        if (TryWalk(actor, cmd))
             return;
     }
 
@@ -255,9 +235,9 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
         {
             if (tdir!=turnaround)
             {
-                player->mo->movedir = tdir;
+                actor->movedir = tdir;
 
-                if (TryWalk(cmd))
+                if (TryWalk(actor, cmd))
                     return;
             }
         }
@@ -270,9 +250,9 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
         {
             if (tdir!=turnaround)
             {
-                player->mo->movedir = tdir;
+                actor->movedir = tdir;
 
-                if (TryWalk(cmd))
+                if (TryWalk(actor, cmd))
                     return;
             }
         }
@@ -280,12 +260,12 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
 
     if (turnaround !=  DI_NODIR)
     {
-        player->mo->movedir = turnaround;
-        if (TryWalk(cmd))
+        actor->movedir = turnaround;
+        if (TryWalk(actor, cmd))
             return;
     }
 
-    player->mo->movedir = DI_NODIR;  // can not move
+    actor->movedir = DI_NODIR;  // can not move
 }
 
 
@@ -295,7 +275,7 @@ void DBot::NewChaseDir (ticcmd_t *cmd)
 // This is also a traverse function for
 // bots pre-rocket fire (preventing suicide)
 //
-bool FCajunMaster::CleanAhead (AActor *thing, double x, double y, ticcmd_t *cmd)
+bool FCajunMaster::CleanAhead (AActor *thing, fixed_t x, fixed_t y, ticcmd_t *cmd)
 {
 	FCheckPosition tm;
 
@@ -304,30 +284,30 @@ bool FCajunMaster::CleanAhead (AActor *thing, double x, double y, ticcmd_t *cmd)
 
     if (!(thing->flags & MF_NOCLIP) )
     {
-        if (tm.ceilingz - tm.floorz < thing->Height)
+		fixed_t maxstep = thing->MaxStepHeight;
+        if (tm.ceilingz - tm.floorz < thing->height)
             return false;       // doesn't fit
 
-		double maxmove = MAXMOVEHEIGHT;
 		if (!(thing->flags&MF_MISSILE))
 		{
-			if(tm.floorz > (thing->Sector->floorplane.ZatPoint(x, y)+maxmove)) //Too high wall
+			if(tm.floorz > (thing->Sector->floorplane.ZatPoint (x, y)+MAXMOVEHEIGHT)) //Too high wall
 				return false;
 
 			//Jumpable
-			if(tm.floorz > (thing->Sector->floorplane.ZatPoint(x, y)+thing->MaxStepHeight))
+			if(tm.floorz>(thing->Sector->floorplane.ZatPoint (x, y)+thing->MaxStepHeight))
 				cmd->ucmd.buttons |= BT_JUMP;
 
 
 	        if ( !(thing->flags & MF_TELEPORT) &&
-	             tm.ceilingz < thing->Top())
+	             tm.ceilingz - thing->z < thing->height)
 	            return false;       // mobj must lower itself to fit
 
 	        // jump out of water
 //	        if((thing->eflags & (MF_UNDERWATER|MF_TOUCHWATER))==(MF_UNDERWATER|MF_TOUCHWATER))
-//	            maxstep=37;
+//	            maxstep=37*FRACUNIT;
 
 	        if ( !(thing->flags & MF_TELEPORT) &&
-	             (tm.floorz - thing->Z() > thing->MaxStepHeight) )
+	             (tm.floorz - thing->z > maxstep ) )
 	            return false;       // too big a step up
 
 
@@ -340,56 +320,72 @@ bool FCajunMaster::CleanAhead (AActor *thing, double x, double y, ticcmd_t *cmd)
     return true;
 }
 
-#define OKAYRANGE (5) //counts *2, when angle is in range, turning is not executed.
-#define MAXTURN (15) //Max degrees turned in one tic. Lower is smother but may cause the bot not getting where it should = crash
+#define OKAYRANGE (5*ANGLE_1) //counts *2, when angle is in range, turning is not executed.
+#define MAXTURN (15*ANGLE_1) //Max degrees turned in one tic. Lower is smother but may cause the bot not getting where it should = crash
 #define TURNSENS 3 //Higher is smoother but slower turn.
 
-void DBot::TurnToAng ()
+void FCajunMaster::TurnToAng (AActor *actor)
 {
-    double maxturn = MAXTURN;
+    int maxturn = MAXTURN;
 
-	if (player->ReadyWeapon != NULL)
+	if (actor->player->ReadyWeapon != NULL)
 	{
-		if (player->ReadyWeapon->WeaponFlags & WIF_BOT_EXPLOSIVE)
+		if (actor->player->ReadyWeapon->WeaponFlags & WIF_BOT_EXPLOSIVE)
 		{
-			if (t_roam && !missile)
+			if (actor->player->t_roam && !actor->player->missile)
 			{ //Keep angle that where when shot where decided.
 				return;
 			}
 		}
 
 
-		if(enemy)
-			if(!dest) //happens when running after item in combat situations, or normal, prevents weak turns
-				if(player->ReadyWeapon->ProjectileType == NULL && !(player->ReadyWeapon->WeaponFlags & WIF_MELEEWEAPON))
-					if(Check_LOS(enemy, SHOOTFOV+5))
+		if(actor->player->enemy)
+			if(!actor->player->dest) //happens when running after item in combat situations, or normal, prevents weak turns
+				if(actor->player->ReadyWeapon->ProjectileType == NULL && !(actor->player->ReadyWeapon->WeaponFlags & WIF_MELEEWEAPON))
+					if(Check_LOS(actor, actor->player->enemy, SHOOTFOV+5*ANGLE_1))
 						maxturn = 3;
 	}
 
-	DAngle distance = deltaangle(player->mo->Angles.Yaw, Angle);
+	int distance = actor->player->angle - actor->angle;
 
-	if (fabs (distance) < OKAYRANGE && !enemy)
+	if (abs (distance) < OKAYRANGE && !actor->player->enemy)
 		return;
 
 	distance /= TURNSENS;
-	if (fabs (distance) > maxturn)
+	if (abs (distance) > maxturn)
 		distance = distance < 0 ? -maxturn : maxturn;
 
-	player->mo->Angles.Yaw += distance;
+	actor->angle += distance;
 }
 
-void DBot::Pitch (AActor *target)
+void FCajunMaster::Pitch (AActor *actor, AActor *target)
 {
 	double aim;
 	double diff;
 
-	diff = target->Z() - player->mo->Z();
-	aim = g_atan(diff / player->mo->Distance2D(target));
-	player->mo->Angles.Pitch = DAngle::ToDegrees(aim);
+	diff = target->z - actor->z;
+	aim = atan (diff / (double)P_AproxDistance (actor->x - target->x, actor->y - target->y));
+	actor->pitch = -(int)(aim * ANGLE_180/M_PI);
 }
 
 //Checks if a sector is dangerous.
 bool FCajunMaster::IsDangerous (sector_t *sec)
 {
-	return sec->damageamount > 0;
+	int special;
+
+	return
+		   sec->damage
+		|| sec->special & DAMAGE_MASK
+		|| (special = sec->special & 0xff, special == dLight_Strobe_Hurt)
+		|| special == dDamage_Hellslime
+		|| special == dDamage_Nukage
+		|| special == dDamage_End
+		|| special == dDamage_SuperHellslime
+		|| special == dDamage_LavaWimpy
+		|| special == dDamage_LavaHefty
+		|| special == dScroll_EastLavaDamage
+		|| special == sLight_Strobe_Hurt
+		|| special == Damage_InstantDeath
+		|| special == sDamage_SuperHellslime;
 }
+

@@ -1,22 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
+// $Id: i_net.c,v 1.2 1997/12/29 19:50:54 pekangas Exp $
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //		Low-level networking code. Uses BSD sockets for UDP networking.
@@ -41,6 +37,7 @@
 #	define WIN32_LEAN_AND_MEAN
 #	include <windows.h>
 #	include <winsock.h>
+#define USE_WINDOWS_DWORD
 #else
 #	include <sys/socket.h>
 #	include <netinet/in.h>
@@ -102,7 +99,7 @@ typedef int socklen_t;
 static u_short DOOMPORT = (IPPORT_USERRESERVED + 29);
 static SOCKET mysocket = INVALID_SOCKET;
 static sockaddr_in sendaddress[MAXNETNODES];
-static uint8_t sendplayer[MAXNETNODES];
+static BYTE sendplayer[MAXNETNODES];
 
 #ifdef __WIN32__
 const char *neterror (void);
@@ -113,7 +110,6 @@ const char *neterror (void);
 enum
 {
 	PRE_CONNECT,			// Sent from guest to host for initial connection
-	PRE_KEEPALIVE,
 	PRE_DISCONNECT,			// Sent from guest that aborts the game
 	PRE_ALLHERE,			// Sent from host to guest when everybody has connected
 	PRE_CONACK,				// Sent from host to guest to acknowledge PRE_CONNECT receipt
@@ -128,24 +124,24 @@ enum
 
 struct PreGamePacket
 {
-	uint8_t Fake;
-	uint8_t Message;
-	uint8_t NumNodes;
+	BYTE Fake;
+	BYTE Message;
+	BYTE NumNodes;
 	union
 	{
-		uint8_t ConsoleNum;
-		uint8_t NumPresent;
+		BYTE ConsoleNum;
+		BYTE NumPresent;
 	};
 	struct
 	{
-		uint32_t address;
-		uint16_t port;
-		uint8_t	player;
-		uint8_t	pad;
+		u_long	address;
+		u_short	port;
+		BYTE	player;
+		BYTE	pad;
 	} machines[MAXNETNODES];
 };
 
-uint8_t TransmitBuffer[TRANSMIT_SIZE];
+BYTE TransmitBuffer[TRANSMIT_SIZE];
 
 //
 // UDPsocket
@@ -212,11 +208,11 @@ void PacketSend (void)
 	{
 		I_FatalError("Netbuffer overflow!");
 	}
-	assert(!(doomcom.data[0] & NCMD_COMPRESSED));
 
 	uLong size = TRANSMIT_SIZE - 1;
 	if (doomcom.datalength >= 10)
 	{
+		assert(!(doomcom.data[0] & NCMD_COMPRESSED));
 		TransmitBuffer[0] = doomcom.data[0] | NCMD_COMPRESSED;
 		c = compress2(TransmitBuffer + 1, &size, doomcom.data + 1, doomcom.datalength - 1, 9);
 		size += 1;
@@ -322,11 +318,7 @@ void PacketGet (void)
 	}
 	else if (c > 0)
 	{	//The packet is not from any in-game node, so we might as well discard it.
-		// Don't show the message for disconnect notifications.
-		if (c != 2 || TransmitBuffer[0] != PRE_FAKE || TransmitBuffer[1] != PRE_DISCONNECT)
-		{
-			DPrintf(DMSG_WARNING, "Dropped packet: Unknown host (%s:%d)\n", inet_ntoa(fromaddress.sin_addr), fromaddress.sin_port);
-		}
+		Printf("Dropped packet: Unknown host (%s:%d)\n", inet_ntoa(fromaddress.sin_addr), fromaddress.sin_port);
 		doomcom.remotenode = -1;
 		return;
 	}
@@ -455,7 +447,7 @@ void StartNetwork (bool autoPort)
 
 void SendAbort (void)
 {
-	uint8_t dis[2] = { PRE_FAKE, PRE_DISCONNECT };
+	BYTE dis[2] = { PRE_FAKE, PRE_DISCONNECT };
 	int i, j;
 
 	if (doomcom.numnodes > 1)
@@ -518,7 +510,7 @@ bool Host_CheckForConnects (void *userdata)
 			{
 				if (node == -1)
 				{
-					const uint8_t *s_addr_bytes = (const uint8_t *)&from->sin_addr;
+					const BYTE *s_addr_bytes = (const BYTE *)&from->sin_addr;
 					StartScreen->NetMessage ("Got extra connect from %d.%d.%d.%d:%d",
 						s_addr_bytes[0], s_addr_bytes[1], s_addr_bytes[2], s_addr_bytes[3],
 						from->sin_port);
@@ -556,15 +548,10 @@ bool Host_CheckForConnects (void *userdata)
 				SendConAck (doomcom.numnodes, numplayers);
 			}
 			break;
-
-		case PRE_KEEPALIVE:
-			break;
 		}
 	}
 	if (doomcom.numnodes < numplayers)
 	{
-		// Send message to everyone as a keepalive
-		SendConAck(doomcom.numnodes, numplayers);
 		return false;
 	}
 
@@ -665,12 +652,6 @@ void HostGame (int i)
 	if ((i == Args->NumArgs() - 1) || !(numplayers = atoi (Args->GetArg(i+1))))
 	{	// No player count specified, assume 2
 		numplayers = 2;
-	}
-
-	if (numplayers > MAXNETNODES)
-	{
-		I_FatalError("You cannot host a game with %d players. The limit is currently %d.", numplayers, MAXNETNODES);
-		return;
 	}
 
 	if (numplayers == 1)
@@ -807,6 +788,7 @@ bool Guest_WaitForOthers (void *userdata)
 			{
 				int node;
 
+				packet.NumNodes = packet.NumNodes;
 				doomcom.numnodes = packet.NumNodes + 2;
 				sendplayer[0] = packet.ConsoleNum;	// My player number
 				doomcom.consoleplayer = packet.ConsoleNum;
@@ -839,10 +821,6 @@ bool Guest_WaitForOthers (void *userdata)
 			break;
 		}
 	}
-
-	packet.Fake = PRE_FAKE;
-	packet.Message = PRE_KEEPALIVE;
-	PreSend(&packet, 2, &sendaddress[1]);
 
 	return false;
 }
@@ -959,6 +937,11 @@ bool I_InitNetwork (void)
 	{
 		doomcom.ticdup = 1;
 	}
+
+	if (Args->CheckParm ("-extratic"))
+		doomcom.extratics = 1;
+	else
+		doomcom.extratics = 0;
 
 	v = Args->CheckValue ("-port");
 	if (v)

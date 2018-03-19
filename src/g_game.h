@@ -1,23 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //	 Duh.
@@ -29,6 +24,7 @@
 #define __G_GAME__
 
 struct event_t;
+struct PNGHandle;
 
 
 //
@@ -69,12 +65,11 @@ void G_Ticker (void);
 bool G_Responder (event_t*	ev);
 
 void G_ScreenShot (char *filename);
-void G_StartSlideshow(FName whichone);
 
 FString G_BuildSaveName (const char *prefix, int slot);
 
-class FSerializer;
-bool G_CheckSaveGameWads (FSerializer &arc, bool printwarn);
+struct PNGHandle;
+bool G_CheckSaveGameWads (PNGHandle *png, bool printwarn);
 
 enum EFinishLevelType
 {
@@ -86,13 +81,12 @@ enum EFinishLevelType
 void G_PlayerFinishLevel (int player, EFinishLevelType mode, int flags);
 
 void G_DoReborn (int playernum, bool freshbot);
-void G_DoPlayerPop(int playernum);
 
 // Adds pitch to consoleplayer's viewpitch and clamps it
-void G_AddViewPitch (int look, bool mouse = false);
+void G_AddViewPitch (int look);
 
 // Adds to consoleplayer's viewangle if allowed
-void G_AddViewAngle (int yaw, bool mouse = false);
+void G_AddViewAngle (int yaw);
 
 #define BODYQUESIZE 	32
 class AActor;
@@ -100,7 +94,6 @@ extern AActor *bodyque[BODYQUESIZE];
 extern int bodyqueslot; 
 class AInventory;
 extern const AInventory *SendItemUse, *SendItemDrop;
-extern int SendItemDropAmount;
 
 
 #endif

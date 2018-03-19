@@ -51,16 +51,12 @@
 #include "v_palette.h"
 #include "v_video.h"
 #include "colormatcher.h"
-#include "menu/menu.h"
-#include "vm.h"
-#include "v_text.h"
 
 struct FLatchedValue
 {
 	FBaseCVar *Variable;
 	UCVarValue Value;
 	ECVarType Type;
-	bool UnsafeContext;
 };
 
 static TArray<FLatchedValue> LatchedValues;
@@ -72,7 +68,12 @@ FBaseCVar *CVars = NULL;
 
 int cvar_defflags;
 
-FBaseCVar::FBaseCVar (const char *var_name, uint32_t flags, void (*callback)(FBaseCVar &))
+FBaseCVar::FBaseCVar (const FBaseCVar &var)
+{
+	I_FatalError ("Use of cvar copy constructor");
+}
+
+FBaseCVar::FBaseCVar (const char *var_name, DWORD flags, void (*callback)(FBaseCVar &))
 {
 	FBaseCVar *var;
 
@@ -131,11 +132,6 @@ FBaseCVar::~FBaseCVar ()
 	}
 }
 
-const char *FBaseCVar::GetHumanString(int precision) const
-{
-	return GetGenericRep(CVAR_String).String;
-}
-
 void FBaseCVar::ForceSet (UCVarValue value, ECVarType type, bool nouserinfosend)
 {
 	DoSet (value, type);
@@ -144,12 +140,7 @@ void FBaseCVar::ForceSet (UCVarValue value, ECVarType type, bool nouserinfosend)
 	if (m_UseCallback)
 		Callback ();
 
-	if ((Flags & CVAR_ARCHIVE) && !(Flags & CVAR_UNSAFECONTEXT))
-	{
-		SafeValue = GetGenericRep(CVAR_String).String;
-	}
-
-	Flags &= ~(CVAR_ISDEFAULT | CVAR_UNSAFECONTEXT);
+	Flags &= ~CVAR_ISDEFAULT;
 }
 
 void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
@@ -168,17 +159,13 @@ void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
 			latch.Value = value;
 		else
 			latch.Value.String = copystring(value.String);
-		latch.UnsafeContext = !!(Flags & CVAR_UNSAFECONTEXT);
 		LatchedValues.Push (latch);
-
-		Flags &= ~CVAR_UNSAFECONTEXT;
 	}
 	else if ((Flags & CVAR_SERVERINFO) && gamestate != GS_STARTUP && !demoplayback)
 	{
 		if (netgame && !players[consoleplayer].settings_controller)
 		{
 			Printf ("Only setting controllers can change %s\n", Name);
-			Flags &= ~CVAR_UNSAFECONTEXT;
 			return;
 		}
 		D_SendServerInfoChange (this, value, type);
@@ -187,63 +174,6 @@ void FBaseCVar::SetGenericRep (UCVarValue value, ECVarType type)
 	{
 		ForceSet (value, type);
 	}
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, GetInt)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	auto v = self->GetGenericRep(CVAR_Int);
-	ACTION_RETURN_INT(v.Int);
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, GetFloat)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	auto v = self->GetGenericRep(CVAR_Float);
-	ACTION_RETURN_FLOAT(v.Float);
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, GetString)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	auto v = self->GetGenericRep(CVAR_String);
-	ACTION_RETURN_STRING(v.String);
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, SetInt)
-{
-	// Only menus are allowed to change CVARs.
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	if (!(self->GetFlags() & CVAR_MOD) && CurrentMenu == nullptr) return 0;
-	PARAM_INT(val);
-	UCVarValue v;
-	v.Int = val;
-	self->SetGenericRep(v, CVAR_Int);
-	return 0;
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, SetFloat)
-{
-	// Only menus are allowed to change CVARs.
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	if (!(self->GetFlags() & CVAR_MOD) && CurrentMenu == nullptr) return 0;
-	PARAM_FLOAT(val);
-	UCVarValue v;
-	v.Float = (float)val;
-	self->SetGenericRep(v, CVAR_Float);
-	return 0;
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, SetString)
-{
-	// Only menus are allowed to change CVARs.
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	if (!(self->GetFlags() & CVAR_MOD) && CurrentMenu == nullptr) return 0;
-	PARAM_STRING(val);
-	UCVarValue v;
-	v.String = val.GetChars();
-	self->SetGenericRep(v, CVAR_String);
-	return 0;
 }
 
 bool FBaseCVar::ToBool (UCVarValue value, ECVarType type)
@@ -265,7 +195,7 @@ bool FBaseCVar::ToBool (UCVarValue value, ECVarType type)
 		else if (stricmp (value.String, "false") == 0)
 			return false;
 		else
-			return !!strtoll (value.String, NULL, 0);
+			return !!strtol (value.String, NULL, 0);
 
 	case CVAR_GUID:
 		return false;
@@ -298,7 +228,7 @@ int FBaseCVar::ToInt (UCVarValue value, ECVarType type)
 			else if (stricmp (value.String, "false") == 0)
 				res = 0;
 			else
-				res = (int)strtoll (value.String, NULL, 0); 
+				res = strtol (value.String, NULL, 0); 
 			break;
 		}
 	case CVAR_GUID:			res = 0; break;
@@ -351,9 +281,7 @@ const char *FBaseCVar::ToString (UCVarValue value, ECVarType type)
 		break;
 
 	case CVAR_Float:
-		IGNORE_FORMAT_PRE
-		mysnprintf (cstrbuf, countof(cstrbuf), "%H", value.Float);
-		IGNORE_FORMAT_POST
+		mysnprintf (cstrbuf, countof(cstrbuf), "%g", value.Float);
 		break;
 
 	case CVAR_GUID:
@@ -471,9 +399,7 @@ UCVarValue FBaseCVar::FromFloat (float value, ECVarType type)
 		break;
 
 	case CVAR_String:
-		IGNORE_FORMAT_PRE
-		mysnprintf (cstrbuf, countof(cstrbuf), "%H", value);
-		IGNORE_FORMAT_POST
+		mysnprintf (cstrbuf, countof(cstrbuf), "%g", value);
 		ret.String = cstrbuf;
 		break;
 
@@ -488,9 +414,9 @@ UCVarValue FBaseCVar::FromFloat (float value, ECVarType type)
 	return ret;
 }
 
-static uint8_t HexToByte (const char *hex)
+static BYTE HexToByte (const char *hex)
 {
-	uint8_t v = 0;
+	BYTE v = 0;
 	for (int i = 0; i < 2; ++i)
 	{
 		v <<= 4;
@@ -523,7 +449,7 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 		else if (stricmp (value, "false") == 0)
 			ret.Bool = false;
 		else
-			ret.Bool = strtoll (value, NULL, 0) != 0;
+			ret.Bool = strtol (value, NULL, 0) != 0;
 		break;
 
 	case CVAR_Int:
@@ -532,7 +458,7 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 		else if (stricmp (value, "false") == 0)
 			ret.Int = 0;
 		else
-			ret.Int = (int)strtoll (value, NULL, 0);
+			ret.Int = strtol (value, NULL, 0);
 		break;
 
 	case CVAR_Float:
@@ -549,39 +475,45 @@ UCVarValue FBaseCVar::FromString (const char *value, ECVarType type)
 		// 0         1         2         3
 
 		ret.pGUID = NULL;
-		if (value == NULL)
+		for (i = 0; i < 38; ++i)
 		{
-			break;
-		}
-		for (i = 0; value[i] != 0 && i < 38; i++)
-		{
+			if (value[i] == 0)
+			{
+				break;
+			}
+			bool goodv = true;
 			switch (i)
 			{
 			case 0:
 				if (value[i] != '{')
-					break;
+					goodv = false;
+				break;
 			case 9:
 			case 14:
 			case 19:
 			case 24:
 				if (value[i] != '-')
-					break;
+					goodv = false;
+				break;
 			case 37:
 				if (value[i] != '}')
-					break;
+					goodv = false;
+				break;
 			default:
-				if (value[i] < '0' || 
-					(value[i] > '9' && value[i] < 'A') || 
-					(value[i] > 'F' && value[i] < 'a') || 
-					value[i] > 'f')
-					break;
+				if (value[i] < '0' && value[i] > '9' &&
+					value[i] < 'A' && value[i] > 'F' &&
+					value[i] < 'a' && value[i] > 'f')
+				{
+					goodv = false;
+				}
+				break;
 			}
 		}
 		if (i == 38 && value[i] == 0)
 		{
 			cGUID.Data1 = strtoul (value + 1, NULL, 16);
-			cGUID.Data2 = (uint16_t)strtoul (value + 10, NULL, 16);
-			cGUID.Data3 = (uint16_t)strtoul (value + 15, NULL, 16);
+			cGUID.Data2 = (WORD)strtoul (value + 10, NULL, 16);
+			cGUID.Data3 = (WORD)strtoul (value + 15, NULL, 16);
 			cGUID.Data4[0] = HexToByte (value + 20);
 			cGUID.Data4[1] = HexToByte (value + 22);
 			cGUID.Data4[2] = HexToByte (value + 25);
@@ -687,17 +619,11 @@ void FBaseCVar::DisableCallbacks ()
 	m_UseCallback = false;
 }
 
-DEFINE_ACTION_FUNCTION(_CVar, GetRealType)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	ACTION_RETURN_INT(self->GetRealType());
-}
-
 //
 // Boolean cvar implementation
 //
 
-FBoolCVar::FBoolCVar (const char *name, bool def, uint32_t flags, void (*callback)(FBoolCVar &))
+FBoolCVar::FBoolCVar (const char *name, bool def, DWORD flags, void (*callback)(FBoolCVar &))
 : FBaseCVar (name, flags, reinterpret_cast<void (*)(FBaseCVar &)>(callback))
 {
 	DefaultValue = def;
@@ -755,7 +681,7 @@ void FBoolCVar::DoSet (UCVarValue value, ECVarType type)
 // Integer cvar implementation
 //
 
-FIntCVar::FIntCVar (const char *name, int def, uint32_t flags, void (*callback)(FIntCVar &))
+FIntCVar::FIntCVar (const char *name, int def, DWORD flags, void (*callback)(FIntCVar &))
 : FBaseCVar (name, flags, reinterpret_cast<void (*)(FBaseCVar &)>(callback))
 {
 	DefaultValue = def;
@@ -813,7 +739,7 @@ void FIntCVar::DoSet (UCVarValue value, ECVarType type)
 // Floating point cvar implementation
 //
 
-FFloatCVar::FFloatCVar (const char *name, float def, uint32_t flags, void (*callback)(FFloatCVar &))
+FFloatCVar::FFloatCVar (const char *name, float def, DWORD flags, void (*callback)(FFloatCVar &))
 : FBaseCVar (name, flags, reinterpret_cast<void (*)(FBaseCVar &)>(callback))
 {
 	DefaultValue = def;
@@ -824,16 +750,6 @@ FFloatCVar::FFloatCVar (const char *name, float def, uint32_t flags, void (*call
 ECVarType FFloatCVar::GetRealType () const
 {
 	return CVAR_Float;
-}
-
-const char *FFloatCVar::GetHumanString(int precision) const
-{
-	if (precision < 0)
-	{
-		precision = 6;
-	}
-	mysnprintf(cstrbuf, countof(cstrbuf), "%.*g", precision, Value);
-	return cstrbuf;
 }
 
 UCVarValue FFloatCVar::GetGenericRep (ECVarType type) const
@@ -881,7 +797,7 @@ void FFloatCVar::DoSet (UCVarValue value, ECVarType type)
 // String cvar implementation
 //
 
-FStringCVar::FStringCVar (const char *name, const char *def, uint32_t flags, void (*callback)(FStringCVar &))
+FStringCVar::FStringCVar (const char *name, const char *def, DWORD flags, void (*callback)(FStringCVar &))
 : FBaseCVar (name, flags, reinterpret_cast<void (*)(FBaseCVar &)>(callback))
 {
 	DefaultValue = copystring (def);
@@ -950,7 +866,7 @@ void FStringCVar::DoSet (UCVarValue value, ECVarType type)
 // Color cvar implementation
 //
 
-FColorCVar::FColorCVar (const char *name, int def, uint32_t flags, void (*callback)(FColorCVar &))
+FColorCVar::FColorCVar (const char *name, int def, DWORD flags, void (*callback)(FColorCVar &))
 : FIntCVar (name, def, flags, reinterpret_cast<void (*)(FIntCVar &)>(callback))
 {
 }
@@ -1031,7 +947,7 @@ int FColorCVar::ToInt2 (UCVarValue value, ECVarType type)
 // GUID cvar implementation
 //
 
-FGUIDCVar::FGUIDCVar (const char *name, const GUID *def, uint32_t flags, void (*callback)(FGUIDCVar &))
+FGUIDCVar::FGUIDCVar (const char *name, const GUID *def, DWORD flags, void (*callback)(FGUIDCVar &))
 : FBaseCVar (name, flags, reinterpret_cast<void (*)(FBaseCVar &)>(callback))
 {
 	if (def != NULL)
@@ -1132,21 +1048,6 @@ void FBaseCVar::ResetToDefault ()
 	}
 }
 
-DEFINE_ACTION_FUNCTION(_CVar, ResetToDefault)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FBaseCVar);
-	self->ResetToDefault();
-	return 0;
-}
-
-void FBaseCVar::MarkUnsafe()
-{
-	if (!(Flags & CVAR_MOD) && UnsafeExecutionContext)
-	{
-		Flags |= CVAR_UNSAFECONTEXT;
-	}
-}
-
 //
 // Flag cvar implementation
 //
@@ -1156,7 +1057,7 @@ void FBaseCVar::MarkUnsafe()
 // the network. The "host" cvar is responsible for that.
 //
 
-FFlagCVar::FFlagCVar (const char *name, FIntCVar &realvar, uint32_t bitval)
+FFlagCVar::FFlagCVar (const char *name, FIntCVar &realvar, DWORD bitval)
 : FBaseCVar (name, 0, NULL),
 ValueVar (realvar),
 BitVal (bitval)
@@ -1179,7 +1080,7 @@ BitVal (bitval)
 
 ECVarType FFlagCVar::GetRealType () const
 {
-	return CVAR_DummyBool;
+	return CVAR_Dummy;
 }
 
 UCVarValue FFlagCVar::GetGenericRep (ECVarType type) const
@@ -1261,7 +1162,7 @@ void FFlagCVar::DoSet (UCVarValue value, ECVarType type)
 // Similar to FFlagCVar but can have multiple bits
 //
 
-FMaskCVar::FMaskCVar (const char *name, FIntCVar &realvar, uint32_t bitval)
+FMaskCVar::FMaskCVar (const char *name, FIntCVar &realvar, DWORD bitval)
 : FBaseCVar (name, 0, NULL),
 ValueVar (realvar),
 BitVal (bitval)
@@ -1283,7 +1184,7 @@ BitVal (bitval)
 
 ECVarType FMaskCVar::GetRealType () const
 {
-	return CVAR_DummyInt;
+	return CVAR_Dummy;
 }
 
 UCVarValue FMaskCVar::GetGenericRep (ECVarType type) const
@@ -1364,12 +1265,12 @@ void FMaskCVar::DoSet (UCVarValue value, ECVarType type)
 
 
 ////////////////////////////////////////////////////////////////////////
-static int sortcvars (const void *a, const void *b)
+static int STACK_ARGS sortcvars (const void *a, const void *b)
 {
 	return strcmp (((*(FBaseCVar **)a))->GetName(), ((*(FBaseCVar **)b))->GetName());
 }
 
-void FilterCompactCVars (TArray<FBaseCVar *> &cvars, uint32_t filter)
+void FilterCompactCVars (TArray<FBaseCVar *> &cvars, DWORD filter)
 {
 	// Accumulate all cvars that match the filter flags.
 	for (FBaseCVar *cvar = CVars; cvar != NULL; cvar = cvar->m_Next)
@@ -1385,7 +1286,7 @@ void FilterCompactCVars (TArray<FBaseCVar *> &cvars, uint32_t filter)
 	}
 }
 
-void C_WriteCVars (uint8_t **demo_p, uint32_t filter, bool compact)
+void C_WriteCVars (BYTE **demo_p, DWORD filter, bool compact)
 {
 	FString dump = C_GetMassCVarString(filter, compact);
 	size_t dumplen = dump.Len() + 1;	// include terminating \0
@@ -1393,7 +1294,7 @@ void C_WriteCVars (uint8_t **demo_p, uint32_t filter, bool compact)
 	*demo_p += dumplen;
 }
 
-FString C_GetMassCVarString (uint32_t filter, bool compact)
+FString C_GetMassCVarString (DWORD filter, bool compact)
 {
 	FBaseCVar *cvar;
 	FString dump;
@@ -1423,7 +1324,7 @@ FString C_GetMassCVarString (uint32_t filter, bool compact)
 	return dump;
 }
 
-void C_ReadCVars (uint8_t **demo_p)
+void C_ReadCVars (BYTE **demo_p)
 {
 	char *ptr = *((char **)demo_p);
 	char *breakpt;
@@ -1435,7 +1336,7 @@ void C_ReadCVars (uint8_t **demo_p)
 	{       // compact mode
 		TArray<FBaseCVar *> cvars;
 		FBaseCVar *cvar;
-		uint32_t filter;
+		DWORD filter;
 
 		ptr++;
 		breakpt = strchr (ptr, '\\');
@@ -1552,21 +1453,6 @@ FBaseCVar *FindCVar (const char *var_name, FBaseCVar **prev)
 	return var;
 }
 
-DEFINE_ACTION_FUNCTION(_CVar, FindCVar)
-{
-	PARAM_PROLOGUE;
-	PARAM_NAME(name);
-	ACTION_RETURN_POINTER(FindCVar(name, nullptr));
-}
-
-DEFINE_ACTION_FUNCTION(_CVar, GetCVar)
-{
-	PARAM_PROLOGUE;
-	PARAM_NAME(name);
-	PARAM_POINTER_DEF(plyr, player_t);
-	ACTION_RETURN_POINTER(GetCVar(plyr ? plyr->mo : nullptr, name));
-}
-
 FBaseCVar *FindCVarSub (const char *var_name, int namelen)
 {
 	FBaseCVar *var;
@@ -1589,44 +1475,6 @@ FBaseCVar *FindCVarSub (const char *var_name, int namelen)
 	return var;
 }
 
-FBaseCVar *GetCVar(AActor *activator, const char *cvarname)
-{
-	FBaseCVar *cvar = FindCVar(cvarname, nullptr);
-	// Either the cvar doesn't exist, or it's for a mod that isn't loaded, so return nullptr.
-	if (cvar == nullptr || (cvar->GetFlags() & CVAR_IGNORE))
-	{
-		return nullptr;
-	}
-	else
-	{
-		// For userinfo cvars, redirect to GetUserCVar
-		if (cvar->GetFlags() & CVAR_USERINFO)
-		{
-			if (activator == nullptr || activator->player == nullptr)
-			{
-				return nullptr;
-			}
-			return GetUserCVar(int(activator->player - players), cvarname);
-		}
-		return cvar;
-	}
-}
-
-FBaseCVar *GetUserCVar(int playernum, const char *cvarname)
-{
-	if ((unsigned)playernum >= MAXPLAYERS || !playeringame[playernum])
-	{
-		return nullptr;
-	}
-	FBaseCVar **cvar_p = players[playernum].userinfo.CheckKey(FName(cvarname, true));
-	FBaseCVar *cvar;
-	if (cvar_p == nullptr || (cvar = *cvar_p) == nullptr || (cvar->GetFlags() & CVAR_IGNORE))
-	{
-		return nullptr;
-	}
-	return cvar;
-}
-
 //===========================================================================
 //
 // C_CreateCVar
@@ -1636,7 +1484,7 @@ FBaseCVar *GetUserCVar(int playernum, const char *cvarname)
 //
 //===========================================================================
 
-FBaseCVar *C_CreateCVar(const char *var_name, ECVarType var_type, uint32_t flags)
+FBaseCVar *C_CreateCVar(const char *var_name, ECVarType var_type, DWORD flags)
 {
 	assert(FindCVar(var_name, NULL) == NULL);
 	flags |= CVAR_AUTO;
@@ -1653,34 +1501,16 @@ FBaseCVar *C_CreateCVar(const char *var_name, ECVarType var_type, uint32_t flags
 
 void UnlatchCVars (void)
 {
-	for (const FLatchedValue& var : LatchedValues)
+	FLatchedValue var;
+
+	while (LatchedValues.Pop (var))
 	{
-		uint32_t oldflags = var.Variable->Flags;
+		DWORD oldflags = var.Variable->Flags;
 		var.Variable->Flags &= ~(CVAR_LATCH | CVAR_SERVERINFO);
-		if (var.UnsafeContext)
-			var.Variable->Flags |= CVAR_UNSAFECONTEXT;
 		var.Variable->SetGenericRep (var.Value, var.Type);
 		if (var.Type == CVAR_String)
 			delete[] var.Value.String;
 		var.Variable->Flags = oldflags;
-	}
-
-	LatchedValues.Clear();
-}
-
-void DestroyCVarsFlagged (uint32_t flags)
-{
-	FBaseCVar *cvar = CVars;
-	FBaseCVar *next = cvar;
-
-	while(cvar)
-	{
-		next = cvar->m_Next;
-
-		if(cvar->Flags & flags)
-			delete cvar;
-
-		cvar = next;
 	}
 }
 
@@ -1702,7 +1532,7 @@ void C_SetCVarsToDefaults (void)
 	}
 }
 
-void C_ArchiveCVars (FConfigFile *f, uint32_t filter)
+void C_ArchiveCVars (FConfigFile *f, uint32 filter)
 {
 	FBaseCVar *cvar = CVars;
 
@@ -1712,27 +1542,16 @@ void C_ArchiveCVars (FConfigFile *f, uint32_t filter)
 			(CVAR_GLOBALCONFIG|CVAR_ARCHIVE|CVAR_MOD|CVAR_AUTO|CVAR_USERINFO|CVAR_SERVERINFO|CVAR_NOSAVE))
 			== filter)
 		{
-			const char *const value = (cvar->Flags & CVAR_ISDEFAULT)
-				? cvar->GetGenericRep(CVAR_String).String
-				: cvar->SafeValue.GetChars();
-			f->SetValueForKey(cvar->GetName(), value);
+			UCVarValue val;
+			val = cvar->GetGenericRep (CVAR_String);
+			f->SetValueForKey (cvar->GetName (), val.String);
 		}
 		cvar = cvar->m_Next;
 	}
 }
 
-EXTERN_CVAR(Bool, sv_cheats);
-
 void FBaseCVar::CmdSet (const char *newval)
 {
-	if ((GetFlags() & CVAR_CHEAT) && !sv_cheats)
-	{
-		Printf("sv_cheats must be true to set this console variable.\n");
-		return;
-	}
-
-	MarkUnsafe();
-
 	UCVarValue val;
 
 	// Casting away the const is safe in this case.
@@ -1818,8 +1637,6 @@ CCMD (toggle)
 	{
 		if ( (var = FindCVar (argv[1], &prev)) )
 		{
-			var->MarkUnsafe();
-
 			val = var->GetGenericRep (CVAR_Bool);
 			val.Bool = !val.Bool;
 			var->SetGenericRep (val, CVAR_Bool);
@@ -1838,13 +1655,16 @@ void FBaseCVar::ListVars (const char *filter, bool plain)
 	{
 		if (CheckWildcards (filter, var->GetName()))
 		{
-			uint32_t flags = var->GetFlags();
+			DWORD flags = var->GetFlags();
+			UCVarValue val;
+
+			val = var->GetGenericRep (CVAR_String);
 			if (plain)
 			{ // plain formatting does not include user-defined cvars
 				if (!(flags & CVAR_UNSETTABLE))
 				{
 					++count;
-					Printf ("%s : %s\n", var->GetName(), var->GetHumanString());
+					Printf ("%s : %s\n", var->GetName(), var->GetGenericRep(CVAR_String).String);
 				}
 			}
 			else
@@ -1861,7 +1681,7 @@ void FBaseCVar::ListVars (const char *filter, bool plain)
 					flags & CVAR_MOD ? 'M' : ' ',
 					flags & CVAR_IGNORE ? 'X' : ' ',
 					var->GetName(),
-					var->GetHumanString());
+					var->GetGenericRep (CVAR_String).String);
 			}
 		}
 		var = var->m_Next;

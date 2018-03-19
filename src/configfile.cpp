@@ -66,13 +66,15 @@ FConfigFile::FConfigFile ()
 //
 //====================================================================
 
-FConfigFile::FConfigFile (const char *pathname)
+FConfigFile::FConfigFile (const char *pathname,
+	void (*nosechandler)(const char *pathname, FConfigFile *config, void *userdata),
+	void *userdata)
 {
 	Sections = CurrentSection = NULL;
 	LastSectionPtr = &Sections;
 	CurrentEntry = NULL;
 	ChangePathName (pathname);
-	LoadConfigFile ();
+	LoadConfigFile (nosechandler, userdata);
 	OkayToWrite = true;
 	FileExisted = true;
 }
@@ -116,7 +118,8 @@ FConfigFile::~FConfigFile ()
 			delete[] (char *)entry;
 			entry = nextentry;
 		}
-		delete section;
+		section->~FConfigSection();
+		delete[] (char *)section;
 		section = nextsection;
 	}
 }
@@ -137,7 +140,7 @@ FConfigFile &FConfigFile::operator = (const FConfigFile &other)
 	while (fromsection != NULL)
 	{
 		fromentry = fromsection->RootEntry;
-		tosection = NewConfigSection (fromsection->SectionName);
+		tosection = NewConfigSection (fromsection->Name);
 		while (fromentry != NULL)
 		{
 			NewConfigEntry (tosection, fromentry->Key, fromentry->Value);
@@ -308,7 +311,7 @@ const char *FConfigFile::GetCurrentSection () const
 {
 	if (CurrentSection != NULL)
 	{
-		return CurrentSection->SectionName.GetChars();
+		return CurrentSection->Name;
 	}
 	return NULL;
 }
@@ -368,7 +371,8 @@ bool FConfigFile::DeleteCurrentSection()
 			LastSectionPtr = &sec->Next;
 		}
 
-		delete CurrentSection;
+		CurrentSection->~FConfigSection();
+		delete[] (char *)CurrentSection;
 
 		CurrentSection = sec->Next;
 		return CurrentSection != NULL;
@@ -504,27 +508,11 @@ FConfigFile::FConfigSection *FConfigFile::FindSection (const char *name) const
 {
 	FConfigSection *section = Sections;
 
-	while (section != NULL && section->SectionName.CompareNoCase(name) != 0)
+	while (section != NULL && stricmp (section->Name, name) != 0)
 	{
 		section = section->Next;
 	}
 	return section;
-}
-
-//====================================================================
-//
-// FConfigFile :: RenameSection
-//
-//====================================================================
-
-void FConfigFile::RenameSection (const char *oldname, const char *newname) const
-{
-	FConfigSection *section = FindSection(oldname);
-
-	if (section != NULL)
-	{
-		section->SectionName = newname;
-	}
 }
 
 //====================================================================
@@ -554,15 +542,19 @@ FConfigFile::FConfigEntry *FConfigFile::FindEntry (
 FConfigFile::FConfigSection *FConfigFile::NewConfigSection (const char *name)
 {
 	FConfigSection *section;
+	char *memblock;
 
 	section = FindSection (name);
 	if (section == NULL)
 	{
-		section = new FConfigSection;
+		size_t namelen = strlen (name);
+		memblock = new char[sizeof(*section)+namelen];
+		section = ::new(memblock) FConfigSection;
 		section->RootEntry = NULL;
 		section->LastEntryPtr = &section->RootEntry;
 		section->Next = NULL;
-		section->SectionName = name;
+		memcpy (section->Name, name, namelen);
+		section->Name[namelen] = 0;
 		*LastSectionPtr = section;
 		LastSectionPtr = &section->Next;
 	}
@@ -599,7 +591,7 @@ FConfigFile::FConfigEntry *FConfigFile::NewConfigEntry (
 //
 //====================================================================
 
-void FConfigFile::LoadConfigFile ()
+void FConfigFile::LoadConfigFile (void (*nosechandler)(const char *pathname, FConfigFile *config, void *userdata), void *userdata)
 {
 	FILE *file = fopen (PathName, "r");
 	bool succ;
@@ -613,6 +605,14 @@ void FConfigFile::LoadConfigFile ()
 	succ = ReadConfig (file);
 	fclose (file);
 	FileExisted = succ;
+
+	if (!succ)
+	{ // First valid line did not define a section
+		if (nosechandler != NULL)
+		{
+			nosechandler (PathName, this, userdata);
+		}
+	}
 }
 
 //====================================================================
@@ -643,25 +643,15 @@ bool FConfigFile::ReadConfig (void *file)
 		{
 			continue;
 		}
-		// Do not process tail of long line
-		const bool longline = (READBUFFERSIZE - 1) == strlen(readbuf) && '\n' != readbuf[READBUFFERSIZE - 2];
-		if (longline)
+		// Remove white space at end of line
+		endpt = start + strlen (start) - 1;
+		while (endpt > start && *endpt <= ' ')
 		{
-			endpt = start + READBUFFERSIZE - 2;
+			endpt--;
 		}
-		else
-		{
-			// Remove white space at end of line
-			endpt = start + strlen (start) - 1;
-			while (endpt > start && *endpt <= ' ')
-			{
-				endpt--;
-			}
-			// Remove line feed '\n' character
-			endpt[1] = 0;
-			if (endpt <= start)
-				continue;	// Nothing here
-		}
+		endpt[1] = 0;
+		if (endpt <= start)
+			continue;	// Nothing here
 
 		if (*start == '[')
 		{ // Section header
@@ -696,31 +686,6 @@ bool FConfigFile::ReadConfig (void *file)
 				if (whiteprobe[0] == '<' && whiteprobe[1] == '<' && whiteprobe[2] == '<' && whiteprobe[3] != '\0')
 				{
 					ReadMultiLineValue (file, section, start, whiteprobe + 3);
-				}
-				else if (longline)
-				{
-					const FString key = start;
-					FString value = whiteprobe;
-					
-					while (ReadLine (readbuf, READBUFFERSIZE, file) != NULL)
-					{
-						const size_t endpos = (0 == readbuf[0]) ? 0 : (strlen(readbuf) - 1);
-						const bool endofline = '\n' == readbuf[endpos];
-						
-						if (endofline)
-						{
-							readbuf[endpos] = 0;
-						}
-						
-						value += readbuf;
-						
-						if (endofline)
-						{
-							break;
-						}
-					}
-					
-					NewConfigEntry (section, key.GetChars(), value.GetChars());
 				}
 				else
 				{
@@ -822,7 +787,7 @@ bool FConfigFile::WriteConfigFile () const
 		{
 			fputs (section->Note.GetChars(), file);
 		}
-		fprintf (file, "[%s]\n", section->SectionName.GetChars());
+		fprintf (file, "[%s]\n", section->Name);
 		while (entry != NULL)
 		{
 			if (strpbrk(entry->Value, "\r\n") == NULL)
@@ -863,7 +828,7 @@ const char *FConfigFile::GenerateEndTag(const char *value)
 	// isn't in the value. We create the sequences by generating two
 	// 64-bit random numbers and Base64 encoding the first 15 bytes
 	// from them.
-	union { uint64_t rand_num[2]; uint8_t rand_bytes[16]; };
+	union { QWORD rand_num[2]; BYTE rand_bytes[16]; };
 	do
 	{
 		rand_num[0] = pr_endtag.GenRand64();
@@ -871,7 +836,7 @@ const char *FConfigFile::GenerateEndTag(const char *value)
 
 		for (int i = 0; i < 5; ++i)
 		{
-			//uint32_t three_bytes = (rand_bytes[i*3] << 16) | (rand_bytes[i*3+1] << 8) | (rand_bytes[i*3+2]); // ???
+			DWORD three_bytes = (rand_bytes[i*3] << 16) | (rand_bytes[i*3+1] << 8) | (rand_bytes[i*3+2]);
 			EndTag[4+i*4  ] = Base64Table[rand_bytes[i*3] >> 2];
 			EndTag[4+i*4+1] = Base64Table[((rand_bytes[i*3] & 3) << 4) | (rand_bytes[i*3+1] >> 4)];
 			EndTag[4+i*4+2] = Base64Table[((rand_bytes[i*3+1] & 15) << 2) | (rand_bytes[i*3+2] >> 6)];

@@ -45,13 +45,7 @@
 #include <winternl.h>
 #endif
 #ifndef __GNUC__
-#if _MSC_VER
-#pragma warning(disable:4091)	// this silences a warning for a bogus definition in the Windows 8.1 SDK.
-#endif
 #include <dbghelp.h>
-#if _MSC_VER
-#pragma warning(default:4091)
-#endif
 #endif
 #include <commctrl.h>
 #include <commdlg.h>
@@ -63,6 +57,7 @@
 #include <uxtheme.h>
 #include <stddef.h>
 
+#define USE_WINDOWS_DWORD
 #include "doomtype.h"
 #include "resource.h"
 #include "version.h"
@@ -74,6 +69,54 @@
 #include <time.h>
 #include <zlib.h>
 
+#if defined(_WIN64) && defined(__GNUC__)
+struct KNONVOLATILE_CONTEXT_POINTERS {
+    union {
+        PDWORD64 IntegerContext[16];
+        struct {
+            PDWORD64 Rax;
+            PDWORD64 Rcx;
+            PDWORD64 Rdx;
+            PDWORD64 Rbx;
+            PDWORD64 Rsp;
+            PDWORD64 Rbp;
+            PDWORD64 Rsi;
+            PDWORD64 Rdi;
+            PDWORD64 R8;
+            PDWORD64 R9;
+            PDWORD64 R10;
+            PDWORD64 R11;
+            PDWORD64 R12;
+            PDWORD64 R13;
+            PDWORD64 R14;
+            PDWORD64 R15;
+        };
+    };
+};
+typedef
+EXCEPTION_DISPOSITION
+NTAPI
+EXCEPTION_ROUTINE (
+    struct _EXCEPTION_RECORD *ExceptionRecord,
+    PVOID EstablisherFrame,
+    struct _CONTEXT *ContextRecord,
+    PVOID DispatcherContext
+    );
+NTSYSAPI
+EXCEPTION_ROUTINE *
+NTAPI
+RtlVirtualUnwind (
+    DWORD HandlerType,
+    DWORD64 ImageBase,
+    DWORD64 ControlPc,
+    PRUNTIME_FUNCTION FunctionEntry,
+    PCONTEXT ContextRecord,
+    PVOID *HandlerData,
+    PDWORD64 EstablisherFrame,
+    KNONVOLATILE_CONTEXT_POINTERS *ContextPointers
+    );
+#endif
+
 // MACROS ------------------------------------------------------------------
 
 #define REMOTE_HOST		"localhost"
@@ -82,7 +125,10 @@
 #define UPLOAD_BOUNDARY	"Von-DnrNbJl0 P9d_BD;cEEsQVWpYMq0pbZ6NUmYHus;yIbFbkgB?.N=YC5O=BGZm+Rab5"
 #define DBGHELP_URI		"/msredist/dbghelp.dl_"
 
-#define UPLOAD_AGENT	GAMENAME "/" VERSIONSTR " (" GAMESIG ")"
+// If you are working on your own modified version of ZDoom, change
+// the last part of the UPLOAD_AGENT (between parentheses) to your
+// own program's name. e.g. (Skulltag) or (ZDaemon) or (ZDoomFu)
+#define UPLOAD_AGENT	"ZDoom/" VERSIONSTR " (" GAMESIG ")"
 
 // Time, in milliseconds, to wait for a send() or recv() to complete.
 #define TIMEOUT			60000
@@ -166,50 +212,50 @@ namespace zip
 #pragma pack(push,1)
 	struct LocalFileHeader
 	{
-		uint32_t	Magic;						// 0
-		uint8_t	VersionToExtract[2];		// 4
-		uint16_t	Flags;						// 6
-		uint16_t	Method;						// 8
-		uint16_t	ModTime;					// 10
-		uint16_t	ModDate;					// 12
-		uint32_t	CRC32;						// 14
-		uint32_t	CompressedSize;				// 18
-		uint32_t	UncompressedSize;			// 22
-		uint16_t	NameLength;					// 26
-		uint16_t	ExtraLength;				// 28
+		DWORD	Magic;						// 0
+		BYTE	VersionToExtract[2];		// 4
+		WORD	Flags;						// 6
+		WORD	Method;						// 8
+		WORD	ModTime;					// 10
+		WORD	ModDate;					// 12
+		DWORD	CRC32;						// 14
+		DWORD	CompressedSize;				// 18
+		DWORD	UncompressedSize;			// 22
+		WORD	NameLength;					// 26
+		WORD	ExtraLength;				// 28
 	};
 
 	struct CentralDirectoryEntry
 	{
-		uint32_t	Magic;
-		uint8_t		VersionMadeBy[2];
-		uint8_t		VersionToExtract[2];
-		uint16_t	Flags;
-		uint16_t	Method;
-		uint16_t	ModTime;
-		uint16_t	ModDate;
-		uint32_t	CRC32;
-		uint32_t	CompressedSize;
-		uint32_t	UncompressedSize;
-		uint16_t	NameLength;
-		uint16_t	ExtraLength;
-		uint16_t	CommentLength;
-		uint16_t	StartingDiskNumber;
-		uint16_t	InternalAttributes;
-		uint32_t	ExternalAttributes;
-		uint32_t	LocalHeaderOffset;
+		DWORD	Magic;
+		BYTE	VersionMadeBy[2];
+		BYTE	VersionToExtract[2];
+		WORD	Flags;
+		WORD	Method;
+		WORD	ModTime;
+		WORD	ModDate;
+		DWORD	CRC32;
+		DWORD	CompressedSize;
+		DWORD	UncompressedSize;
+		WORD	NameLength;
+		WORD	ExtraLength;
+		WORD	CommentLength;
+		WORD	StartingDiskNumber;
+		WORD	InternalAttributes;
+		DWORD	ExternalAttributes;
+		DWORD	LocalHeaderOffset;
 	};
 
 	struct EndOfCentralDirectory
 	{
-		uint32_t	Magic;
-		uint16_t	DiskNumber;
-		uint16_t	FirstDisk;
-		uint16_t	NumEntries;
-		uint16_t	NumEntriesOnAllDisks;
-		uint32_t	DirectorySize;
-		uint32_t	DirectoryOffset;
-		uint16_t	ZipCommentLength;
+		DWORD	Magic;
+		WORD	DiskNumber;
+		WORD	FirstDisk;
+		WORD	NumEntries;
+		WORD	NumEntriesOnAllDisks;
+		DWORD	DirectorySize;
+		DWORD	DirectoryOffset;
+		WORD	ZipCommentLength;
 	};
 #pragma pack(pop)
 }
@@ -219,9 +265,9 @@ struct TarFile
 	HANDLE		File;
 	const char *Filename;
 	int			ZipOffset;
-	uint32_t	UncompressedSize;
-	uint32_t	CompressedSize;
-	uint32_t	CRC32;
+	DWORD		UncompressedSize;
+	DWORD		CompressedSize;
+	DWORD		CRC32;
 	bool		Deflated;
 };
 
@@ -235,7 +281,6 @@ struct MiniDumpThreadData
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
-void I_FlushBufferedConsoleStuff();
 
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
@@ -245,7 +290,7 @@ static HANDLE MakeZip ();
 static void AddZipFile (HANDLE ziphandle, TarFile *whichfile, short dosdate, short dostime);
 static HANDLE CreateTempFile ();
 
-static void DumpBytes (HANDLE file, uint8_t *address);
+static void DumpBytes (HANDLE file, BYTE *address);
 static void AddStackInfo (HANDLE file, void *dumpaddress, DWORD code, CONTEXT *ctxt);
 static void StackWalk (HANDLE file, void *dumpaddress, DWORD *topOfStack, DWORD *jump, CONTEXT *ctxt);
 static void AddToolHelp (HANDLE file);
@@ -387,7 +432,7 @@ DWORD *GetTopOfStack (void *top)
 
 	if (VirtualQuery (top, &memInfo, sizeof(memInfo)))
 	{
-		return (DWORD *)((uint8_t *)memInfo.BaseAddress + memInfo.RegionSize);
+		return (DWORD *)((BYTE *)memInfo.BaseAddress + memInfo.RegionSize);
 	}
 	else
 	{
@@ -494,7 +539,7 @@ static DWORD WINAPI WriteMiniDumpInAnotherThread (LPVOID lpParam)
 //
 //==========================================================================
 
-void Writef (HANDLE file, const char *format, ...)
+void __cdecl Writef (HANDLE file, const char *format, ...)
 {
 	char buffer[1024];
 	va_list args;
@@ -606,7 +651,7 @@ void CreateCrashLog (char *custominfo, DWORD customsize, HWND richlog)
 
 		if (file != INVALID_HANDLE_VALUE)
 		{
-			uint8_t buffer[512];
+			BYTE buffer[512];
 			DWORD left;
 
 			for (;; customsize -= left, custominfo += left)
@@ -631,7 +676,6 @@ void CreateCrashLog (char *custominfo, DWORD customsize, HWND richlog)
 	}
 	if (richlog != NULL)
 	{
-		I_FlushBufferedConsoleStuff();
 		AddFile (WriteLogFile(richlog), "log.rtf");
 	}
 	CloseHandle (DbgProcess);
@@ -802,7 +846,7 @@ HANDLE WriteTextReport ()
 			//" Cr0NpxState=%08x\r\n"
 			"\r\n"
 			,
-			(uint16_t)ctxt->FloatSave.ControlWord, (uint16_t)ctxt->FloatSave.StatusWord, (uint16_t)ctxt->FloatSave.TagWord,
+			(WORD)ctxt->FloatSave.ControlWord, (WORD)ctxt->FloatSave.StatusWord, (WORD)ctxt->FloatSave.TagWord,
 			ctxt->FloatSave.ErrorOffset, ctxt->FloatSave.ErrorSelector, ctxt->FloatSave.DataOffset,
 			ctxt->FloatSave.DataSelector
 			//, ctxt->FloatSave.Cr0NpxState
@@ -834,7 +878,7 @@ HANDLE WriteTextReport ()
 #else
 	Writef (file, "\r\nBytes near RIP:");
 #endif
-	DumpBytes (file, (uint8_t *)CrashPointers.ExceptionRecord->ExceptionAddress-16);
+	DumpBytes (file, (BYTE *)CrashPointers.ExceptionRecord->ExceptionAddress-16);
 
 	if (ctxt->ContextFlags & CONTEXT_CONTROL)
 	{
@@ -945,11 +989,11 @@ static void AddStackInfo (HANDLE file, void *dumpaddress, DWORD code, CONTEXT *c
 {
 	DWORD *addr = (DWORD *)dumpaddress, *jump;
 	DWORD *topOfStack = GetTopOfStack (dumpaddress);
-	uint8_t peekb;
+	BYTE peekb;
 #ifdef _M_IX86
 	DWORD peekd;
 #else
-	uint64_t peekq;
+	QWORD peekq;
 #endif
 
 	jump = topOfStack;
@@ -1001,9 +1045,9 @@ static void AddStackInfo (HANDLE file, void *dumpaddress, DWORD code, CONTEXT *c
 			Writef (file, "         ");
 		}
 #else
-		if ((uint64_t *)topOfStack - (uint64_t *)scan < 2)
+		if ((QWORD *)topOfStack - (QWORD *)scan < 2)
 		{
-			max = (uint64_t *)topOfStack - (uint64_t *)scan;
+			max = (QWORD *)topOfStack - (QWORD *)scan;
 		}
 		else
 		{
@@ -1026,7 +1070,7 @@ static void AddStackInfo (HANDLE file, void *dumpaddress, DWORD code, CONTEXT *c
 		Writef (file, "  ");
 		for (i = 0; i < int(max*sizeof(void*)); ++i)
 		{
-			if (!SafeReadMemory ((uint8_t *)scan + i, &peekb, 1))
+			if (!SafeReadMemory ((BYTE *)scan + i, &peekb, 1))
 			{
 				break;
 			}
@@ -1053,7 +1097,7 @@ static void StackWalk (HANDLE file, void *dumpaddress, DWORD *topOfStack, DWORD 
 {
 	DWORD *addr = (DWORD *)dumpaddress;
 
-	uint8_t *pBaseOfImage = (uint8_t *)GetModuleHandle (0);
+	BYTE *pBaseOfImage = (BYTE *)GetModuleHandle (0);
 	IMAGE_OPTIONAL_HEADER *pHeader = (IMAGE_OPTIONAL_HEADER *)(pBaseOfImage +
 		((IMAGE_DOS_HEADER*)pBaseOfImage)->e_lfanew +
 		sizeof(IMAGE_NT_SIGNATURE) + sizeof(IMAGE_FILE_HEADER));
@@ -1081,8 +1125,8 @@ static void StackWalk (HANDLE file, void *dumpaddress, DWORD *topOfStack, DWORD 
 			};
 
 			// Check if address is after a call statement. Print what was called if it is.
-			const uint8_t *bytep = (uint8_t *)code;
-			uint8_t peekb;
+			const BYTE *bytep = (BYTE *)code;
+			BYTE peekb;
 
 #define chkbyte(x,m,v) (SafeReadMemory(x, &peekb, 1) && ((peekb & m) == v))
 
@@ -1363,11 +1407,11 @@ static void StackWalk (HANDLE file, void *dumpaddress, DWORD *topOfStack, DWORD 
 //
 //==========================================================================
 
-static void DumpBytes (HANDLE file, uint8_t *address)
+static void DumpBytes (HANDLE file, BYTE *address)
 {
 	char line[68*3], *line_p = line;
 	DWORD len;
-	uint8_t peek;
+	BYTE peek;
 
 	for (int i = 0; i < 16*3; ++i)
 	{
@@ -1513,8 +1557,7 @@ static HANDLE MakeZip ()
 	struct tm *nowtm;
 	int i, numfiles;
 	HANDLE file;
-	DWORD len;
-	uint32_t dirsize;
+	DWORD len, dirsize;
 	size_t namelen;
 
 	if (NumFiles == 0)
@@ -1554,7 +1597,7 @@ static HANDLE MakeZip ()
 	central.ModTime = dostime;
 	central.ModDate = dosdate;
 
-	dirend.DirectoryOffset = LittleLong((uint32_t)SetFilePointer (file, 0, NULL, FILE_CURRENT));
+	dirend.DirectoryOffset = LittleLong(SetFilePointer (file, 0, NULL, FILE_CURRENT));
 
 	for (i = 0, numfiles = 0, dirsize = 0; i < NumFiles; ++i)
 	{
@@ -1566,8 +1609,8 @@ static HANDLE MakeZip ()
 		numfiles++;
 		if (TarFiles[i].Deflated)
 		{
-			central.Flags = LittleShort((uint16_t)2);
-			central.Method = LittleShort((uint16_t)8);
+			central.Flags = LittleShort(2);
+			central.Method = LittleShort(8);
 		}
 		else
 		{
@@ -1578,12 +1621,12 @@ static HANDLE MakeZip ()
 		central.InternalAttributes = 0;
 		if (namelen > 4 && stricmp(TarFiles[i].Filename - 4, ".txt") == 0)
 		{ // Bit 0 set indicates this is probably a text file. But do any tools use it?
-			central.InternalAttributes = LittleShort((uint16_t)1);
+			central.InternalAttributes = LittleShort(1);
 		}
 		central.CRC32 = LittleLong(TarFiles[i].CRC32);
 		central.CompressedSize = LittleLong(TarFiles[i].CompressedSize);
 		central.UncompressedSize = LittleLong(TarFiles[i].UncompressedSize);
-		central.NameLength = LittleShort((uint16_t)namelen);
+		central.NameLength = LittleShort((WORD)namelen);
 		central.LocalHeaderOffset = LittleLong(TarFiles[i].ZipOffset);
 		WriteFile (file, &central, sizeof(central), &len, NULL);
 		WriteFile (file, TarFiles[i].Filename, (DWORD)namelen, &len, NULL);
@@ -1591,7 +1634,7 @@ static HANDLE MakeZip ()
 	}
 
 	// Write the directory terminator
-	dirend.NumEntriesOnAllDisks = dirend.NumEntries = LittleShort((uint16_t)numfiles);
+	dirend.NumEntriesOnAllDisks = dirend.NumEntries = LittleShort(numfiles);
 	dirend.DirectorySize = LittleLong(dirsize);
 	WriteFile (file, &dirend, sizeof(dirend), &len, NULL);
 
@@ -1636,7 +1679,7 @@ static void AddZipFile (HANDLE ziphandle, TarFile *whichfile, short dosdate, sho
 
 	if (gzip)
 	{
-		local.Method = LittleShort((uint16_t)8);
+		local.Method = LittleShort(8);
 		whichfile->Deflated = true;
 		stream.next_out = outbuf;
 		stream.avail_out = sizeof(outbuf);
@@ -1644,11 +1687,11 @@ static void AddZipFile (HANDLE ziphandle, TarFile *whichfile, short dosdate, sho
 
 	// Write out the header and filename.
 	local.VersionToExtract[0] = 20;
-	local.Flags = gzip ? LittleShort((uint16_t)2) : 0;
+	local.Flags = gzip ? LittleShort(2) : 0;
 	local.ModTime = dostime;
 	local.ModDate = dosdate;
 	local.UncompressedSize = LittleLong(whichfile->UncompressedSize);
-	local.NameLength = LittleShort((uint16_t)strlen(whichfile->Filename));
+	local.NameLength = LittleShort((WORD)strlen(whichfile->Filename));
 	
 	whichfile->ZipOffset = SetFilePointer (ziphandle, 0, NULL, FILE_CURRENT);
 	WriteFile (ziphandle, &local, sizeof(local), &wrote, NULL);
@@ -1924,8 +1967,8 @@ static INT_PTR CALLBACK OverviewDlgProc (HWND hDlg, UINT message, WPARAM wParam,
 		SendMessage (edit, EM_AUTOURLDETECT, TRUE, 0);
 		SendMessage (edit, WM_SETTEXT, 0, (LPARAM)"Please tell us about this problem.\n"
 			"The information will NOT be sent to Microsoft.\n\n"
-			"An error report has been created that you can submit to help improve " GAMENAME ". "
-			"You can either save it to disk and make a report in the bugs forum at " FORUM_URL ", "
+			"An error report has been created that you can submit to help improve "GAMENAME". "
+			"You can either save it to disk and make a report in the bugs forum at "FORUM_URL", "
 			"or you can send it directly without letting other people know about it.");
 		SendMessage (edit, EM_SETSEL, 0, 81);
 		SendMessage (edit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&charFormat);
@@ -2157,7 +2200,7 @@ struct BinStreamInfo
 static DWORD CALLBACK StreamEditBinary (DWORD_PTR cookie, LPBYTE buffer, LONG cb, LONG *pcb)
 {
 	BinStreamInfo *info = (BinStreamInfo *)cookie;
-	uint8_t buf16[16];
+	BYTE buf16[16];
 	DWORD read, i;
 	char *buff_p = (char *)buffer;
 	char *buff_end = (char *)buffer + cb;
@@ -2207,7 +2250,7 @@ repeat:
 			buff_p += mysnprintf (buff_p, buff_end - buff_p, "\\cf3 ");
 			for (i = 0; i < read; ++i)
 			{
-				uint8_t code = buf16[i];
+				BYTE code = buf16[i];
 				if (code < 0x20 || code > 0x7f) code = 0xB7;
 				if (code == '\\' || code == '{' || code == '}') *buff_p++ = '\\';
 				*buff_p++ = code;
@@ -2731,7 +2774,7 @@ static bool ReadResponse (HWND hDlg, char *header, SOCKET sock, char *buf, int b
 		char *lenhead = strstr (header, "content-length: ");
 		if (lenhead != 0)
 		{
-			len = (int)strtoll (lenhead + 16, NULL, 10);
+			len = strtol (lenhead + 16, NULL, 10);
 			if (file != INVALID_HANDLE_VALUE)
 			{
 				ShowWindow (GetDlgItem (hDlg, IDC_BOINGPROGRESS), SW_SHOW);
@@ -3350,112 +3393,4 @@ void DisplayCrashLog ()
 		}
 	}
 	CloseTarFiles ();
-}
-
-/////////////////////////////////////////////////////////////////////////////
-
-namespace
-{
-	bool __declspec(thread) DrawerExceptionSetJumpResult;
-	CONTEXT __declspec(thread) DrawerExceptionSetJumpContext;
-	PVOID __declspec(thread) DrawerExceptionHandlerHandle;
-	char __declspec(thread) *DrawerExceptionReason;
-	bool __declspec(thread) DrawerExceptionFatal;
-
-	LONG WINAPI DrawerExceptionHandler(_EXCEPTION_POINTERS *exceptionInfo)
-	{
-		*exceptionInfo->ContextRecord = DrawerExceptionSetJumpContext;
-
-		DrawerExceptionFatal = false;
-		switch (exceptionInfo->ExceptionRecord->ExceptionCode)
-		{
-		default: DrawerExceptionReason = "Unknown exception code"; break;
-		case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: DrawerExceptionReason = "Array bounds exceeded"; break;
-		case EXCEPTION_BREAKPOINT: DrawerExceptionReason = "Breakpoint"; break;
-		case EXCEPTION_DATATYPE_MISALIGNMENT: DrawerExceptionReason = "Datatype misalignment"; break;
-		case EXCEPTION_FLT_DENORMAL_OPERAND: DrawerExceptionReason = "Float denormal operand"; break;
-		case EXCEPTION_FLT_DIVIDE_BY_ZERO: DrawerExceptionReason = "Float divide by zero"; break;
-		case EXCEPTION_FLT_INEXACT_RESULT: DrawerExceptionReason = "Float inexact result"; break;
-		case EXCEPTION_FLT_INVALID_OPERATION: DrawerExceptionReason = "Float invalid operation"; break;
-		case EXCEPTION_FLT_OVERFLOW: DrawerExceptionReason = "Float overflow"; break;
-		case EXCEPTION_FLT_STACK_CHECK: DrawerExceptionReason = "Float stack check"; break;
-		case EXCEPTION_FLT_UNDERFLOW: DrawerExceptionReason = "Float underflow"; break;
-		case EXCEPTION_INT_DIVIDE_BY_ZERO: DrawerExceptionReason = "Int divide by zero"; break;
-		case EXCEPTION_INT_OVERFLOW: DrawerExceptionReason = "Int overflow"; break;
-		case EXCEPTION_INVALID_DISPOSITION: DrawerExceptionReason = "Invalid disposition"; break;
-		case EXCEPTION_NONCONTINUABLE_EXCEPTION: DrawerExceptionReason = "Noncontinuable exception"; break;
-		case EXCEPTION_PRIV_INSTRUCTION: DrawerExceptionReason = "Priv instruction"; break;
-		case EXCEPTION_SINGLE_STEP: DrawerExceptionReason = "Single step"; break;
-		case EXCEPTION_STACK_OVERFLOW: DrawerExceptionReason = "Stack overflow"; break;
-
-		case EXCEPTION_ILLEGAL_INSTRUCTION:
-			DrawerExceptionReason = "Illegal instruction";
-			DrawerExceptionFatal = true;
-			break;
-
-		case EXCEPTION_ACCESS_VIOLATION:
-			if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 0)
-			{
-				DrawerExceptionReason = "Read access violation";
-			}
-			else if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1)
-			{
-				DrawerExceptionReason = "Write access violation";
-				DrawerExceptionFatal = true;
-			}
-			else if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 8)
-			{
-				DrawerExceptionReason = "User-mode data execution prevention (DEP) violation";
-				DrawerExceptionFatal = true;
-			}
-			else
-			{
-				DrawerExceptionReason = "Unknown access violation";
-				DrawerExceptionFatal = true;
-			}
-			break;
-
-		case EXCEPTION_IN_PAGE_ERROR:
-			if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 0)
-			{
-				DrawerExceptionReason = "In page read error";
-			}
-			else if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1)
-			{
-				DrawerExceptionReason = "In page write error";
-				DrawerExceptionFatal = true;
-			}
-			else if (exceptionInfo->ExceptionRecord->ExceptionInformation[0] == 8)
-			{
-				DrawerExceptionReason = "In page user-mode data execution prevention (DEP) error";
-				DrawerExceptionFatal = true;
-			}
-			else
-			{
-				DrawerExceptionReason = "Unknown in page read error";
-				DrawerExceptionFatal = true;
-			}
-			break;
-		}
-
-		return EXCEPTION_CONTINUE_EXECUTION;
-	}
-}
-
-void VectoredTryCatch(void *data, void(*tryBlock)(void *data), void(*catchBlock)(void *data, const char *reason, bool fatal))
-{
-	DrawerExceptionSetJumpResult = false;
-	RtlCaptureContext(&DrawerExceptionSetJumpContext);
-	if (DrawerExceptionSetJumpResult)
-	{
-		RemoveVectoredExceptionHandler(DrawerExceptionHandlerHandle);
-		catchBlock(data, DrawerExceptionReason, DrawerExceptionFatal);
-	}
-	else
-	{
-		DrawerExceptionSetJumpResult = true;
-		DrawerExceptionHandlerHandle = AddVectoredExceptionHandler(1, DrawerExceptionHandler);
-		tryBlock(data);
-		RemoveVectoredExceptionHandler(DrawerExceptionHandlerHandle);
-	}
 }

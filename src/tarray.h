@@ -1,4 +1,3 @@
-#pragma once
 /*
 ** tarray.h
 ** Templated, automatically resizing array
@@ -33,110 +32,34 @@
 **
 */
 
+#ifndef __TARRAY_H__
+#define __TARRAY_H__
 
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
 #include <new>
-#include <utility>
-#include <iterator>
 
 #if !defined(_WIN32)
 #include <inttypes.h>		// for intptr_t
-#else
+#elif !defined(_MSC_VER)
 #include <stdint.h>			// for mingw
 #endif
 
 #include "m_alloc.h"
 
-template<typename T> class TIterator : public std::iterator<std::random_access_iterator_tag, T>
-{
-public:
-	typedef typename TIterator::value_type value_type;
-	typedef typename TIterator::difference_type difference_type;
-	typedef typename TIterator::pointer pointer;
-	typedef typename TIterator::reference reference;
-	typedef typename TIterator::iterator_category iterator_category;
-
-	TIterator(T* ptr = nullptr) { m_ptr = ptr; }
-
-	// Comparison operators
-	bool operator==(const TIterator &other) const { return m_ptr == other.m_ptr; }
-	bool operator!=(const TIterator &other) const { return m_ptr != other.m_ptr; }
-	bool operator< (const TIterator &other) const { return m_ptr <  other.m_ptr; }
-	bool operator<=(const TIterator &other) const { return m_ptr <= other.m_ptr; }
-	bool operator> (const TIterator &other) const { return m_ptr >  other.m_ptr; }
-	bool operator>=(const TIterator &other) const { return m_ptr >= other.m_ptr; }
-
-	// Arithmetic operators
-	TIterator &operator++() { ++m_ptr; return *this; }
-	TIterator operator++(int) { pointer tmp = m_ptr; ++*this; return TIterator(tmp); }
-	TIterator &operator--() { --m_ptr; return *this; }
-	TIterator operator--(int) { pointer tmp = m_ptr; --*this; return TIterator(tmp); }
-	TIterator &operator+=(difference_type offset) { m_ptr += offset; return *this; }
-	TIterator operator+(difference_type offset) const { return TIterator(m_ptr + offset); }
-	friend TIterator operator+(difference_type offset, const TIterator &other) { return TIterator(offset + other.m_ptr); }
-	TIterator &operator-=(difference_type offset) { m_ptr -= offset; return *this; }
-	TIterator operator-(difference_type offset) const { return TIterator(m_ptr - offset); }
-	difference_type operator-(const TIterator &other) const { return m_ptr - other.m_ptr; }
-
-	T &operator*() { return *m_ptr; }
-	const T &operator*() const { return *m_ptr; }
-	T* operator->() { return m_ptr; }
-
-protected:
-	T* m_ptr;
-};
-
+class FArchive;
 
 // TArray -------------------------------------------------------------------
-
-// Must match TArray's layout.
-struct FArray
-{
-	void *Array;
-	unsigned int Count;
-	unsigned int Most;
-};
 
 // T is the type stored in the array.
 // TT is the type returned by operator().
 template <class T, class TT=T>
 class TArray
 {
+	template<class U, class UU> friend FArchive &operator<< (FArchive &arc, TArray<U,UU> &self);
+
 public:
-
-    typedef TIterator<T>                       iterator;
-    typedef TIterator<const T>                 const_iterator;
-
-    iterator begin()
-	{
-		return &Array[0];
-	}
-	const_iterator begin() const
-	{
-		return &Array[0];
-	}
-	const_iterator cbegin() const
-	{
-		return &Array[0];
-	}
-
-	iterator end()
-	{
-		return &Array[Count];
-	}
-	const_iterator end() const
-	{
-		return &Array[Count];
-	}
-	const_iterator cend() const
-	{
-		return &Array[Count];
-	}
-	
-	
-
 	////////
 	// This is a dummy constructor that does nothing. The purpose of this
 	// is so you can create a global TArray in the data segment that gets
@@ -157,23 +80,17 @@ public:
 		Count = 0;
 		Array = NULL;
 	}
-	TArray (int max, bool reserve = false)
+	TArray (int max)
 	{
 		Most = max;
-		Count = reserve? max : 0;
+		Count = 0;
 		Array = (T *)M_Malloc (sizeof(T)*max);
 	}
-	TArray (const TArray<T,TT> &other)
+	TArray (const TArray<T> &other)
 	{
 		DoCopy (other);
 	}
-	TArray (TArray<T,TT> &&other)
-	{
-		Array = other.Array; other.Array = NULL;
-		Most = other.Most; other.Most = 0;
-		Count = other.Count; other.Count = 0;
-	}
-	TArray<T,TT> &operator= (const TArray<T,TT> &other)
+	TArray<T> &operator= (const TArray<T> &other)
 	{
 		if (&other != this)
 		{
@@ -189,21 +106,6 @@ public:
 		}
 		return *this;
 	}
-	TArray<T,TT> &operator= (TArray<T,TT> &&other)
-	{
-		if (Array)
-		{
-			if (Count > 0)
-			{
-				DoDelete (0, Count-1);
-			}
-			M_Free (Array);
-		}
-		Array = other.Array; other.Array = NULL;
-		Most = other.Most; other.Most = 0;
-		Count = other.Count; other.Count = 0;
-		return *this;
-	}
 	~TArray ()
 	{
 		if (Array)
@@ -217,22 +119,6 @@ public:
 			Count = 0;
 			Most = 0;
 		}
-	}
-	// Check equality of two arrays
-	bool operator==(const TArray<T> &other) const
-	{
-		if (Count != other.Count)
-		{
-			return false;
-		}
-		for (unsigned int i = 0; i < Count; ++i)
-		{
-			if (Array[i] != other.Array[i])
-			{
-				return false;
-			}
-		}
-		return true;
 	}
 	// Return a reference to an element
 	T &operator[] (size_t index) const
@@ -250,32 +136,12 @@ public:
 		return Array[Count-1];
 	}
 
-    unsigned int Find(const T& item) const
-    {
-        unsigned int i;
-        for(i = 0;i < Count;++i)
-        {
-            if(Array[i] == item)
-                break;
-        }
-        return i;
-    }
-
 	unsigned int Push (const T &item)
 	{
 		Grow (1);
 		::new((void*)&Array[Count]) T(item);
 		return Count++;
 	}
-	void Append(const TArray<T> &item)
-	{
-		unsigned start = Reserve(item.Size());
-		for (unsigned i = 0; i < item.Size(); i++)
-		{
-			Array[start + i] = item[i];
-		}
-	}
-
 	bool Pop ()
 	{
 		if (Count > 0)
@@ -400,14 +266,6 @@ public:
 		}
 		Count = amount;
 	}
-	void Alloc(unsigned int amount)
-	{
-		// first destroys all content and then rebuilds the array.
-		if (Count > 0) DoDelete(0, Count - 1);
-		Count = 0;
-		Resize(amount);
-		ShrinkToFit();
-	}
 	// Reserves amount entries at the end of the array, but does nothing
 	// with them.
 	unsigned int Reserve (unsigned int amount)
@@ -437,15 +295,10 @@ public:
 			Count = 0;
 		}
 	}
-	void Reset()
-	{
-		Clear();
-		ShrinkToFit();
-	}
 private:
 	T *Array;
-	unsigned int Count;
 	unsigned int Most;
+	unsigned int Count;
 
 	void DoCopy (const TArray<T> &other)
 	{
@@ -486,14 +339,6 @@ template<class T, class TT=T>
 class TDeletingArray : public TArray<T, TT>
 {
 public:
-	TDeletingArray() : TArray<T,TT>() {}
-	TDeletingArray(TDeletingArray<T,TT> &&other) : TArray<T,TT>(std::move(other)) {}
-	TDeletingArray<T,TT> &operator=(TDeletingArray<T,TT> &&other)
-	{
-		TArray<T,TT>::operator=(std::move(other));
-		return *this;
-	}
-
 	~TDeletingArray<T, TT> ()
 	{
 		for (unsigned int i = 0; i < TArray<T,TT>::Size(); ++i)
@@ -502,71 +347,6 @@ public:
 				delete (*this)[i];
 		}
 	}
-	void DeleteAndClear()
-	{
-		for (unsigned int i = 0; i < TArray<T,TT>::Size(); ++i)
-		{
-			if ((*this)[i] != NULL) 
-				delete (*this)[i];
-		}
-		this->Clear();
-	}
-};
-
-// This is not a real dynamic array but just a wrapper around a pointer reference.
-// Used for wrapping some memory allocated elsewhere into a VM compatible data structure.
-
-template <class T>
-class TStaticPointedArray
-{
-public:
-
-	typedef TIterator<T>                       iterator;
-	typedef TIterator<const T>                 const_iterator;
-
-	iterator begin()
-	{
-		return &Array[0];
-	}
-	const_iterator begin() const
-	{
-		return &Array[0];
-	}
-	const_iterator cbegin() const
-	{
-		return &Array[0];
-	}
-
-	iterator end()
-	{
-		return &Array[Count];
-	}
-	const_iterator end() const
-	{
-		return &Array[Count];
-	}
-	const_iterator cend() const
-	{
-		return &Array[Count];
-	}
-
-	void Init(T *ptr, unsigned cnt)
-	{
-		Array = ptr;
-		Count = cnt;
-	}
-	// Return a reference to an element
-	T &operator[] (size_t index) const
-	{
-		return Array[index];
-	}
-	unsigned int Size() const
-	{
-		return Count;
-	}
-	// Some code needs to access these directly so they cannot be private.
-	T *Array;
-	unsigned int Count;
 };
 
 // TAutoGrowArray -----------------------------------------------------------
@@ -637,39 +417,9 @@ template<class KT> struct THashTraits
 {
 	// Returns the hash value for a key.
 	hash_t Hash(const KT key) { return (hash_t)(intptr_t)key; }
-	hash_t Hash(double key)
-	{
-		hash_t keyhash[2];
-		memcpy(&keyhash, &key, sizeof(keyhash));
-		return keyhash[0] ^ keyhash[1];
-	}
 
 	// Compares two keys, returning zero if they are the same.
 	int Compare(const KT left, const KT right) { return left != right; }
-};
-
-template<> struct THashTraits<float>
-{
-	// Use all bits when hashing singles instead of converting them to ints.
-	hash_t Hash(float key)
-	{
-		hash_t keyhash;
-		memcpy(&keyhash, &key, sizeof(keyhash));
-		return keyhash;
-	}
-	int Compare(float left, float right) { return left != right; }
-};
-
-template<> struct THashTraits<double>
-{
-	// Use all bits when hashing doubles instead of converting them to ints.
-	hash_t Hash(double key)
-	{
-		hash_t keyhash[2];
-		memcpy(&keyhash, &key, sizeof(keyhash));
-		return keyhash[0] ^ keyhash[1];
-	}
-	int Compare(double left, double right) { return left != right; }
 };
 
 template<class VT> struct TValueTraits
@@ -680,15 +430,6 @@ template<class VT> struct TValueTraits
 	{
 		::new(&value) VT;
 	}
-};
-
-// Must match layout of TMap
-struct FMap
-{
-	void *Nodes;
-	void *LastFree;
-	hash_t Size;
-	hash_t NumUsed;
 };
 
 template<class KT, class VT, class MapType> class TMapIterator;
@@ -1221,3 +962,4 @@ protected:
 	hash_t Position;
 };
 
+#endif //__TARRAY_H__

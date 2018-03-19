@@ -45,11 +45,24 @@
 //
 //==========================================================================
 
-class FFlatTexture : public FWorldTexture
+class FFlatTexture : public FTexture
 {
 public:
 	FFlatTexture (int lumpnum);
-	uint8_t *MakeTexture (FRenderStyle style) override;
+	~FFlatTexture ();
+
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload ();
+
+protected:
+	BYTE *Pixels;
+	Span DummySpans[2];
+
+
+	void MakeTexture ();
+
+	friend class FTexture;
 };
 
 
@@ -73,7 +86,7 @@ FTexture *FlatTexture_TryCreate(FileReader & file, int lumpnum)
 //==========================================================================
 
 FFlatTexture::FFlatTexture (int lumpnum)
-: FWorldTexture(NULL, lumpnum)
+: FTexture(NULL, lumpnum), Pixels(0)
 {
 	int area;
 	int bits;
@@ -95,6 +108,10 @@ FFlatTexture::FFlatTexture (int lumpnum)
 	WidthBits = HeightBits = bits;
 	Width = Height = 1 << bits;
 	WidthMask = (1 << bits) - 1;
+	DummySpans[0].TopOffset = 0;
+	DummySpans[0].Length = Height;
+	DummySpans[1].TopOffset = 0;
+	DummySpans[1].Length = 0;
 }
 
 //==========================================================================
@@ -103,17 +120,86 @@ FFlatTexture::FFlatTexture (int lumpnum)
 //
 //==========================================================================
 
-uint8_t *FFlatTexture::MakeTexture (FRenderStyle style)
+FFlatTexture::~FFlatTexture ()
 {
-	auto lump = Wads.OpenLumpReader (SourceLump);
-	auto Pixels = new uint8_t[Width*Height];
-	auto numread = lump.Read (Pixels, Width*Height);
+	Unload ();
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FFlatTexture::Unload ()
+{
+	if (Pixels != NULL)
+	{
+		delete[] Pixels;
+		Pixels = NULL;
+	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FFlatTexture::GetColumn (unsigned int column, const Span **spans_out)
+{
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	if ((unsigned)column >= (unsigned)Width)
+	{
+		if (WidthMask + 1 == Width)
+		{
+			column &= WidthMask;
+		}
+		else
+		{
+			column %= Width;
+		}
+	}
+	if (spans_out != NULL)
+	{
+		*spans_out = DummySpans;
+	}
+	return Pixels + column*Height;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FFlatTexture::GetPixels ()
+{
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	return Pixels;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FFlatTexture::MakeTexture ()
+{
+	FWadLump lump = Wads.OpenLumpNum (SourceLump);
+	Pixels = new BYTE[Width*Height];
+	long numread = lump.Read (Pixels, Width*Height);
 	if (numread < Width*Height)
 	{
 		memset (Pixels + numread, 0xBB, Width*Height - numread);
 	}
-	if (!(style.Flags & STYLEF_RedIsAlpha)) FTexture::FlipSquareBlockRemap (Pixels, Width, Height, GPalette.Remap);
-	else FTexture::FlipSquareBlock(Pixels, Width, Height);
-	return Pixels;
+	FlipSquareBlockRemap (Pixels, Width, Height, GPalette.Remap);
 }
 

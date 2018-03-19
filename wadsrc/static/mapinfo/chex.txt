@@ -1,6 +1,5 @@
 // MAPINFO for Chex Quest
 include "mapinfo/common.txt"
-include "mapinfo/doomitems.txt"
 
 gameinfo
 {
@@ -38,13 +37,12 @@ gameinfo
 	weaponslot = 7, "LAZDevice"
 	dimcolor = "ff d7 00"
 	dimamount = 0.2
-	bluramount = 0.0
-	menuslidercolor = "Orange"
 	definventorymaxamount = 25
 	defaultrespawntime = 12
 	defaultdropstyle = 1
 	dontcrunchcorpses = true
 	endoom = "ENDOOM"
+	player5start = 4001
 	drawreadthis = true
 	pickupcolor = "d7 ba 45"
 	quitmessages = "$QUITMSG", "$QUITMSG23", "$QUITMSG24", "$QUITMSG25", "$QUITMSG26", "$QUITMSG27", "$QUITMSG28", "$QUITMSG29"
@@ -67,69 +65,6 @@ gameinfo
 	statscreen_mapnamefont = "BigFont"
 	statscreen_finishedpatch = "WIF"
 	statscreen_enteringpatch = "WIENTER"
-	statscreen_coop = "CoopStatusScreen"
-	statscreen_dm = "DeathmatchStatusScreen"
-	statscreen_single = "DoomStatusScreen"
-	messageboxclass = "MessageBoxMenu"
-}
-
-DoomEdNums
-{
-     5 = ChexBlueCard
-     6 = ChexYellowCard
-     8 = Zorchpack
-     9 = FlemoidusBipedicus
-    13 = ChexRedCard
-    17 = PhasingZorchPack
-    25 = ChexTallFlower2
-    28 = ChexTallFlower
-    30 = ChexCavernStalagmite
-    31 = ChexSubmergedPlant
-    32 = ChexCavernColumn
-    33 = ChexMineCart
-    34 = ChexChemicalFlask
-    35 = ChexGasTank
-    37 = ChexFlagOnPole
-    41 = ChexChemicalBurner
-    43 = ChexOrangeTree
-    44 = ChexSlimeFountain
-    45 = ChexCivilian1
-    47 = ChexAppleTree
-    48 = ChexSpaceship
-    54 = ChexBananaTree
-    55 = ChexLightColumn
-    56 = ChexCivilian2
-    57 = ChexCivilian3
-    82 = SuperLargeZorcher
-  2001 = LargeZorcher
-  2002 = RapidZorcher
-  2003 = ZorchPropulsor
-  2004 = PhasingZorcher
-  2005 = SuperBootspork
-  2006 = LAZDevice
-  2007 = MiniZorchRecharge
-  2008 = LargeZorchRecharge
-  2010 = PropulsorZorch
-  2011 = BowlOfFruit
-  2012 = BowlOfVegetables
-  2013 = SuperchargeBreakfast
-  2014 = GlassOfWater
-  2015 = SlimeRepellent
-  2018 = ChexArmor
-  2019 = SuperChexArmor
-  2025 = SlimeProofSuit
-  2026 = ComputerAreaMap
-  2028 = ChexLandingLight
-  2046 = PropulsorZorchPack
-  2047 = PhasingZorch
-  2048 = MiniZorchPack
-  2049 = LargeZorchPack
-  3001 = ArmoredFlemoidusBipedicus
-  3002 = FlemoidusCycloptisCommonus
-  3003 = Flembrane
-  3004 = FlemoidusCommonus
-  3006 = ChexSoul
-  5010 = MiniZorcher
 }
 
 skill baby
@@ -261,24 +196,28 @@ map E1M5 lookup "CHUSTR_E1M5"
 cluster 1
 {
 	flat = "FLOOR4_8"
+	music = "$MUSIC_VICTOR"
 	exittext = lookup, "CE1TEXT"
 }
 
 cluster 2
 {
 	flat = "SFLR6_1"
+	music = "$MUSIC_VICTOR"
 	exittext = lookup, "CE2TEXT"
 }
 
 cluster 3
 {
 	flat = "MFLR8_4"
+	music = "$MUSIC_VICTOR"
 	exittext = lookup, "CE3TEXT"
 }
 
 cluster 4
 {
 	flat = "MFLR8_3"
+	music = "$MUSIC_VICTOR"
 	exittext = lookup, "CE4TEXT"
 }
 

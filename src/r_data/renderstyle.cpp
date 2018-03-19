@@ -32,16 +32,19 @@
 **
 */
 
+#include "farchive.h"
 #include "templates.h"
 #include "renderstyle.h"
 #include "c_cvars.h"
-#include "serializer.h"
 
 CVAR (Bool, r_drawtrans, true, 0)
 CVAR (Int, r_drawfuzz, 1, CVAR_ARCHIVE)
 
 // Convert legacy render styles to flexible render styles.
 
+// Apple's GCC 4.0.1 apparently wants to initialize the AsDWORD member of FRenderStyle
+// rather than the struct before it, which goes against the standard.
+#ifndef __APPLE__
 FRenderStyle LegacyRenderStyles[STYLE_Count] =
 {
 	{ { STYLEOP_None, STYLEALPHA_Zero, STYLEALPHA_Zero, 0 } },											/* STYLE_None */  
@@ -59,17 +62,47 @@ FRenderStyle LegacyRenderStyles[STYLE_Count] =
 	{ { STYLEOP_Add, STYLEALPHA_Src, STYLEALPHA_One, STYLEF_ColorIsFixed } },							/* STYLE_AddStencil */
 	{ { STYLEOP_Add, STYLEALPHA_Src, STYLEALPHA_One, STYLEF_RedIsAlpha | STYLEF_ColorIsFixed } },		/* STYLE_AddShaded */
 };
+#else
+FRenderStyle LegacyRenderStyles[STYLE_Count];
 
-double GetAlpha(int type, double alpha)
+static const BYTE Styles[STYLE_Count * 4] =
 {
-	switch (type)
+	STYLEOP_None, 		STYLEALPHA_Zero,	STYLEALPHA_Zero,	0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	STYLEF_Alpha1,
+	STYLEOP_Fuzz,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	STYLEF_TransSoulsAlpha,
+	STYLEOP_FuzzOrAdd,	STYLEALPHA_Src,		STYLEALPHA_InvSrc,	0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	STYLEF_Alpha1 | STYLEF_ColorIsFixed,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_One,		0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	STYLEF_RedIsAlpha | STYLEF_ColorIsFixed,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_InvSrc,	STYLEF_ColorIsFixed,
+	STYLEOP_Shadow,		0,					0,					0,
+	STYLEOP_RevSub,		STYLEALPHA_Src,		STYLEALPHA_One,		0,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_One,		STYLEF_Alpha1 | STYLEF_ColorIsFixed,
+	STYLEOP_Add,		STYLEALPHA_Src,		STYLEALPHA_One,		STYLEF_RedIsAlpha | STYLEF_ColorIsFixed,
+};
+
+static struct LegacyInit
+{
+	LegacyInit()
 	{
-	case STYLEALPHA_Zero:		return 0;
-	case STYLEALPHA_One:		return 1.;
-	case STYLEALPHA_Src:		return alpha;
-	case STYLEALPHA_InvSrc:		return 1. - alpha;
-	default:					return 0;
+		for (int i = 0; i < STYLE_Count; ++i)
+		{
+			LegacyRenderStyles[i].BlendOp = Styles[i*4];
+			LegacyRenderStyles[i].SrcAlpha = Styles[i*4+1];
+			LegacyRenderStyles[i].DestAlpha = Styles[i*4+2];
+			LegacyRenderStyles[i].Flags = Styles[i*4+3];
+		}
 	}
+} DoLegacyInit;
+
+#endif
+
+FArchive &operator<< (FArchive &arc, FRenderStyle &style)
+{
+	arc << style.BlendOp << style.SrcAlpha << style.DestAlpha << style.Flags;
+	return arc;
 }
 
 //==========================================================================
@@ -81,7 +114,7 @@ double GetAlpha(int type, double alpha)
 //
 //==========================================================================
 
-bool FRenderStyle::IsVisible(double alpha) const throw()
+bool FRenderStyle::IsVisible(fixed_t alpha) const throw()
 {
 	if (BlendOp == STYLEOP_None)
 	{
@@ -91,13 +124,13 @@ bool FRenderStyle::IsVisible(double alpha) const throw()
 	{
 		if (Flags & STYLEF_Alpha1)
 		{
-			alpha = 1.;
+			alpha = FRACUNIT;
 		}
 		else
 		{
-			alpha = clamp(alpha, 0., 1.);
+			alpha = clamp(alpha, 0, FRACUNIT);
 		}
-		return GetAlpha(SrcAlpha, alpha) != 0 || GetAlpha(DestAlpha, alpha) != 1;
+		return GetAlpha(SrcAlpha, alpha) != 0 || GetAlpha(DestAlpha, alpha) != FRACUNIT;
 	}
 	// Treat anything else as visible.
 	return true;
@@ -154,7 +187,15 @@ void FRenderStyle::CheckFuzz()
 	}
 }
 
-FSerializer &Serialize(FSerializer &arc, const char *key, FRenderStyle &style, FRenderStyle *def)
+fixed_t GetAlpha(int type, fixed_t alpha)
 {
-	return arc.Array(key, &style.BlendOp, def ? &def->BlendOp : nullptr, 4);
+	switch (type)
+	{
+	case STYLEALPHA_Zero:		return 0;
+	case STYLEALPHA_One:		return FRACUNIT;
+	case STYLEALPHA_Src:		return alpha;
+	case STYLEALPHA_InvSrc:		return FRACUNIT - alpha;
+	default:					return 0;
+	}
 }
+

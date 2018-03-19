@@ -46,7 +46,6 @@
 #include "c_console.h"
 #include "d_gui.h"
 #include "d_dehacked.h"
-#include "d_net.h"
 #include "g_game.h"
 #include "m_png.h"
 #include "m_misc.h"
@@ -62,6 +61,7 @@
 #include "cmdlib.h"
 #include "p_terrain.h"
 #include "decallib.h"
+#include "a_doomglobal.h"
 #include "autosegs.h"
 #include "i_cd.h"
 #include "stats.h"
@@ -70,9 +70,7 @@
 #include "r_sky.h"
 #include "p_lnspec.h"
 #include "m_crc32.h"
-#include "serializer.h"
-#include "g_levellocals.h"
-#include "files.h"
+#include "farchive.h"
 
 CVAR(Int, savestatistics, 0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR(String, statfile, "zdoomstat.txt", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -89,7 +87,7 @@ struct OneLevel
 	int totalkills, killcount;
 	int totalsecrets, secretcount;
 	int leveltime;
-	FString Levelname;
+	char levelname[9];
 };
 
 // Current game's statistics
@@ -137,7 +135,7 @@ static void ParseStatistics(const char *fn, TArray<FStatistics> &statlist)
 	try
 	{
 		FScanner sc;
-		if (!sc.OpenFile(fn)) return;
+		sc.OpenFile(fn);
 
 		while (sc.GetString())
 		{
@@ -211,7 +209,7 @@ void ReadStatistics()
 //
 // ====================================================================
 
-int compare_episode_names(const void *a, const void *b)
+int STACK_ARGS compare_episode_names(const void *a, const void *b)
 {
 	FStatistics *A = (FStatistics*)a;
 	FStatistics *B = (FStatistics*)b;
@@ -219,7 +217,7 @@ int compare_episode_names(const void *a, const void *b)
 	return strnatcasecmp(A->epi_header, B->epi_header);
 }
 
-int compare_level_names(const void *a, const void *b)
+int STACK_ARGS compare_level_names(const void *a, const void *b)
 {
 	FLevelStatistics *A = (FLevelStatistics*)a;
 	FLevelStatistics *B = (FLevelStatistics*)b;
@@ -227,7 +225,7 @@ int compare_level_names(const void *a, const void *b)
 	return strnatcasecmp(A->name, B->name);
 }
 
-int compare_dates(const void *a, const void *b)
+int STACK_ARGS compare_dates(const void *a, const void *b)
 {
 	FLevelStatistics *A = (FLevelStatistics*)a;
 	FLevelStatistics *B = (FLevelStatistics*)b;
@@ -261,8 +259,8 @@ static void SaveStatistics(const char *fn, TArray<FStatistics> &statlist)
 {
 	unsigned int j;
 
-	FileWriter *fw = FileWriter::Open(fn);
-	if (fw == nullptr) return;
+	FILE * f = fopen(fn, "wt");
+	if (f==NULL) return;
 
 	qsort(&statlist[0], statlist.Size(), sizeof(statlist[0]), compare_episode_names);
 	for(unsigned i=0;i<statlist.Size ();i++)
@@ -271,34 +269,34 @@ static void SaveStatistics(const char *fn, TArray<FStatistics> &statlist)
 
 		qsort(&ep_stats.stats[0], ep_stats.stats.Size(), sizeof(ep_stats.stats[0]), compare_dates);
 
-		fw->Printf("%s \"%s\"\n{\n", ep_stats.epi_header.GetChars(), ep_stats.epi_name.GetChars());
+		fprintf(f, "%s \"%s\"\n{\n", ep_stats.epi_header.GetChars(), ep_stats.epi_name.GetChars());
 		for(j=0;j<ep_stats.stats.Size();j++)
 		{
 			FSessionStatistics *sst = &ep_stats.stats[j];
 			if (sst->info[0]>0)
 			{
-				fw->Printf("\t%2i. %10s \"%-22s\" %02d:%02d:%02d %i\n", j+1, sst->name, sst->info, 
+				fprintf(f,"\t%2i. %10s \"%-22s\" %02d:%02d:%02d %i\n", j+1, sst->name, sst->info, 
 					hours(sst->timeneeded),	minutes(sst->timeneeded), seconds(sst->timeneeded),	sst->skill);
 
 				TArray<FLevelStatistics> &ls = sst->levelstats;
 				if (ls.Size() > 0)
 				{
-					fw->Printf("\t{\n");
+					fprintf(f,"\t{\n");
 
 					qsort(&ls[0], ls.Size(), sizeof(ls[0]), compare_level_names);
 
 					for(unsigned k=0;k<ls.Size ();k++)
 					{
-						fw->Printf("\t\t%-8s \"%-22s\" %02d:%02d:%02d\n", ls[k].name, ls[k].info, 
+						fprintf(f, "\t\t%-8s \"%-22s\" %02d:%02d:%02d\n", ls[k].name, ls[k].info, 
 							hours(ls[k].timeneeded), minutes(ls[k].timeneeded), seconds(ls[k].timeneeded));
 					}
-					fw->Printf("\t}\n");
+					fprintf(f,"\t}\n");
 				}
 			}
 		}
-		fw->Printf("}\n\n");
+		fprintf(f,"}\n\n");
 	}
-	delete fw;
+	fclose(f);
 }
 
 
@@ -410,18 +408,19 @@ static void StoreLevelStats()
 	{
 		for(i=0;i<LevelData.Size();i++)
 		{
-			if (!LevelData[i].Levelname.CompareNoCase(level.MapName)) break;
+			if (!stricmp(LevelData[i].levelname, level.MapName)) break;
 		}
 		if (i==LevelData.Size())
 		{
 			LevelData.Reserve(1);
-			LevelData[i].Levelname = level.MapName;
+			strncpy(LevelData[i].levelname, level.MapName, 8);
+			LevelData[i].levelname[8] = 0;
 		}
 		LevelData[i].totalkills = level.total_monsters;
 		LevelData[i].killcount = level.killed_monsters;
 		LevelData[i].totalsecrets = level.total_secrets;
 		LevelData[i].secretcount = level.found_secrets;
-		LevelData[i].leveltime = level.maptime;
+		LevelData[i].leveltime = AdjustTics(level.maptime);
 
 		// Check for living monsters. On some maps it can happen
 		// that the counter misses some. 
@@ -491,11 +490,11 @@ void STAT_ChangeLevel(const char *newl)
 			}
 
 			infostring.Format("%4d/%4d, %3d/%3d, %2d", statvals[0], statvals[1], statvals[2], statvals[3], validlevels);
-			FSessionStatistics *es = StatisticsEntry(sl, infostring, level.totaltime);
+			FSessionStatistics *es = StatisticsEntry(sl, infostring, AdjustTics(level.totaltime));
 
 			for(unsigned i = 0; i < LevelData.Size(); i++)
 			{
-				FString lsection = LevelData[i].Levelname;
+				FString lsection = LevelData[i].levelname;
 				lsection.ToUpper();
 				infostring.Format("%4d/%4d, %3d/%3d",
 					 LevelData[i].killcount, LevelData[i].totalkills, LevelData[i].secretcount, LevelData[i].totalsecrets);
@@ -517,52 +516,64 @@ void STAT_ChangeLevel(const char *newl)
 //
 //==========================================================================
 
-FSerializer &Serialize(FSerializer &arc, const char *key, OneLevel &l, OneLevel *def)
-{
-	if (arc.BeginObject(key))
-	{
-		arc("totalkills", l.totalkills)
-			("killcount", l.killcount)
-			("totalsecrets", l.totalsecrets)
-			("secretcount", l.secretcount)
-			("leveltime", l.leveltime)
-			("levelname", l.Levelname)
-			.EndObject();
-	}
-	return arc;
-}
-
-void STAT_Serialize(FSerializer &arc)
+static void SerializeStatistics(FArchive &arc)
 {
 	FString startlevel;
 	int i = LevelData.Size();
 
-	if (arc.BeginObject("statistics"))
+	arc << i;
+
+	if (arc.IsLoading()) 
 	{
-		if (arc.isReading())
+		arc << startlevel;
+		StartEpisode = NULL;
+		for(unsigned int j=0;j<AllEpisodes.Size();j++)
 		{
-			arc("startlevel", startlevel);
-			StartEpisode = NULL;
-			for (unsigned int j = 0; j < AllEpisodes.Size(); j++)
+			if (!AllEpisodes[j].mEpisodeMap.CompareNoCase(startlevel))
 			{
-				if (!AllEpisodes[j].mEpisodeMap.CompareNoCase(startlevel))
-				{
-					StartEpisode = &AllEpisodes[j];
-					break;
-				}
+				StartEpisode = &AllEpisodes[j];
+				break;
 			}
-			LevelData.Resize(i);
 		}
-		else
-		{
-			if (StartEpisode != NULL) startlevel = StartEpisode->mEpisodeMap;
-			arc("startlevel", startlevel);
-		}
-		arc("levels", LevelData);
-		arc.EndObject();
+		LevelData.Resize(i);
+	}
+	else
+	{
+		if (StartEpisode != NULL) startlevel = StartEpisode->mEpisodeMap;
+		arc << startlevel;
+	}
+	for(int j = 0; j < i; j++)
+	{
+		OneLevel &l = LevelData[j];
+
+		arc << l.totalkills 
+			<< l.killcount  
+			<< l.totalsecrets
+			<< l.secretcount
+			<< l.leveltime;
+
+		if (arc.IsStoring()) arc.WriteName(l.levelname);
+		else strcpy(l.levelname, arc.ReadName());
 	}
 }
 
+#define STAT_ID			MAKE_ID('s','T','a','t')
+
+void STAT_Write(FILE *file)
+{
+	FPNGChunkArchive arc (file, STAT_ID);
+	SerializeStatistics(arc);
+}
+
+void STAT_Read(PNGHandle *png)
+{
+	DWORD chunkLen = (DWORD)M_FindPNGChunk (png, STAT_ID);
+	if (chunkLen != 0)
+	{
+		FPNGChunkArchive arc (png->File->GetFile(), STAT_ID, chunkLen);
+		SerializeStatistics(arc);
+	}
+}
 
 //==========================================================================
 //
@@ -577,7 +588,7 @@ FString GetStatString()
 	{
 		OneLevel *l = &LevelData[i];
 		compose.AppendFormat("Level %s - Kills: %d/%d - Secrets: %d/%d - Time: %d:%02d\n", 
-			l->Levelname.GetChars(), l->killcount, l->totalkills, l->secretcount, l->totalsecrets,
+			l->levelname, l->killcount, l->totalkills, l->secretcount, l->totalsecrets,
 			l->leveltime/(60*TICRATE), (l->leveltime/TICRATE)%60);
 	}
 	return compose;
@@ -592,14 +603,8 @@ CCMD(printstats)
 
 CCMD(finishgame)
 {
-	bool gamestatecheck = gamestate == GS_LEVEL || gamestate == GS_INTERMISSION || gamestate == GS_FINALE;
-	if (!gamestatecheck)
-	{
-		Printf("Cannot use 'finishgame' while not in a game!\n");
-		return;
-	}
 	// This CCMD simulates an end-of-game action and exists to end mods that never exit their last level.
-	Net_WriteByte(DEM_FINISHGAME);
+	G_ChangeLevel(NULL, 0, 0);
 }
 
 ADD_STAT(statistics)

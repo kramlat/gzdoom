@@ -7,8 +7,8 @@
 
 union FMD5Holder
 {
-	uint8_t Bytes[16];
-	uint32_t DWords[4];
+	BYTE Bytes[16];
+	DWORD DWords[4];
 	hash_t Hash;
 };
 

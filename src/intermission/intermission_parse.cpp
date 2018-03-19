@@ -113,7 +113,7 @@ bool FIntermissionAction::ParseKey(FScanner &sc)
 		if (!sc.CheckToken('-'))
 		{
 			sc.MustGetFloat();
-			mDuration = int(sc.Float*TICRATE);
+			mDuration = xs_RoundToInt(sc.Float*TICRATE);
 		}
 		else
 		{
@@ -299,7 +299,7 @@ bool FIntermissionActionTextscreen::ParseKey(FScanner &sc)
 		else
 		{
 			// only print an error if coming from a PWAD
-			if (Wads.GetLumpFile(sc.LumpNum) > Wads.GetIwadNum())
+			if (Wads.GetLumpFile(sc.LumpNum) > 1)
 				sc.ScriptMessage("Unknown text lump '%s'", sc.String);
 			mText.Format("Unknown text lump '%s'", sc.String);
 		}
@@ -329,7 +329,7 @@ bool FIntermissionActionTextscreen::ParseKey(FScanner &sc)
 		if (!sc.CheckToken('-'))
 		{
 			sc.MustGetFloat();
-			mTextDelay = int(sc.Float*TICRATE);
+			mTextDelay = xs_RoundToInt(sc.Float*TICRATE);
 		}
 		else
 		{
@@ -382,10 +382,10 @@ bool FIntermissionActionCast::ParseKey(FScanner &sc)
 		FCastSound *cs = &mCastSounds[mCastSounds.Reserve(1)];
 		sc.MustGetToken('=');
 		sc.MustGetToken(TK_StringConst);
-		cs->mSequence = (uint8_t)sc.MatchString(seqs);
+		cs->mSequence = (BYTE)sc.MatchString(seqs);
 		sc.MustGetToken(',');
 		sc.MustGetToken(TK_IntConst);
-		cs->mIndex = (uint8_t)sc.Number;
+		cs->mIndex = (BYTE)sc.Number;
 		sc.MustGetToken(',');
 		sc.MustGetToken(TK_StringConst);
 		cs->mSound = sc.String;
@@ -438,7 +438,7 @@ bool FIntermissionActionScroller::ParseKey(FScanner &sc)
 		if (!sc.CheckToken('-'))
 		{
 			sc.MustGetFloat();
-			mScrollDelay = int(sc.Float*TICRATE);
+			mScrollDelay = xs_RoundToInt(sc.Float*TICRATE);
 		}
 		else
 		{
@@ -453,7 +453,7 @@ bool FIntermissionActionScroller::ParseKey(FScanner &sc)
 		if (!sc.CheckToken('-'))
 		{
 			sc.MustGetFloat();
-			mScrollTime = int(sc.Float*TICRATE);
+			mScrollTime = xs_RoundToInt(sc.Float*TICRATE);
 		}
 		else
 		{
@@ -573,7 +573,7 @@ void FMapInfoParser::ParseIntermission()
 
 struct EndSequence
 {
-	int8_t EndType;
+	SBYTE EndType;
 	bool MusicLooping;
 	bool PlayTheEnd;
 	FString PicName;
@@ -724,18 +724,6 @@ FName FMapInfoParser::ParseEndGame()
 //
 //==========================================================================
 
-FName MakeEndPic(const char *string)
-{
-	FString seqname;
-	seqname << "@EndPic_" << string;
-	FIntermissionDescriptor *desc = new FIntermissionDescriptor;
-	FIntermissionAction *action = new FIntermissionAction;
-	action->mBackground = string;
-	desc->mActions.Push(action);
-	ReplaceIntermission(seqname, desc);
-	return FName(seqname);
-}
-
 FName FMapInfoParser::CheckEndSequence()
 {
 	const char *seqname = NULL;
@@ -768,7 +756,14 @@ FName FMapInfoParser::CheckEndSequence()
 	{
 		ParseComma();
 		sc.MustGetString ();
-		return MakeEndPic(sc.String);
+		FString seqname;
+		seqname << "@EndPic_" << sc.String;
+		FIntermissionDescriptor *desc = new FIntermissionDescriptor;
+		FIntermissionAction *action = new FIntermissionAction;
+		action->mBackground = sc.String;
+		desc->mActions.Push(action);
+		ReplaceIntermission(seqname, desc);
+		return FName(seqname);
 	}
 	else if (sc.Compare("endbunny"))
 	{

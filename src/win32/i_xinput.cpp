@@ -1,36 +1,3 @@
-/*
-**
-**
-**---------------------------------------------------------------------------
-** Copyright 2005-2016 Randy Heit
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
-
 #ifndef NO_XINPUT
 
 // HEADER FILES ------------------------------------------------------------
@@ -42,6 +9,7 @@
 #include <malloc.h>
 #include <limits.h>
 
+#define USE_WINDOWS_DWORD
 #include "i_input.h"
 #include "i_system.h"
 #include "d_event.h"
@@ -58,23 +26,6 @@
 #include "m_argv.h"
 
 // MACROS ------------------------------------------------------------------
-
-// This macro is defined by newer versions of xinput.h. In case we are
-// compiling with an older version, define it here.
-#ifndef XUSER_MAX_COUNT
-#define XUSER_MAX_COUNT                 4
-#endif
-
-// MinGW
-#ifndef XINPUT_DLL
-#define XINPUT_DLL_A  "xinput1_3.dll"
-#define XINPUT_DLL_W L"xinput1_3.dll"
-#ifdef UNICODE
-    #define XINPUT_DLL XINPUT_DLL_W
-#else
-    #define XINPUT_DLL XINPUT_DLL_A
-#endif
-#endif
 
 // TYPES -------------------------------------------------------------------
 
@@ -123,7 +74,7 @@ protected:
 		float DeadZone;
 		float Multiplier;
 		EJoyAxis GameAxis;
-		uint8_t ButtonValue;
+		BYTE ButtonValue;
 	};
 	struct DefaultAxisConfig
 	{
@@ -147,7 +98,7 @@ protected:
 	AxisInfo Axes[NUM_AXES];
 	static DefaultAxisConfig DefaultAxes[NUM_AXES];
 	DWORD LastPacketNumber;
-	int LastButtons;
+	WORD LastButtons;
 	bool Connected;
 
 	void Attached();
@@ -165,7 +116,7 @@ public:
 
 	bool GetDevice();
 	void ProcessInput();
-	bool WndProcHook(HWND hWnd, uint32_t message, WPARAM wParam, LPARAM lParam, LRESULT *result);
+	bool WndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT *result);
 	void AddAxes(float axes[NUM_JOYAXIS]);
 	void GetDevices(TArray<IJoystickConfig *> &sticks);
 	IJoystickConfig *Rescan();
@@ -319,7 +270,7 @@ void FXInputController::ProcessInput()
 void FXInputController::ProcessThumbstick(int value1, AxisInfo *axis1,
 	int value2, AxisInfo *axis2, int base)
 {
-	uint8_t buttonstate;
+	BYTE buttonstate;
 	double axisval1, axisval2;
 	
 	axisval1 = (value1 - SHRT_MIN) * 2.0 / 65536 - 1.0;
@@ -346,7 +297,7 @@ void FXInputController::ProcessThumbstick(int value1, AxisInfo *axis1,
 
 void FXInputController::ProcessTrigger(int value, AxisInfo *axis, int base)
 {
-	uint8_t buttonstate;
+	BYTE buttonstate;
 	double axisval;
 	
 	axisval = Joy_RemoveDeadZone(value / 256.0, axis->DeadZone, &buttonstate);
@@ -671,10 +622,8 @@ FXInputManager::FXInputManager()
 		InputSetState = (XInputSetStateType)GetProcAddress(XInputDLL, "XInputSetState");
 		InputGetCapabilities = (XInputGetCapabilitiesType)GetProcAddress(XInputDLL, "XInputGetCapabilities");
 		InputEnable = (XInputEnableType)GetProcAddress(XInputDLL, "XInputEnable");
-		// Treat XInputEnable() function as optional
-		// It is not available in xinput9_1_0.dll which is XINPUT_DLL in modern SDKs
-		// See https://msdn.microsoft.com/en-us/library/windows/desktop/hh405051(v=vs.85).aspx
-		if (InputGetState == NULL || InputSetState == NULL || InputGetCapabilities == NULL)
+		if (InputGetState == NULL || InputSetState == NULL || InputGetCapabilities == NULL ||
+			InputEnable == NULL)
 		{
 			FreeLibrary(XInputDLL);
 			XInputDLL = NULL;
@@ -781,9 +730,9 @@ void FXInputManager::GetDevices(TArray<IJoystickConfig *> &sticks)
 //
 //===========================================================================
 
-bool FXInputManager::WndProcHook(HWND hWnd, uint32_t message, WPARAM wParam, LPARAM lParam, LRESULT *result)
+bool FXInputManager::WndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT *result)
 {
-	if (nullptr != InputEnable && message == WM_ACTIVATE)
+	if (message == WM_ACTIVATE)
 	{
 		if (LOWORD(wParam) == WA_INACTIVE)
 		{
@@ -834,17 +783,11 @@ void I_StartupXInput()
 			{
 				JoyDevices[INPUT_XInput] = joys;
 			}
-			else
-			{
-				delete joys;
-			}
 		}
 	}
 }
 
 #else	// NO_XINPUT
-
-#include "i_input.h"
 
 void I_StartupXInput()
 {

@@ -1,24 +1,20 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1994-1996 Raven Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// $Log:$
 //
 // DESCRIPTION:
 //		Handling interactions (i.e., collisions).
@@ -51,7 +47,8 @@
 
 #include "b_bot.h"	//Added by MC:
 
-#include "d_player.h"
+#include "ravenshared.h"
+#include "a_hexenglobal.h"
 #include "a_sharedglobal.h"
 #include "a_pickups.h"
 #include "gi.h"
@@ -61,12 +58,8 @@
 #include "g_level.h"
 #include "d_net.h"
 #include "d_netinf.h"
-#include "a_morph.h"
-#include "vm.h"
-#include "g_levellocals.h"
-#include "events.h"
-#include "actorinlines.h"
 
+static FRandom pr_obituary ("Obituary");
 static FRandom pr_botrespawn ("BotRespawn");
 static FRandom pr_killmobj ("ActorDie");
 FRandom pr_damagemobj ("ActorTakeDamage");
@@ -79,11 +72,9 @@ CVAR (Bool, cl_showsprees, true, CVAR_ARCHIVE)
 CVAR (Bool, cl_showmultikills, true, CVAR_ARCHIVE)
 EXTERN_CVAR (Bool, show_obituaries)
 
-CVAR (Float, sv_damagefactormobj, 1.0, CVAR_SERVERINFO|CVAR_CHEAT)
-CVAR (Float, sv_damagefactorfriendly, 1.0, CVAR_SERVERINFO|CVAR_CHEAT)
-CVAR (Float, sv_damagefactorplayer, 1.0, CVAR_SERVERINFO|CVAR_CHEAT)
 
 FName MeansOfDeath;
+bool FriendlyFire;
 
 //
 // GET STUFF
@@ -94,11 +85,11 @@ FName MeansOfDeath;
 //
 void P_TouchSpecialThing (AActor *special, AActor *toucher)
 {
-	double delta = special->Z() - toucher->Z();
+	fixed_t delta = special->z - toucher->z;
 
 	// The pickup is at or above the toucher's feet OR
 	// The pickup is below the toucher.
-	if (delta > toucher->Height || delta < MIN(-32., -special->Height))
+	if (delta > toucher->height || delta < MIN(-32*FRACUNIT, -special->height))
 	{ // out of reach
 		return;
 	}
@@ -109,12 +100,13 @@ void P_TouchSpecialThing (AActor *special, AActor *toucher)
 		return;
 
 	//Added by MC: Finished with this destination.
-	if (toucher->player != NULL && toucher->player->Bot != NULL && special == toucher->player->Bot->dest)
+	if (toucher->player != NULL && toucher->player->isbot && special == toucher->player->dest)
 	{
-		toucher->player->Bot->prev = toucher->player->Bot->dest;
-		toucher->player->Bot->dest = NULL;
+		toucher->player->prev = toucher->player->dest;
+    	toucher->player->dest = NULL;
 	}
-	special->CallTouch (toucher);
+
+	special->Touch (toucher);
 }
 
 
@@ -190,19 +182,26 @@ void SexMessage (const char *from, char *to, int gender, const char *victim, con
 void ClientObituary (AActor *self, AActor *inflictor, AActor *attacker, int dmgflags)
 {
 	FName mod;
-	FString ret;
 	const char *message;
 	const char *messagename;
 	char gendermessage[1024];
+	bool friendly;
+	int  gender;
 
 	// No obituaries for non-players, voodoo dolls or when not wanted
 	if (self->player == NULL || self->player->mo != self || !show_obituaries)
 		return;
 
+	gender = self->player->userinfo.GetGender();
+
 	// Treat voodoo dolls as unknown deaths
 	if (inflictor && inflictor->player && inflictor->player->mo != inflictor)
 		MeansOfDeath = NAME_None;
 
+	if (multiplayer && !deathmatch)
+		FriendlyFire = true;
+
+	friendly = FriendlyFire;
 	mod = MeansOfDeath;
 	message = NULL;
 	messagename = NULL;
@@ -221,48 +220,95 @@ void ClientObituary (AActor *self, AActor *inflictor, AActor *attacker, int dmgf
 		}
 	}
 
-	FString obit = DamageTypeDefinition::GetObituary(mod);
-	if (attacker == nullptr && obit.IsNotEmpty()) messagename = obit;
-	else
+	switch (mod)
 	{
-		switch (mod)
-		{
-		case NAME_Suicide:		messagename = "$OB_SUICIDE";	break;
-		case NAME_Falling:		messagename = "$OB_FALLING";	break;
-		case NAME_Crush:		messagename = "$OB_CRUSH";		break;
-		case NAME_Exit:			messagename = "$OB_EXIT";		break;
-		case NAME_Drowning:		messagename = "$OB_WATER";		break;
-		case NAME_Slime:		messagename = "$OB_SLIME";		break;
-		case NAME_Fire:			messagename = "$OB_LAVA";		break;
-		}
+	case NAME_Suicide:		messagename = "OB_SUICIDE";		break;
+	case NAME_Falling:		messagename = "OB_FALLING";		break;
+	case NAME_Crush:		messagename = "OB_CRUSH";		break;
+	case NAME_Exit:			messagename = "OB_EXIT";		break;
+	case NAME_Drowning:		messagename = "OB_WATER";		break;
+	case NAME_Slime:		messagename = "OB_SLIME";		break;
+	case NAME_Fire:			if (attacker == NULL) messagename = "OB_LAVA";		break;
 	}
 
 	// Check for being killed by a voodoo doll.
 	if (inflictor && inflictor->player && inflictor->player->mo != inflictor)
 	{
-		messagename = "$OB_VOODOO";
+		messagename = "OB_VOODOO";
 	}
+
+	if (messagename != NULL)
+		message = GStrings(messagename);
 
 	if (attacker != NULL && message == NULL)
 	{
 		if (attacker == self)
 		{
-			message = "$OB_KILLEDSELF";
+			message = GStrings("OB_KILLEDSELF");
 		}
-		else 
+		else if (attacker->player == NULL)
 		{
-			IFVIRTUALPTR(attacker, AActor, GetObituary)
+			if (mod == NAME_Telefrag)
 			{
-				VMValue params[] = { attacker, self, inflictor, mod.GetIndex(), !!(dmgflags & DMG_PLAYERATTACK) };
-				VMReturn rett(&ret);
-				VMCall(func, params, countof(params), &rett, 1);
-				if (ret.IsNotEmpty()) message = ret;
+				message = GStrings("OB_MONTELEFRAG");
+			}
+			else if (mod == NAME_Melee)
+			{
+				message = attacker->GetClass()->Meta.GetMetaString (AMETA_HitObituary);
+				if (message == NULL)
+				{
+					message = attacker->GetClass()->Meta.GetMetaString (AMETA_Obituary);
+				}
+			}
+			else
+			{
+				message = attacker->GetClass()->Meta.GetMetaString (AMETA_Obituary);
 			}
 		}
 	}
-	if (message == nullptr) message = messagename;	// fallback to defaults if possible.
-	if (attacker == nullptr) attacker = self; // world
-	if (attacker->player == nullptr) attacker = self;	// for the message creation
+
+	if (message == NULL && attacker != NULL && attacker->player != NULL)
+	{
+		if (friendly)
+		{
+			attacker->player->fragcount -= 2;
+			attacker->player->frags[attacker->player - players]++;
+			self = attacker;
+			gender = self->player->userinfo.GetGender();
+			mysnprintf (gendermessage, countof(gendermessage), "OB_FRIENDLY%c", '1' + (pr_obituary() & 3));
+			message = GStrings(gendermessage);
+		}
+		else
+		{
+			if (mod == NAME_Telefrag) message = GStrings("OB_MPTELEFRAG");
+			if (message == NULL)
+			{
+				if (inflictor != NULL)
+				{
+					message = inflictor->GetClass()->Meta.GetMetaString (AMETA_Obituary);
+				}
+				if (message == NULL && (dmgflags & DMG_PLAYERATTACK) && attacker->player->ReadyWeapon != NULL)
+				{
+					message = attacker->player->ReadyWeapon->GetClass()->Meta.GetMetaString (AMETA_Obituary);
+				}
+				if (message == NULL)
+				{
+					switch (mod)
+					{
+					case NAME_BFGSplash:	messagename = "OB_MPBFG_SPLASH";	break;
+					case NAME_Railgun:		messagename = "OB_RAILGUN";			break;
+					}
+					if (messagename != NULL)
+						message = GStrings(messagename);
+				}
+				if (message == NULL)
+				{
+					message = attacker->GetClass()->Meta.GetMetaString (AMETA_Obituary);
+				}
+			}
+		}
+	}
+	else attacker = self;	// for the message creation
 
 	if (message != NULL && message[0] == '$') 
 	{
@@ -278,7 +324,7 @@ void ClientObituary (AActor *self, AActor *inflictor, AActor *attacker, int dmgf
 	if (message == NULL || strlen(message) <= 0)
 		return;
 		
-	SexMessage (message, gendermessage, self->player->userinfo.GetGender(),
+	SexMessage (message, gendermessage, gender,
 		self->player->userinfo.GetName(), attacker->player->userinfo.GetName());
 	Printf (PRINT_MEDIUM, "%s\n", gendermessage);
 }
@@ -292,7 +338,8 @@ EXTERN_CVAR (Int, fraglimit)
 void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 {
 	// Handle possible unmorph on death
-	bool wasgibbed = (health < GetGibHealth());
+	bool wasgibbed = (health < GibHealth());
+
 	AActor *realthis = NULL;
 	int realstyle = 0;
 	int realhealth = 0;
@@ -302,13 +349,13 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 		{
 			if (wasgibbed)
 			{
-				int realgibhealth = realthis->GetGibHealth();
+				int realgibhealth = realthis->GibHealth();
 				if (realthis->health >= realgibhealth)
 				{
 					realthis->health = realgibhealth -1; // if morphed was gibbed, so must original be (where allowed)l
 				}
 			}
-			realthis->CallDie(source, inflictor, dmgflags);
+			realthis->Die(source, inflictor, dmgflags);
 		}
 		return;
 	}
@@ -319,22 +366,18 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 
 	if (debugfile && this->player)
 	{
-		static int dieticks[MAXPLAYERS]; // [ZzZombo] not used? Except if for peeking in debugger...
+		static int dieticks[MAXPLAYERS];
 		int pnum = int(this->player-players);
 		dieticks[pnum] = gametic;
-		fprintf(debugfile, "died (%d) on tic %d (%s)\n", pnum, gametic,
-			this->player->cheats&CF_PREDICTING ? "predicting" : "real");
+		fprintf (debugfile, "died (%d) on tic %d (%s)\n", pnum, gametic,
+		this->player->cheats&CF_PREDICTING?"predicting":"real");
 	}
 
 	// [RH] Notify this actor's items.
 	for (AInventory *item = Inventory; item != NULL; )
 	{
 		AInventory *next = item->Inventory;
-		IFVIRTUALPTR(item, AInventory, OwnerDied)
-		{
-			VMValue params[1] = { item };
-			VMCall(func, params, 1, nullptr, 0);
-		}
+		item->OwnerDied();
 		item = next;
 	}
 
@@ -349,15 +392,6 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 		target = source;
 	}
 
-	// [ZZ] Fire WorldThingDied script hook.
-	E_WorldThingDied(this, inflictor);
-
-	// [JM] Fire KILL type scripts for actor. Not needed for players, since they have the "DEATH" script type.
-	if (!player && !(flags7 & MF7_NOKILLSCRIPTS) && ((flags7 & MF7_USEKILLSCRIPTS) || gameinfo.forcekillscripts))
-	{
-		FBehavior::StaticStartTypedScripts(SCRIPT_Kill, this, true, 0, true);
-	}
-
 	flags &= ~(MF_SHOOTABLE|MF_FLOAT|MF_SKULLFLY);
 	if (!(flags4 & MF4_DONTFALL)) flags&=~MF_NOGRAVITY;
 	flags |= MF_DROPOFF;
@@ -370,11 +404,23 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 	}
 	flags6 |= MF6_KILLED;
 
-	IFVIRTUAL(AActor, GetDeathHeight)
+	// [RH] Allow the death height to be overridden using metadata.
+	fixed_t metaheight = 0;
+	if (DamageType == NAME_Fire)
 	{
-		VMValue params[] = { (DObject*)this };
-		VMReturn ret(&Height);
-		VMCall(func, params, 1, &ret, 1);
+		metaheight = GetClass()->Meta.GetMetaFixed (AMETA_BurnHeight);
+	}
+	if (metaheight == 0)
+	{
+		metaheight = GetClass()->Meta.GetMetaFixed (AMETA_DeathHeight);
+	}
+	if (metaheight != 0)
+	{
+		height = MAX<fixed_t> (metaheight, 0);
+	}
+	else
+	{
+		height >>= 2;
 	}
 
 	// [RH] If the thing has a special, execute and remove it
@@ -415,7 +461,7 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 					SexMessage (GStrings("SPREEKILLSELF"), buff,
 						player->userinfo.GetGender(), player->userinfo.GetName(),
 						player->userinfo.GetName());
-					StatusBar->AttachMessage (Create<DHUDMessageFadeOut>(SmallFont, buff,
+					StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, buff,
 							1.5f, 0.2f, 0, 0, CR_WHITE, 3.f, 0.5f), MAKE_ID('K','S','P','R'));
 				}
 			}
@@ -424,21 +470,12 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 				if ((dmflags2 & DF2_YES_LOSEFRAG) && deathmatch)
 					player->fragcount--;
 
-				if (this->IsTeammate(source))
-				{
-					source->player->fragcount--;
-				}
-				else
-				{
-					++source->player->fragcount;
-					++source->player->spreecount;
-				}
-
+				++source->player->fragcount;
+				++source->player->spreecount;
 				if (source->player->morphTics)
 				{ // Make a super chicken
-					source->GiveInventoryType (PClass::FindActor(NAME_PowerWeaponLevel2));
+					source->GiveInventoryType (RUNTIME_CLASS(APowerWeaponLevel2));
 				}
-
 				if (deathmatch && cl_showsprees)
 				{
 					const char *spreemsg;
@@ -472,7 +509,7 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 						{
 							SexMessage (GStrings("SPREEOVER"), buff, player->userinfo.GetGender(),
 								player->userinfo.GetName(), source->player->userinfo.GetName());
-							StatusBar->AttachMessage (Create<DHUDMessageFadeOut> (SmallFont, buff,
+							StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, buff,
 								1.5f, 0.2f, 0, 0, CR_WHITE, 3.f, 0.5f), MAKE_ID('K','S','P','R'));
 						}
 					}
@@ -482,7 +519,7 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 						{
 							SexMessage (spreemsg, buff, player->userinfo.GetGender(),
 								player->userinfo.GetName(), source->player->userinfo.GetName());
-							StatusBar->AttachMessage (Create<DHUDMessageFadeOut> (SmallFont, buff,
+							StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, buff,
 								1.5f, 0.2f, 0, 0, CR_WHITE, 3.f, 0.5f), MAKE_ID('K','S','P','R'));
 						}
 					}
@@ -532,7 +569,7 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 							{
 								SexMessage (multimsg, buff, player->userinfo.GetGender(),
 									player->userinfo.GetName(), source->player->userinfo.GetName());
-								StatusBar->AttachMessage (Create<DHUDMessageFadeOut> (SmallFont, buff,
+								StatusBar->AttachMessage (new DHUDMessageFadeOut (SmallFont, buff,
 									1.5f, 0.8f, 0, 0, CR_RED, 3.f, 0.5f), MAKE_ID('M','K','I','L'));
 							}
 						}
@@ -556,14 +593,11 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 		// even those caused by other monsters
 		players[0].killcount++;
 	}
-
+	
 	if (player)
 	{
 		// [RH] Death messages
 		ClientObituary (this, inflictor, source, dmgflags);
-
-		// [ZZ] fire player death hook
-		E_PlayerDied(int(player - players));
 
 		// Death script execution, care of Skull Tag
 		FBehavior::StaticStartTypedScripts (SCRIPT_Death, this, true);
@@ -572,19 +606,19 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 		player->respawn_time = level.time + TICRATE;
 
 		//Added by MC: Respawn bots
-		if (bglobal.botnum && !demoplayback)
+		if (bglobal.botnum && consoleplayer == Net_Arbitrator && !demoplayback)
 		{
-			if (player->Bot != NULL)
-				player->Bot->t_respawn = (pr_botrespawn()%15)+((bglobal.botnum-1)*2)+TICRATE+1;
+			if (player->isbot)
+				player->t_respawn = (pr_botrespawn()%15)+((bglobal.botnum-1)*2)+TICRATE+1;
 
 			//Added by MC: Discard enemies.
 			for (int i = 0; i < MAXPLAYERS; i++)
 			{
-				if (players[i].Bot != NULL && this == players[i].Bot->enemy)
+				if (players[i].isbot && this == players[i].enemy)
 				{
-					if (players[i].Bot->dest ==  players[i].Bot->enemy)
-						players[i].Bot->dest = NULL;
-					players[i].Bot->enemy = NULL;
+					if (players[i].dest ==  players[i].enemy)
+						players[i].dest = NULL;
+					players[i].enemy = NULL;
 				}
 			}
 
@@ -625,8 +659,8 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 
 
 	FState *diestate = NULL;
-	int gibhealth = GetGibHealth();
-	ActorFlags4 iflags4 = inflictor == NULL ? ActorFlags4::FromInt(0) : inflictor->flags4;
+	int gibhealth = GibHealth();
+	int iflags4 = inflictor == NULL ? 0 : inflictor->flags4;
 	bool extremelydead = ((health < gibhealth || iflags4 & MF4_EXTREMEDEATH) && !(iflags4 & MF4_NOEXTREMEDEATH));
 
 	// Special check for 'extreme' damage type to ensure that it gets recorded properly as an extreme death for subsequent checks.
@@ -725,25 +759,7 @@ void AActor::Die (AActor *source, AActor *inflictor, int dmgflags)
 	}
 }
 
-DEFINE_ACTION_FUNCTION(AActor, Die)
-{
-	PARAM_SELF_PROLOGUE(AActor);
-	PARAM_OBJECT(source, AActor);
-	PARAM_OBJECT(inflictor, AActor);
-	PARAM_INT_DEF(dmgflags);
-	self->Die(source, inflictor, dmgflags);
-	return 0;
-}
 
-void AActor::CallDie(AActor *source, AActor *inflictor, int dmgflags)
-{
-	IFVIRTUAL(AActor, Die)
-	{
-		VMValue params[4] = { (DObject*)this, source, inflictor, dmgflags };
-		VMCall(func, params, 4, nullptr, 0);
-	}
-	else return Die(source, inflictor, dmgflags);
-}
 
 
 //---------------------------------------------------------------------------
@@ -788,7 +804,10 @@ static int UseHealthItems(TArray<AInventory *> &Items, int &saveHealth)
 			saveHealth -= maxhealth;
 			if (--Items[index]->Amount == 0)
 			{
-				Items[index]->DepleteOrDestroy ();
+				if (!(Items[index]->ItemFlags & IF_KEEPDEPLETED))
+				{
+					Items[index]->Destroy ();
+				}
 				Items.Delete(index);
 				break;
 			}
@@ -802,12 +821,11 @@ void P_AutoUseHealth(player_t *player, int saveHealth)
 	TArray<AInventory *> NormalHealthItems;
 	TArray<AInventory *> LargeHealthItems;
 
-	auto hptype = PClass::FindActor(NAME_HealthPickup);
 	for(AInventory *inv = player->mo->Inventory; inv != NULL; inv = inv->Inventory)
 	{
-		if (inv->Amount > 0 && inv->IsKindOf(hptype))
+		if (inv->Amount > 0 && inv->IsKindOf(RUNTIME_CLASS(AHealthPickup)))
 		{
-			int mode = inv->IntVar(NAME_autousemode);
+			int mode = static_cast<AHealthPickup*>(inv)->autousemode;
 
 			if (mode == 1) NormalHealthItems.Push(inv);
 			else if (mode == 2) LargeHealthItems.Push(inv);
@@ -847,12 +865,12 @@ void P_AutoUseStrifeHealth (player_t *player)
 {
 	TArray<AInventory *> Items;
 
-	auto hptype = PClass::FindActor(NAME_HealthPickup);
 	for(AInventory *inv = player->mo->Inventory; inv != NULL; inv = inv->Inventory)
 	{
-		if (inv->Amount > 0 && inv->IsKindOf(hptype))
+		if (inv->Amount > 0 && inv->IsKindOf(RUNTIME_CLASS(AHealthPickup)))
 		{
-			int mode = inv->IntVar(NAME_autousemode);
+			int mode = static_cast<AHealthPickup*>(inv)->autousemode;
+
 			if (mode == 3) Items.Push(inv);
 		}
 	}
@@ -903,99 +921,58 @@ void P_AutoUseStrifeHealth (player_t *player)
 
 static inline bool MustForcePain(AActor *target, AActor *inflictor)
 {
-	return (inflictor && (inflictor->flags6 & MF6_FORCEPAIN));
-}
-
-static inline bool isFakePain(AActor *target, AActor *inflictor, int damage)
-{
-	return ((target->flags7 & MF7_ALLOWPAIN && damage > 0) || ((inflictor != NULL) && (inflictor->flags7 & MF7_CAUSEPAIN)));
+	return (!(target->flags5 & MF5_NOPAIN) && inflictor != NULL &&
+		(inflictor->flags6 & MF6_FORCEPAIN) && !(inflictor->flags5 & MF5_PAINLESS));
 }
 
 
 // Returns the amount of damage actually inflicted upon the target, or -1 if
 // the damage was cancelled.
-static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int damage, FName mod, int flags, DAngle angle)
+int P_DamageMobj (AActor *target, AActor *inflictor, AActor *source, int damage, FName mod, int flags)
 {
-	DAngle ang;
+	unsigned ang;
 	player_t *player = NULL;
-	double thrust;
+	fixed_t thrust;
 	int temp;
 	int painchance = 0;
 	FState * woundstate = NULL;
+	PainChanceList * pc = NULL;
 	bool justhit = false;
-	bool plrDontThrust = false;
-	bool invulpain = false;
-	bool fakedPain = false;
-	bool forcedPain = false;
-	bool noPain = false;
-	int fakeDamage = 0;
-	int holdDamage = 0;
-	const int rawdamage = damage;
-	const bool telefragDamage = (rawdamage >= TELEFRAG_DAMAGE);
-	
-	if (damage < 0) damage = 0;
 
 	if (target == NULL || !((target->flags & MF_SHOOTABLE) || (target->flags6 & MF6_VULNERABLE)))
 	{ // Shouldn't happen
-		return 0;
-	}
-
-	// Rather than unnecessarily call the function over and over again, let's be a little more efficient.
-	// But first, check and see if it's even needed, which it won't be if pain must not be triggered.
-	noPain = ((flags & DMG_NO_PAIN) || (target->flags5 & MF5_NOPAIN) || (inflictor && (inflictor->flags5 & MF5_PAINLESS)));
-	if (!noPain)
-	{
-		fakedPain = (isFakePain(target, inflictor, damage));
-		forcedPain = (MustForcePain(target, inflictor));
+		return -1;
 	}
 
 	// Spectral targets only take damage from spectral projectiles.
-	if (target->flags4 & MF4_SPECTRAL && !telefragDamage)
+	if (target->flags4 & MF4_SPECTRAL && damage < TELEFRAG_DAMAGE)
 	{
 		if (inflictor == NULL || !(inflictor->flags4 & MF4_SPECTRAL))
 		{
-			return 0;
+			return -1;
 		}
 	}
 	if (target->health <= 0)
 	{
-		if (inflictor && mod == NAME_Ice && !(inflictor->flags7 & MF7_ICESHATTER))
+		if (inflictor && mod == NAME_Ice)
 		{
-			return 0;
+			return -1;
 		}
 		else if (target->flags & MF_ICECORPSE) // frozen
 		{
 			target->tics = 1;
 			target->flags6 |= MF6_SHATTERING;
-			target->Vel.Zero();
+			target->velx = target->vely = target->velz = 0;
 		}
-		return 0;
+		return -1;
 	}
-	if (target == source && (!telefragDamage || target->flags7 & MF7_LAXTELEFRAGDMG))
-	{
-		damage = int(damage * target->SelfDamageFactor);
-	}
-
-	// [MC] Changed it to check rawdamage here for consistency, even though that doesn't actually do anything
-	// different here. At any rate, invulnerable is being checked before type factoring, which is then being 
-	// checked by player cheats/invul/buddha followed by monster buddha. This is inconsistent. Don't let the 
-	// original telefrag damage CHECK (rawdamage) be influenced by outside factors when looking at cheats/invul.
-	if ((target->flags2 & MF2_INVULNERABLE) && !telefragDamage && (!(flags & DMG_FORCED)))
+	if ((target->flags2 & MF2_INVULNERABLE) && damage < TELEFRAG_DAMAGE && !(flags & DMG_FORCED))
 	{ // actor is invulnerable
 		if (target->player == NULL)
 		{
 			if (inflictor == NULL || (!(inflictor->flags3 & MF3_FOILINVUL) && !(flags & DMG_FOILINVUL)))
 			{
-				if (fakedPain)
-				{
-					// big mess here: What do we use for the pain threshold?
-					// We cannot run the various damage filters below so for consistency it needs to be 0.
-					damage = 0;
-					invulpain = true;
-					goto fakepain;
-				}
-				else
-					return 0;
+				return -1;
 			}
 		}
 		else
@@ -1003,15 +980,11 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 			// Players are optionally excluded from getting thrust by damage.
 			if (static_cast<APlayerPawn *>(target)->PlayerFlags & PPF_NOTHRUSTWHENINVUL)
 			{
-				if (fakedPain)
-					plrDontThrust = 1;
-				else
-					return 0;
+				return -1;
 			}
 		}
 		
 	}
-
 	if (inflictor != NULL)
 	{
 		if (inflictor->flags5 & MF5_PIERCEARMOR)
@@ -1019,166 +992,111 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 	}
 	
 	MeansOfDeath = mod;
+	FriendlyFire = false;
 	// [RH] Andy Baker's Stealth monsters
 	if (target->flags & MF_STEALTH)
 	{
-		target->Alpha = 1.;
+		target->alpha = OPAQUE;
 		target->visdir = -1;
 	}
 	if (target->flags & MF_SKULLFLY)
 	{
-		target->Vel.Zero();
+		target->velx = target->vely = target->velz = 0;
 	}
-
-	player = target->player;
-	if (!(flags & DMG_FORCED))	// DMG_FORCED skips all special damage checks, TELEFRAG_DAMAGE may not be reduced at all
+	if (!(flags & DMG_FORCED))	// DMG_FORCED skips all special damage checks
 	{
 		if (target->flags2 & MF2_DORMANT)
 		{
 			// Invulnerable, and won't wake up
-			return 0;
+			return -1;
+		}
+		player = target->player;
+		if (player && damage > 1 && damage < TELEFRAG_DAMAGE)
+		{
+			// Take half damage in trainer mode
+			damage = FixedMul(damage, G_SkillProperty(SKILLP_DamageFactor));
+		}
+		// Special damage types
+		if (inflictor)
+		{
+			if (inflictor->flags4 & MF4_SPECTRAL)
+			{
+				if (player != NULL)
+				{
+					if (!deathmatch && inflictor->FriendPlayer > 0)
+						return -1;
+				}
+				else if (target->flags4 & MF4_SPECTRAL)
+				{
+					if (inflictor->FriendPlayer == 0 && !target->IsHostile(inflictor))
+						return -1;
+				}
+			}
+
+			damage = inflictor->DoSpecialDamage (target, damage, mod);
+			if (damage == -1)
+			{
+				return -1;
+			}
+		}
+		// Handle active damage modifiers (e.g. PowerDamage)
+		if (source != NULL && source->Inventory != NULL)
+		{
+			int olddam = damage;
+			source->Inventory->ModifyDamage(olddam, mod, damage, false);
+			if (olddam != damage && damage <= 0)
+			{ // Still allow FORCEPAIN
+				if (MustForcePain(target, inflictor))
+				{
+					goto dopain;
+				}
+				return -1;
+			}
+		}
+		// Handle passive damage modifiers (e.g. PowerProtection)
+		if (target->Inventory != NULL)
+		{
+			int olddam = damage;
+			target->Inventory->ModifyDamage(olddam, mod, damage, true);
+			if (olddam != damage && damage <= 0)
+			{ // Still allow FORCEPAIN
+				if (MustForcePain(target, inflictor))
+				{
+					goto dopain;
+				}
+				return -1;
+			}
 		}
 
-		if (!telefragDamage || (target->flags7 & MF7_LAXTELEFRAGDMG)) // TELEFRAG_DAMAGE may only be reduced with LAXTELEFRAGDMG or it may not guarantee its effect.
+		if (!(flags & DMG_NO_FACTOR))
 		{
-			if (player && damage > 1)
-			{
-				// Take half damage in trainer mode
-				damage = int(damage * G_SkillProperty(SKILLP_DamageFactor) * sv_damagefactorplayer);
-			}
-			else if (!player && damage > 1 && !(target->flags & MF_FRIENDLY))
-			{
-				// inflict scaled damage to non-players
-				damage = int(damage * sv_damagefactormobj);
-			}
-			else if (!player && damage > 1 && (target->flags & MF_FRIENDLY))
-			{
-				// inflict scaled damage to non-player friends
-				damage = int(damage * sv_damagefactorfriendly);
-			}
-			// Special damage types
-			if (inflictor)
-			{
-				if (inflictor->flags4 & MF4_SPECTRAL)
-				{
-					if (player != NULL)
-					{
-						if (!deathmatch && inflictor->FriendPlayer > 0)
-							return 0;
-					}
-					else if (target->flags4 & MF4_SPECTRAL)
-					{
-						if (inflictor->FriendPlayer == 0 && !target->IsHostile(inflictor))
-							return 0;
-					}
-				}
-
-				damage = inflictor->CallDoSpecialDamage(target, damage, mod);
-				if (damage < 0)
-				{
-					return 0;
-				}
-			}
-
-			int olddam = damage;
-
-			if (damage > 0 && source != NULL)
-			{
-				damage = int(damage * source->DamageMultiply);
-
-				// Handle active damage modifiers (e.g. PowerDamage)
-				if (damage > 0)
-				{
-					damage = source->GetModifiedDamage(mod, damage, false);
-				}
-			}
-			// Handle passive damage modifiers (e.g. PowerProtection), provided they are not afflicted with protection penetrating powers.
-			if (damage > 0 && !(flags & DMG_NO_PROTECT))
-			{
-				damage = target->GetModifiedDamage(mod, damage, true);
-			}
-			if (damage > 0 && !(flags & DMG_NO_FACTOR))
-			{
-				damage = target->ApplyDamageFactor(mod, damage);
-			}
-
+			damage = FixedMul(damage, target->DamageFactor);
 			if (damage >= 0)
 			{
-				damage = target->CallTakeSpecialDamage(inflictor, source, damage, mod);
+				damage = DamageTypeDefinition::ApplyMobjDamageFactor(damage, mod, target->GetClass()->ActorInfo->DamageFactors);
 			}
-
-			// '<0' is handled below. This only handles the case where damage gets reduced to 0.
-			if (damage == 0 && olddam > 0)
-			{
-				{ // Still allow FORCEPAIN
-					if (forcedPain)
-					{
-						goto dopain;
-					}
-					else if (fakedPain)
-					{
-						goto fakepain;
-					}
-					return 0;
-				}
-			}
-		}
-		if (target->flags5 & MF5_NODAMAGE)
-		{
-			damage = 0;
-		}
-	}
-	if (damage < 0)
-	{
-		// any negative value means that something in the above chain has cancelled out all damage and all damage effects, including pain.
-		return 0;
-	}
-
-
-	//[RC] Backported from the Zandronum source.. Mostly.
-	if( target->player  &&
-		damage > 0 &&
-		source &&
-		mod != NAME_Reflection &&
-		target != source)
-
-	{
-		int reflectdamage = 0;
-		bool reflecttype = false;
-		for (auto p = target->player->mo->Inventory; p != nullptr; p = p->Inventory)
-		{
-			// This picks the reflection item with the maximum efficiency for the given damage type.
-			if (p->IsKindOf(NAME_PowerReflection))
-			{
-				double alwaysreflect = p->FloatVar(NAME_Strength);
-				int alwaysdamage = clamp(int(damage * alwaysreflect), 0, damage);
-				int mydamage = alwaysdamage + p->ApplyDamageFactor(mod, damage - alwaysdamage);
-				if (mydamage > reflectdamage)
+			if (damage <= 0)
+			{ // Still allow FORCEPAIN
+				if (MustForcePain(target, inflictor))
 				{
-					reflectdamage = mydamage;
-					reflecttype = p->BoolVar(NAME_ReflectType);
+					goto dopain;
 				}
+				return -1;
 			}
 		}
 
-		if (reflectdamage > 0)
-		{
-			// use the reflect item's damage factors to get the final value here.
-			P_DamageMobj(source, nullptr, target, reflectdamage, reflecttype? mod : NAME_Reflection );
-
-			// Reset means of death flag.
-			MeansOfDeath = mod;
-		}
+		damage = target->TakeSpecialDamage (inflictor, source, damage, mod);
 	}
-
-
+	if (damage == -1)
+	{
+		return -1;
+	}
 	// Push the target unless the source's weapon's kickback is 0.
 	// (i.e. Gauntlets/Chainsaw)
-	if (!plrDontThrust && inflictor && inflictor != target	// [RH] Not if hurting own self
+	if (inflictor && inflictor != target	// [RH] Not if hurting own self
 		&& !(target->flags & MF_NOCLIP)
 		&& !(inflictor->flags2 & MF2_NODMGTHRUST)
 		&& !(flags & DMG_THRUSTLESS)
-		&& !(target->flags7 & MF7_DONTTHRUST)
 		&& (source == NULL || source->player == NULL || !(source->flags2 & MF2_NODMGTHRUST)))
 	{
 		int kickback;
@@ -1190,63 +1108,67 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 		else
 			kickback = source->player->ReadyWeapon->Kickback;
 
-		kickback = int(kickback * G_SkillProperty(SKILLP_KickbackFactor));
 		if (kickback)
 		{
 			AActor *origin = (source && (flags & DMG_INFLICTOR_IS_PUFF))? source : inflictor;
 
-			if (flags & DMG_USEANGLE)
+			// If the origin and target are in exactly the same spot, choose a random direction.
+			// (Most likely cause is from telefragging somebody during spawning because they
+			// haven't moved from their spawn spot at all.)
+			if (origin->x == target->x && origin->y == target->y)
 			{
-				ang = angle;
-			}
-			else if (origin->X() == target->X() && origin->Y() == target->Y())
-			{
-				// If the origin and target are in exactly the same spot, choose a random direction.
-				// (Most likely cause is from telefragging somebody during spawning because they
-				// haven't moved from their spawn spot at all.)
-				ang = pr_kickbackdir.GenRand_Real2() * 360.;
+				ang = pr_kickbackdir.GenRand32();
 			}
 			else
 			{
-				ang = origin->AngleTo(target);
+				ang = R_PointToAngle2 (origin->x, origin->y, target->x, target->y);
 			}
 
-            thrust = mod == NAME_MDK ? 10 : 32;
+			// Calculate this as float to avoid overflows so that the
+			// clamping that had to be done here can be removed.
+            double fltthrust;
+
+            fltthrust = mod == NAME_MDK ? 10 : 32;
             if (target->Mass > 0)
             {
-                thrust = clamp((damage * 0.125 * kickback) / target->Mass, 0., thrust);
+                fltthrust = clamp((damage * 0.125 * kickback) / target->Mass, 0., fltthrust);
             }
 
+			thrust = FLOAT2FIXED(fltthrust);
+
 			// Don't apply ultra-small damage thrust
-			if (thrust < 0.01) thrust = 0;
+			if (thrust < FRACUNIT/100) thrust = 0;
 
 			// make fall forwards sometimes
 			if ((damage < 40) && (damage > target->health)
-				 && (target->Z() - origin->Z() > 64)
+				 && (target->z - origin->z > 64*FRACUNIT)
 				 && (pr_damagemobj()&1)
 				 // [RH] But only if not too fast and not flying
-				 && thrust < 10
+				 && thrust < 10*FRACUNIT
 				 && !(target->flags & MF_NOGRAVITY)
 				 && (inflictor == NULL || !(inflictor->flags5 & MF5_NOFORWARDFALL))
 				 )
 			{
-				ang += 180.;
+				ang += ANG180;
 				thrust *= 4;
 			}
+			ang >>= ANGLETOFINESHIFT;
 			if (source && source->player && (flags & DMG_INFLICTOR_IS_PUFF)
 				&& source->player->ReadyWeapon != NULL &&
 				(source->player->ReadyWeapon->WeaponFlags & WIF_STAFF2_KICKBACK))
 			{
 				// Staff power level 2
-				target->Thrust(ang, 10);
+				target->velx += FixedMul (10*FRACUNIT, finecosine[ang]);
+				target->vely += FixedMul (10*FRACUNIT, finesine[ang]);
 				if (!(target->flags & MF_NOGRAVITY))
 				{
-					target->Vel.Z += 5.;
+					target->velz += 5*FRACUNIT;
 				}
 			}
 			else
 			{
-				target->Thrust(ang, thrust);
+				target->velx += FixedMul (thrust, finecosine[ang]);
+				target->vely += FixedMul (thrust, finesine[ang]);
 			}
 		}
 	}
@@ -1256,26 +1178,13 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 		((player && player != source->player) || (!player && target != source)) &&
 		target->IsTeammate (source))
 	{
-		//Use the original damage to check for telefrag amount. Don't let the now-amplified damagetypes do it.
-		if (!telefragDamage || (target->flags7 & MF7_LAXTELEFRAGDMG))
+		if (player)
+			FriendlyFire = true;
+		if (damage < TELEFRAG_DAMAGE)
 		{ // Still allow telefragging :-(
-			damage = (int)(damage * level.teamdamage);
-			if (damage < 0)
-			{
-				return 0;
-			}
-			else if (damage == 0)
-			{
-				if (forcedPain)
-				{
-					goto dopain;
-				}
-				else if (fakedPain)
-				{
-					goto fakepain;
-				}
-				return 0;
-			}
+			damage = (int)((float)damage * level.teamdamage);
+			if (damage <= 0)
+				return damage;
 		}
 	}
 
@@ -1284,19 +1193,16 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 	//
 	if (player)
 	{
-		// Don't allow DMG_FORCED to work on ultimate degreeslessness/buddha and nodamage.
-		if ((player->cheats & (CF_GODMODE2 | CF_BUDDHA2)) || (player->mo->flags5 & MF5_NODAMAGE))
+		
+        //Added by MC: Lets bots look allround for enemies if they survive an ambush.
+        if (player->isbot)
 		{
-			flags &= ~DMG_FORCED;
-		}
-		//Added by MC: Lets bots look allround for enemies if they survive an ambush.
-		if (player->Bot != NULL)
-		{
-			player->Bot->allround = true;
+            player->allround = true;
 		}
 
 		// end of game hell hack
-		if ((target->Sector->Flags & SECF_ENDLEVEL) && damage >= target->health)
+		if ((target->Sector->special & 255) == dDamage_End
+			&& damage >= target->health)
 		{
 			damage = target->health - 1;
 		}
@@ -1304,57 +1210,30 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 		if (!(flags & DMG_FORCED))
 		{
 			// check the real player, not a voodoo doll here for invulnerability effects
-			if ((!telefragDamage && ((player->mo->flags2 & MF2_INVULNERABLE) ||
-				(player->cheats & CF_GODMODE))) ||
-				(player->cheats & CF_GODMODE2) || (player->mo->flags5 & MF5_NODAMAGE))
-				//Absolutely no hurting if NODAMAGE is involved. Same for GODMODE2.
+			if (damage < TELEFRAG_DAMAGE && ((player->mo->flags2 & MF2_INVULNERABLE) ||
+				(player->cheats & CF_GODMODE)))
 			{ // player is invulnerable, so don't hurt him
-				//Make sure no godmodes and NOPAIN flags are found first.
-				//Then, check to see if the player has NODAMAGE or ALLOWPAIN, or inflictor has CAUSEPAIN.
-				if ((flags & DMG_NO_PAIN) || (player->cheats & CF_GODMODE) || (player->cheats & CF_GODMODE2) || (player->mo->flags5 & MF5_NOPAIN))
-					return 0;
-				else if ((((player->mo->flags7 & MF7_ALLOWPAIN) || (player->mo->flags5 & MF5_NODAMAGE)) || ((inflictor != NULL) && (inflictor->flags7 & MF7_CAUSEPAIN))))
-				{
-					invulpain = true;
-					goto fakepain;
-				}
-				else
-					return 0;
+				return -1;
 			}
-			// Armor for players.
+
 			if (!(flags & DMG_NO_ARMOR) && player->mo->Inventory != NULL)
 			{
 				int newdam = damage;
-				if (damage > 0)
-				{
-					newdam = player->mo->AbsorbDamage(damage, mod);
-				}
-				if (!telefragDamage || (player->mo->flags7 & MF7_LAXTELEFRAGDMG)) //rawdamage is never modified.
-				{
-					// if we are telefragging don't let the damage value go below that magic value. Some further checks would fail otherwise.
-					damage = newdam;
-				}
-				
+				player->mo->Inventory->AbsorbDamage (damage, mod, newdam);
+				damage = newdam;
 				if (damage <= 0)
 				{
-					// [MC] Godmode doesn't need checking here, it's already being handled above.
-					if (noPain)
-						return 0;
-					
 					// If MF6_FORCEPAIN is set, make the player enter the pain state.
-					if ((inflictor && (inflictor->flags6 & MF6_FORCEPAIN)))
-						goto dopain;
-					else if (((player->mo->flags7 & MF7_ALLOWPAIN) && (rawdamage > 0)) ||
-							(inflictor && (inflictor->flags7 & MF7_CAUSEPAIN)))
+					if (!(target->flags5 & MF5_NOPAIN) && inflictor != NULL &&
+						(inflictor->flags6 & MF6_FORCEPAIN) && !(inflictor->flags5 & MF5_PAINLESS))
 					{
-						invulpain = true;
-						goto fakepain;
+						goto dopain;
 					}
-					return 0;
+					return damage;
 				}
 			}
 			
-			if (damage >= player->health && !telefragDamage
+			if (damage >= player->health
 				&& (G_SkillProperty(SKILLP_AutoUseHealth) || deathmatch)
 				&& !player->morphTics)
 			{ // Try to use some inventory health
@@ -1376,11 +1255,9 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 			// This does not save the player if damage >= TELEFRAG_DAMAGE, still need to
 			// telefrag him right? ;) (Unfortunately the damage is "absorbed" by armor,
 			// but telefragging should still do enough damage to kill the player)
-			// Ignore players that are already dead.
-			// [MC]Buddha2 absorbs telefrag damage, and anything else thrown their way.
-			if (!(flags & DMG_FORCED) && (((player->cheats & CF_BUDDHA2) || (((player->cheats & CF_BUDDHA) ||
-				(player->mo->FindInventory (PClass::FindActor(NAME_PowerBuddha),true) != nullptr) ||
-				(player->mo->flags7 & MF7_BUDDHA)) && !telefragDamage)) && (player->playerstate != PST_DEAD)))
+			if ((player->cheats & CF_BUDDHA) && damage < TELEFRAG_DAMAGE
+				// Ignore players that are already dead.
+				&& player->playerstate != PST_DEAD)
 			{
 				// If this is a voodoo doll we need to handle the real player as well.
 				player->mo->health = target->health = player->health = 1;
@@ -1409,14 +1286,11 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 		if (!(flags & (DMG_NO_ARMOR|DMG_FORCED)) && target->Inventory != NULL && damage > 0)
 		{
 			int newdam = damage;
-			newdam = target->AbsorbDamage(damage, mod);
+			target->Inventory->AbsorbDamage (damage, mod, newdam);
 			damage = newdam;
 			if (damage <= 0)
 			{
-				if (fakedPain)
-					goto fakepain;
-				else
-					return 0;
+				return damage;
 			}
 		}
 	
@@ -1430,118 +1304,87 @@ static int DamageMobj (AActor *target, AActor *inflictor, AActor *source, int da
 
 	// If the damaging player has the power of drain, give the player 50% of the damage
 	// done in health.
-	if ( source && source->player && !(target->flags5 & MF5_DONTDRAIN))
+	if ( source && source->player && source->player->cheats & CF_DRAIN && !(target->flags5 & MF5_DONTDRAIN))
 	{
 		if (!target->player || target->player != source->player)
 		{
-			double draindamage = 0;
-			for (auto p = source->player->mo->Inventory; p != nullptr; p = p->Inventory)
+			if ( P_GiveBody( source, damage / 2 ))
 			{
-				// This picks the item with the maximum efficiency.
-				if (p->IsKindOf(NAME_PowerDrain))
-				{
-					double mydamage = p->FloatVar(NAME_Strength);
-					if (mydamage > draindamage) draindamage = mydamage;
-				}
-			}
-
-			if (draindamage > 0)
-			{
-				int draindmg = int(draindamage * damage);
-				IFVIRTUALPTR(source, AActor, OnDrain)
-				{
-					VMValue params[] = { source, target, draindmg, mod.GetIndex() };
-					VMReturn ret(&draindmg);
-					VMCall(func, params, countof(params), &ret, 1);
-				}
-				if (P_GiveBody(source, draindmg))
-				{
-					S_Sound(source, CHAN_ITEM, "*drainhealth", 1, ATTN_NORM);
-				}
+				S_Sound( source, CHAN_ITEM, "*drainhealth", 1, ATTN_NORM );
 			}
 		}
 	}
 
 
 	if (target->health <= 0)
-	{ 
-		//[MC]Buddha flag for monsters.
-		if (!(flags & DMG_FORCED) && ((target->flags7 & MF7_BUDDHA) && !telefragDamage && ((inflictor == NULL || !(inflictor->flags7 & MF7_FOILBUDDHA)) && !(flags & DMG_FOILBUDDHA))))
-		{ //FOILBUDDHA or Telefrag damage must kill it.
-			target->health = 1;
-		}
-		else
+	{ // Death
+		target->special1 = damage;
+
+		// use inflictor's death type if it got one.
+		if (inflictor && inflictor->DeathType != NAME_None) mod = inflictor->DeathType;
+
+		// check for special fire damage or ice damage deaths
+		if (mod == NAME_Fire)
 		{
-		
-			// Death
-			target->special1 = damage;
-
-			// use inflictor's death type if it got one.
-			if (inflictor && inflictor->DeathType != NAME_None) mod = inflictor->DeathType;
-
-			// check for special fire damage or ice damage deaths
-			if (mod == NAME_Fire)
-			{
-				if (player && !player->morphTics)
-				{ // Check for flame death
-					if (!inflictor ||
-						((target->health > -50) && (damage > 25)) ||
-						!(inflictor->flags5 & MF5_SPECIALFIREDAMAGE))
-					{
-						target->DamageType = NAME_Fire;
-					}
-				}
-				else
+			if (player && !player->morphTics)
+			{ // Check for flame death
+				if (!inflictor ||
+					((target->health > -50) && (damage > 25)) ||
+					!(inflictor->flags5 & MF5_SPECIALFIREDAMAGE))
 				{
 					target->DamageType = NAME_Fire;
 				}
 			}
 			else
 			{
-				target->DamageType = mod;
+				target->DamageType = NAME_Fire;
 			}
-			if (source && source->tracer && (source->flags5 & MF5_SUMMONEDMONSTER))
-			{ // Minotaur's kills go to his master
-				// Make sure still alive and not a pointer to fighter head
-				if (source->tracer->player && (source->tracer->player->mo == source->tracer))
-				{
-					source = source->tracer;
-				}
-			}
-			target->CallDie (source, inflictor, flags);
-			return MAX(0, damage);
 		}
+		else
+		{
+			target->DamageType = mod;
+		}
+		if (source && source->tracer && (source->flags5 & MF5_SUMMONEDMONSTER))
+		{ // Minotaur's kills go to his master
+			// Make sure still alive and not a pointer to fighter head
+			if (source->tracer->player && (source->tracer->player->mo == source->tracer))
+			{
+				source = source->tracer;
+			}
+		}
+		target->Die (source, inflictor, flags);
+		return damage;
 	}
 
 	woundstate = target->FindState(NAME_Wound, mod);
 	if (woundstate != NULL)
 	{
-		int woundhealth = target->WoundHealth;
+		int woundhealth = RUNTIME_TYPE(target)->Meta.GetMetaInt (AMETA_WoundHealth, 6);
 
 		if (target->health <= woundhealth)
 		{
 			target->SetState (woundstate);
-			return MAX(0, damage);
+			return damage;
 		}
 	}
 
-fakepain: //Needed so we can skip the rest of the above, but still obey the original rules.
-
-	if (!noPain &&
+	
+	if (!(target->flags5 & MF5_NOPAIN) && (inflictor == NULL || !(inflictor->flags5 & MF5_PAINLESS)) &&
 		(target->player != NULL || !G_SkillProperty(SKILLP_NoPain)) && !(target->flags & MF_SKULLFLY))
 	{
+		pc = target->GetClass()->ActorInfo->PainChances;
 		painchance = target->PainChance;
-		for (auto & pc : target->GetInfo()->PainChances)
+		if (pc != NULL)
 		{
-			if (pc.first == mod)
+			int *ppc = pc->CheckKey(mod);
+			if (ppc != NULL)
 			{
-				painchance = pc.second;
-				break;
+				painchance = *ppc;
 			}
 		}
 
-		if (((damage >= target->PainThreshold) && (pr_damagemobj() < painchance)) 
-			|| (inflictor != NULL && (inflictor->flags6 & MF6_FORCEPAIN)))
+		if ((damage >= target->PainThreshold && pr_damagemobj() < painchance) ||
+			(inflictor != NULL && (inflictor->flags6 & MF6_FORCEPAIN)))
 		{
 dopain:	
 			if (mod == NAME_Electric)
@@ -1578,19 +1421,18 @@ dopain:
 			}
 		}
 	}
-	//ALLOWPAIN and CAUSEPAIN can still trigger infighting, even if no pain state is worked out.
 	target->reactiontime = 0;			// we're awake now...	
 	if (source)
 	{
 		if (source == target->target)
 		{
-			target->threshold = target->DefThreshold;
+			target->threshold = BASETHRESHOLD;
 			if (target->state == target->SpawnState && target->SeeState != NULL)
 			{
 				target->SetState (target->SeeState);
 			}
 		}
-		else if (source != target->target && target->CallOkayToSwitchTarget (source))
+		else if (source != target->target && target->OkayToSwitchTarget (source))
 		{
 			// Target actor is not intent on another actor,
 			// so make him chase after source
@@ -1605,7 +1447,7 @@ dopain:
 				target->lastenemy = target->target; // remember last enemy - killough
 			}
 			target->target = source;
-			target->threshold = target->DefThreshold;
+			target->threshold = BASETHRESHOLD;
 			if (target->state == target->SpawnState && target->SeeState != NULL)
 			{
 				target->SetState (target->SeeState);
@@ -1617,51 +1459,8 @@ dopain:
 	if (justhit && (target->target == source || !target->target || !target->IsFriend(target->target)))
 		target->flags |= MF_JUSTHIT;    // fight back!
 
-	if (invulpain) //Note that this takes into account all the cheats a player has, in terms of invulnerability.
-	{
-		return 0; //NOW we return -1!
-	}
-	return MAX(0, damage);
+	return damage;
 }
-
-DEFINE_ACTION_FUNCTION(AActor, DamageMobj)
-{
-	PARAM_SELF_PROLOGUE(AActor);
-	PARAM_OBJECT(inflictor, AActor);
-	PARAM_OBJECT(source, AActor);
-	PARAM_INT(damage);
-	PARAM_NAME(mod);
-	PARAM_INT_DEF(flags);
-	PARAM_FLOAT_DEF(angle);
-
-	// [ZZ] event handlers need the result.
-	int realdamage = DamageMobj(self, inflictor, source, damage, mod, flags, angle);
-	if (!realdamage) ACTION_RETURN_INT(0);
-	E_WorldThingDamaged(self, inflictor, source, realdamage, mod, flags, angle);
-	ACTION_RETURN_INT(realdamage);
-}
-
-int P_DamageMobj(AActor *target, AActor *inflictor, AActor *source, int damage, FName mod, int flags, DAngle angle)
-{
-	IFVIRTUALPTR(target, AActor, DamageMobj)
-	{
-		VMValue params[7] = { target, inflictor, source, damage, mod.GetIndex(), flags, angle.Degrees };
-		VMReturn ret;
-		int retval;
-		ret.IntAt(&retval);
-		VMCall(func, params, 7, &ret, 1);
-		return retval;
-	}
-	else
-	{
-		int realdamage = DamageMobj(target, inflictor, source, damage, mod, flags, angle);
-		if (!realdamage) return 0;
-		// [ZZ] event handlers only need the resultant damage (they can't do anything about it anyway)
-		E_WorldThingDamaged(target, inflictor, source, realdamage, mod, flags, angle);
-		return realdamage;
-	}
-}
-
 
 void P_PoisonMobj (AActor *target, AActor *inflictor, AActor *source, int damage, int duration, int period, FName type)
 {
@@ -1708,26 +1507,7 @@ void P_PoisonMobj (AActor *target, AActor *inflictor, AActor *source, int damage
 
 }
 
-DEFINE_ACTION_FUNCTION(AActor, PoisonMobj)
-{
-	PARAM_SELF_PROLOGUE(AActor);
-	PARAM_OBJECT_NOT_NULL(inflictor, AActor);
-	PARAM_OBJECT(source, AActor);
-	PARAM_INT(damage);
-	PARAM_INT(duration);
-	PARAM_INT(period);
-	PARAM_NAME(mod);
-	P_PoisonMobj(self, inflictor, source, damage, duration, period, mod);
-	return 0;
-}
-
-//==========================================================================
-//
-// OkayToSwitchTarget
-//
-//==========================================================================
-
-bool AActor::OkayToSwitchTarget(AActor *other)
+bool AActor::OkayToSwitchTarget (AActor *other)
 {
 	if (other == this)
 		return false;		// [RH] Don't hate self (can happen when shooting barrels)
@@ -1752,9 +1532,6 @@ bool AActor::OkayToSwitchTarget(AActor *other)
 		}
 	}
 
-	if ((flags7 & MF7_NOINFIGHTSPECIES) && GetSpecies() == other->GetSpecies())
-		return false;		// Don't fight own species.
-
 	if ((other->flags3 & MF3_NOTARGET) &&
 		(other->tid != TIDtoHate || TIDtoHate == 0) &&
 		!IsHostile (other))
@@ -1767,10 +1544,11 @@ bool AActor::OkayToSwitchTarget(AActor *other)
 	}
 	
 	int infight;
-	if (flags7 & MF7_FORCEINFIGHTING) infight = 1;
-	else if (flags5 & MF5_NOINFIGHTING) infight = -1;
-	else infight = G_SkillProperty(SKILLP_Infight);
-
+	if (flags5 & MF5_NOINFIGHTING) infight=-1;	
+	else if (level.flags2 & LEVEL2_TOTALINFIGHTING) infight=1;
+	else if (level.flags2 & LEVEL2_NOINFIGHTING) infight=-1;	
+	else infight = infighting;
+	
 	if (infight < 0 &&	other->player == NULL && !IsHostile (other))
 	{
 		return false;	// infighting off: Non-friendlies don't target other non-friendlies
@@ -1787,27 +1565,6 @@ bool AActor::OkayToSwitchTarget(AActor *other)
 	return true;
 }
 
-DEFINE_ACTION_FUNCTION(AActor, OkayToSwitchTarget)
-{
-	PARAM_SELF_PROLOGUE(AActor);
-	PARAM_OBJECT(other, AActor);
-	ACTION_RETURN_BOOL(self->OkayToSwitchTarget(other));
-}
-
-bool AActor::CallOkayToSwitchTarget(AActor *other)
-{
-	IFVIRTUAL(AActor, OkayToSwitchTarget)
-	{
-		VMValue params[] = { (DObject*)this, other };
-		int retv;
-		VMReturn ret(&retv);
-		VMCall(func, params, 2, &ret, 1);
-		return !!retv;
-	}
-	return OkayToSwitchTarget(other);
-}
-
-
 //==========================================================================
 //
 // P_PoisonPlayer - Sets up all data concerning poisoning
@@ -1820,13 +1577,13 @@ bool AActor::CallOkayToSwitchTarget(AActor *other)
 
 bool P_PoisonPlayer (player_t *player, AActor *poisoner, AActor *source, int poison)
 {
-	if((player->cheats&CF_GODMODE) || (player->mo->flags2 & MF2_INVULNERABLE) || (player->cheats & CF_GODMODE2))
+	if((player->cheats&CF_GODMODE) || (player->mo->flags2 & MF2_INVULNERABLE))
 	{
 		return false;
 	}
 	if (source != NULL && source->player != player && player->mo->IsTeammate (source))
 	{
-		poison = (int)(poison * level.teamdamage);
+		poison = (int)((float)poison * level.teamdamage);
 	}
 	if (poison > 0)
 	{
@@ -1849,46 +1606,46 @@ bool P_PoisonPlayer (player_t *player, AActor *poisoner, AActor *source, int poi
 	return true;
 }
 
-DEFINE_ACTION_FUNCTION(_PlayerInfo, PoisonPlayer)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(player_t);
-	PARAM_OBJECT(poisoner, AActor);
-	PARAM_OBJECT(source, AActor);
-	PARAM_INT(poison);
-	ACTION_RETURN_BOOL(P_PoisonPlayer(self, poisoner, source, poison));
-}
-
 //==========================================================================
 //
 // P_PoisonDamage - Similar to P_DamageMobj
 //
 //==========================================================================
 
-void P_PoisonDamage (player_t *player, AActor *source, int damage, bool playPainSound)
+void P_PoisonDamage (player_t *player, AActor *source, int damage,
+	bool playPainSound)
 {
 	AActor *target;
+	AActor *inflictor;
 
 	if (player == NULL)
 	{
 		return;
 	}
 	target = player->mo;
+	inflictor = source;
 	if (target->health <= 0)
 	{
 		return;
 	}
-	if ((damage < TELEFRAG_DAMAGE && ((target->flags2 & MF2_INVULNERABLE) ||
-		(player->cheats & CF_GODMODE))) || (player->cheats & CF_GODMODE2))
+	if (damage < TELEFRAG_DAMAGE && ((target->flags2 & MF2_INVULNERABLE) ||
+		(player->cheats & CF_GODMODE)))
 	{ // target is invulnerable
 		return;
 	}
 	// Take half damage in trainer mode
-	damage = int(damage * G_SkillProperty(SKILLP_DamageFactor) * sv_damagefactorplayer);
+	damage = FixedMul(damage, G_SkillProperty(SKILLP_DamageFactor));
 	// Handle passive damage modifiers (e.g. PowerProtection)
-	damage = target->GetModifiedDamage(player->poisontype, damage, true);
+	if (target->Inventory != NULL)
+	{
+		target->Inventory->ModifyDamage(damage, player->poisontype, damage, true);
+	}
 	// Modify with damage factors
-	damage = target->ApplyDamageFactor(player->poisontype, damage);
-
+	damage = FixedMul(damage, target->DamageFactor);
+	if (damage > 0)
+	{
+		damage = DamageTypeDefinition::ApplyMobjDamageFactor(damage, player->poisontype, target->GetClass()->ActorInfo->DamageFactors);
+	}
 	if (damage <= 0)
 	{ // Damage was reduced to 0, so don't bother further.
 		return;
@@ -1916,9 +1673,7 @@ void P_PoisonDamage (player_t *player, AActor *source, int damage, bool playPain
 	target->health -= damage;
 	if (target->health <= 0)
 	{ // Death
-		if ((((player->cheats & CF_BUDDHA) || (player->cheats & CF_BUDDHA2) ||
-			(player->mo->flags7 & MF7_BUDDHA)) && damage < TELEFRAG_DAMAGE) ||
-			(player->mo->FindInventory (PClass::FindActor(NAME_PowerBuddha),true) != nullptr))
+		if (player->cheats & CF_BUDDHA)
 		{ // [SP] Save the player... 
 			player->health = target->health = 1;
 		}
@@ -1936,7 +1691,7 @@ void P_PoisonDamage (player_t *player, AActor *source, int damage, bool playPain
 					target->DamageType = player->poisontype;
 				}
 			}
-			target->CallDie(source, source);
+			target->Die(source, source);
 			return;
 		}
 	}
@@ -1956,17 +1711,9 @@ void P_PoisonDamage (player_t *player, AActor *source, int damage, bool playPain
 		P_SetMobjState(target, target->info->painstate);
 	}
 */
+	return;
 }
 
-DEFINE_ACTION_FUNCTION(_PlayerInfo, PoisonDamage)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(player_t);
-	PARAM_OBJECT(source, AActor);
-	PARAM_INT(damage);
-	PARAM_BOOL(playsound);
-	P_PoisonDamage(self, source, damage, playsound);
-	return 0;
-}
 
 CCMD (kill)
 {
@@ -1984,15 +1731,6 @@ CCMD (kill)
 			Net_WriteByte (DEM_GENERICCHEAT);
 			Net_WriteByte (CHT_MASSACRE);
 		}
-		else if (!stricmp (argv[1], "baddies"))
-		{
-			// Kill all the unfriendly monsters
-			if (CheckCheatmode ())
-				return;
-
-			Net_WriteByte (DEM_GENERICCHEAT);
-			Net_WriteByte (CHT_MASSACRE2);
-		}
 		else
 		{
 			Net_WriteByte (DEM_KILLCLASSCHEAT);
@@ -2009,23 +1747,4 @@ CCMD (kill)
 		Net_WriteByte (DEM_SUICIDE);
 	}
 	C_HideConsole ();
-}
-
-CCMD(remove)
-{
-	if (argv.argc() == 2)
-	{
-		if (CheckCheatmode())
-			return;
-
-		Net_WriteByte(DEM_REMOVE);
-		Net_WriteString(argv[1]);
-		C_HideConsole();
-	}
-	else
-	{
-		Printf("Usage: remove <actor class name>\n");
-		return;
-	}
-	
 }

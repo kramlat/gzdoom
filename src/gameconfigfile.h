@@ -37,8 +37,7 @@
 #include "doomtype.h"
 #include "configfile.h"
 
-class FArgs;
-class FIWadManager;
+class DArgs;
 
 class FGameConfigFile : public FConfigFile
 {
@@ -46,14 +45,12 @@ public:
 	FGameConfigFile ();
 	~FGameConfigFile ();
 
-	void DoAutoloadSetup (FIWadManager *iwad_man);
 	void DoGlobalSetup ();
 	void DoGameSetup (const char *gamename);
-	void DoKeySetup (const char *gamename);
 	void DoModSetup (const char *gamename);
 	void ArchiveGlobalData ();
 	void ArchiveGameData (const char *gamename);
-	void AddAutoexec (FArgs *list, const char *gamename);
+	void AddAutoexec (DArgs *list, const char *gamename);
 	FString GetConfigPath (bool tryProg);
 	void ReadNetVars ();
 
@@ -62,9 +59,13 @@ protected:
 	void CreateStandardAutoExec (const char *section, bool start);
 
 private:
-	void SetRavenDefaults (bool isHexen);
-	void ReadCVars (uint32_t flags);
+	static void MigrateStub (const char *pathname, FConfigFile *config, void *userdata);
 
+	void MigrateOldConfig ();
+	void SetRavenDefaults (bool isHexen);
+	void ReadCVars (DWORD flags);
+
+	bool bMigrating;
 	bool bModSetup;
 
 	char section[64];

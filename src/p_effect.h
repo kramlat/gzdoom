@@ -31,41 +31,47 @@
 **
 */
 
-#pragma once
-
 #include "vectors.h"
+#include "tables.h"
 
 #define FX_ROCKET			0x00000001
 #define FX_GRENADE			0x00000002
 #define FX_RESPAWNINVUL		0x00000020
 #define FX_VISIBILITYPULSE	0x00000040
 
+#define FX_FOUNTAINMASK		0x00070000
+#define FX_FOUNTAINSHIFT	16
+#define FX_REDFOUNTAIN		0x00010000
+#define FX_GREENFOUNTAIN	0x00020000
+#define FX_BLUEFOUNTAIN		0x00030000
+#define FX_YELLOWFOUNTAIN	0x00040000
+#define FX_PURPLEFOUNTAIN	0x00050000
+#define FX_BLACKFOUNTAIN	0x00060000
+#define FX_WHITEFOUNTAIN	0x00070000
+
 struct subsector_t;
 
 // [RH] Particle details
-
 struct particle_t
 {
-	DVector3 Pos;
-	DVector3 Vel;
-	DVector3 Acc;
-	double	size;
-	double	sizestep;
-	subsector_t * subsector;
-	int32_t	ttl;
-	uint8_t	bright;
-	bool	notimefreeze;
-	float	fadestep;
-	float	alpha;
+	fixed_t	x,y,z;
+	fixed_t velx,vely,velz;
+	fixed_t accx,accy,accz;
+	BYTE	ttl;
+	BYTE	trans;
+	BYTE	size:7;
+	BYTE	bright:1;
+	BYTE	fade;
 	int		color;
-	uint16_t	tnext;
-	uint16_t	snext;
+	WORD	tnext;
+	WORD	snext;
+	subsector_t * subsector;
 };
 
 extern particle_t *Particles;
-extern TArray<uint16_t>		ParticlesInSubsec;
+extern TArray<WORD>		ParticlesInSubsec;
 
-const uint16_t NO_PARTICLE = 0xffff;
+const WORD NO_PARTICLE = 0xffff;
 
 void P_ClearParticles ();
 void P_FindParticleSubsectors ();
@@ -74,23 +80,15 @@ void P_FindParticleSubsectors ();
 class AActor;
 
 particle_t *JitterParticle (int ttl);
-particle_t *JitterParticle (int ttl, double drift);
+particle_t *JitterParticle (int ttl, float drift);
 
 void P_ThinkParticles (void);
-void P_SpawnParticle(const DVector3 &pos, const DVector3 &vel, const DVector3 &accel, PalEntry color, double startalpha, int lifetime, double size, double fadestep, double sizestep, int flags = 0);
 void P_InitEffects (void);
 void P_RunEffects (void);
 
 void P_RunEffect (AActor *actor, int effects);
 
-struct SPortalHit
-{
-	DVector3 HitPos;
-	DVector3 ContPos;
-	DVector3 OutDir;
-};
-
-void P_DrawRailTrail(AActor *source, TArray<SPortalHit> &portalhits, int color1, int color2, double maxdiff = 0, int flags = 0, PClassActor *spawnclass = NULL, DAngle angle = 0., int duration = 35, double sparsity = 1.0, double drift = 1.0, int SpiralOffset = 270, DAngle pitch = 0.);
-void P_DrawSplash (int count, const DVector3 &pos, DAngle angle, int kind);
-void P_DrawSplash2 (int count, const DVector3 &pos, DAngle angle, int updown, int kind);
+void P_DrawRailTrail (AActor *source, const FVector3 &start, const FVector3 &end, int color1, int color2, float maxdiff = 0, int flags = 0, const PClass *spawnclass = NULL, angle_t angle = 0, int duration = 35, float sparsity = 1.0, float drift = 1.0);
+void P_DrawSplash (int count, fixed_t x, fixed_t y, fixed_t z, angle_t angle, int kind);
+void P_DrawSplash2 (int count, fixed_t x, fixed_t y, fixed_t z, angle_t angle, int updown, int kind);
 void P_DisconnectEffect (AActor *actor);

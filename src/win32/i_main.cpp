@@ -61,13 +61,13 @@
 #include <stdarg.h>
 #include <math.h>
 
+#define USE_WINDOWS_DWORD
 #include "doomerrors.h"
 #include "hardware.h"
 
 #include "doomtype.h"
 #include "m_argv.h"
 #include "d_main.h"
-#include "i_module.h"
 #include "i_system.h"
 #include "c_console.h"
 #include "version.h"
@@ -80,13 +80,9 @@
 #include "g_level.h"
 #include "doomstat.h"
 #include "r_utility.h"
-#include "g_levellocals.h"
-#include "s_sound.h"
 
 #include "stats.h"
 #include "st_start.h"
-
-#include "optwin32.h"
 
 #include <assert.h>
 
@@ -109,8 +105,7 @@
 LRESULT CALLBACK WndProc (HWND, UINT, WPARAM, LPARAM);
 void CreateCrashLog (char *custominfo, DWORD customsize, HWND richedit);
 void DisplayCrashLog ();
-extern uint8_t *ST_Util_BitsForBitmap (BITMAPINFO *bitmap_info);
-void I_FlushBufferedConsoleStuff();
+extern BYTE *ST_Util_BitsForBitmap (BITMAPINFO *bitmap_info);
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
@@ -125,7 +120,7 @@ extern UINT TimerPeriod;
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 // The command line arguments.
-FArgs *Args;
+DArgs *Args;
 
 HINSTANCE		g_hInst;
 DWORD			SessionID;
@@ -133,7 +128,6 @@ HANDLE			MainThread;
 DWORD			MainThreadID;
 HANDLE			StdOut;
 bool			FancyStdOut, AttachedStdOut;
-bool			ConWindowHidden;
 
 // The main window
 HWND			Window;
@@ -147,24 +141,9 @@ LONG			GameTitleFontHeight;
 LONG			DefaultGUIFontHeight;
 LONG			ErrorIconChar;
 
-FModule Kernel32Module{"Kernel32"};
-FModule Shell32Module{"Shell32"};
-FModule User32Module{"User32"};
-
-namespace OptWin32 {
-#define DYN_WIN32_SYM(x) decltype(x) x{#x}
-
-DYN_WIN32_SYM(SHGetFolderPathA);
-DYN_WIN32_SYM(SHGetKnownFolderPath);
-DYN_WIN32_SYM(GetLongPathNameA);
-DYN_WIN32_SYM(GetMonitorInfoA);
-
-#undef DYN_WIN32_SYM
-} // namespace OptWin32
-
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
-static const char WinClassName[] = GAMENAME "MainWindow";
+static const char WinClassName[] = "ZDoomMainWindow";
 static HMODULE hwtsapi32;		// handle to wtsapi32.dll
 static void (*TermFuncs[MAX_TERMS])(void);
 static int NumTerms;
@@ -218,7 +197,7 @@ void popterm ()
 //
 //==========================================================================
 
-static void call_terms (void)
+static void STACK_ARGS call_terms (void)
 {
 	while (NumTerms > 0)
 	{
@@ -227,7 +206,7 @@ static void call_terms (void)
 }
 
 #ifdef _MSC_VER
-static int NewFailure (size_t size)
+static int STACK_ARGS NewFailure (size_t size)
 {
 	I_FatalError ("Failed to allocate %d bytes from process heap", size);
 	return 0;
@@ -665,7 +644,6 @@ void I_SetWndProc()
 		SetWindowLongPtr (Window, GWLP_USERDATA, 1);
 		SetWindowLongPtr (Window, GWLP_WNDPROC, (WLONG_PTR)WndProc);
 		ShowWindow (ConWindow, SW_HIDE);
-		ConWindowHidden = true;
 		ShowWindow (GameTitleWindow, SW_HIDE);
 		I_InitInput (Window);
 	}
@@ -681,29 +659,22 @@ void I_SetWndProc()
 
 void RestoreConView()
 {
-	HDC screenDC = GetDC(0);
-	int dpi = GetDeviceCaps(screenDC, LOGPIXELSX);
-	ReleaseDC(0, screenDC);
-	int width = (512 * dpi + 96 / 2) / 96;
-	int height = (384 * dpi + 96 / 2) / 96;
-
 	// Make sure the window has a frame in case it was fullscreened.
 	SetWindowLongPtr (Window, GWL_STYLE, WS_VISIBLE|WS_OVERLAPPEDWINDOW);
 	if (GetWindowLong (Window, GWL_EXSTYLE) & WS_EX_TOPMOST)
 	{
-		SetWindowPos (Window, HWND_BOTTOM, 0, 0, width, height,
+		SetWindowPos (Window, HWND_BOTTOM, 0, 0, 512, 384,
 			SWP_DRAWFRAME | SWP_NOCOPYBITS | SWP_NOMOVE);
 		SetWindowPos (Window, HWND_TOP, 0, 0, 0, 0, SWP_NOCOPYBITS | SWP_NOMOVE | SWP_NOSIZE);
 	}
 	else
 	{
-		SetWindowPos (Window, NULL, 0, 0, width, height,
+		SetWindowPos (Window, NULL, 0, 0, 512, 384,
 			SWP_DRAWFRAME | SWP_NOCOPYBITS | SWP_NOMOVE | SWP_NOZORDER);
 	}
 
 	SetWindowLongPtr (Window, GWLP_WNDPROC, (WLONG_PTR)LConProc);
 	ShowWindow (ConWindow, SW_SHOW);
-	ConWindowHidden = false;
 	ShowWindow (GameTitleWindow, SW_SHOW);
 	I_ShutdownInput ();		// Make sure the mouse pointer is available.
 	// Make sure the progress bar isn't visible.
@@ -742,7 +713,7 @@ void ShowErrorPane(const char *text)
 	if (text != NULL)
 	{
 		char caption[100];
-		mysnprintf(caption, countof(caption), "Fatal Error - " GAMESIG " %s " X64 " (%s)", GetVersionString(), GetGitTime());
+		mysnprintf(caption, countof(caption), "Fatal Error - "GAMESIG" %s "X64" (%s)", GetVersionString(), GetGitTime());
 		SetWindowText (Window, caption);
 		ErrorIcon = CreateWindowEx (WS_EX_NOPARENTNOTIFY, "STATIC", NULL, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0, 0, 0, Window, NULL, g_hInst, NULL);
 		if (ErrorIcon != NULL)
@@ -821,13 +792,6 @@ void ShowErrorPane(const char *text)
 	}
 }
 
-void PeekThreadedErrorPane()
-{
-	// Allow SendMessage from another thread to call its message handler so that it can display the crash dialog
-	MSG msg;
-	PeekMessage(&msg, 0, 0, 0, PM_NOREMOVE);
-}
-
 //==========================================================================
 //
 // DoMain
@@ -848,12 +812,7 @@ void DoMain (HINSTANCE hInstance)
 		_set_new_handler (NewFailure);
 #endif
 
-		Args = new FArgs(__argc, __argv);
-
-		// Load Win32 modules
-		Kernel32Module.Load({"kernel32.dll"});
-		Shell32Module.Load({"shell32.dll"});
-		User32Module.Load({"user32.dll"});
+		Args = new DArgs(__argc, __argv);
 
 		// Under XP, get our session ID so we can know when the user changes/locks sessions.
 		// Since we need to remain binary compatible with older versions of Windows, we
@@ -948,12 +907,13 @@ void DoMain (HINSTANCE hInstance)
 		FixPathSeperator(program);
 		progdir.Truncate((long)strlen(program));
 		progdir.UnlockBuffer();
-
-		HDC screenDC = GetDC(0);
-		int dpi = GetDeviceCaps(screenDC, LOGPIXELSX);
-		ReleaseDC(0, screenDC);
-		width = (512 * dpi + 96 / 2) / 96;
-		height = (384 * dpi + 96 / 2) / 96;
+/*
+		height = GetSystemMetrics (SM_CYFIXEDFRAME) * 2 +
+				GetSystemMetrics (SM_CYCAPTION) + 12 * 32;
+		width  = GetSystemMetrics (SM_CXFIXEDFRAME) * 2 + 8 * 78;
+*/
+		width = 512;
+		height = 384;
 
 		// Many Windows structures that specify their size do so with the first
 		// element. DEVMODE is not one of those structures.
@@ -986,7 +946,7 @@ void DoMain (HINSTANCE hInstance)
 		
 		/* create window */
 		char caption[100];
-		mysnprintf(caption, countof(caption), "" GAMESIG " %s " X64 " (%s)", GetVersionString(), GetGitTime());
+		mysnprintf(caption, countof(caption), ""GAMESIG" %s "X64" (%s)", GetVersionString(), GetGitTime());
 		Window = CreateWindowEx(
 				WS_EX_APPWINDOW,
 				(LPCTSTR)WinClassName,
@@ -1044,23 +1004,20 @@ void DoMain (HINSTANCE hInstance)
 	catch (class CNoRunExit &)
 	{
 		I_ShutdownGraphics();
-		if (!batchrun)
-		{
-			if (FancyStdOut && !AttachedStdOut)
-			{ // Outputting to a new console window: Wait for a keypress before quitting.
-				DWORD bytes;
-				HANDLE stdinput = GetStdHandle(STD_INPUT_HANDLE);
+		if (FancyStdOut && !AttachedStdOut)
+		{ // Outputting to a new console window: Wait for a keypress before quitting.
+			DWORD bytes;
+			HANDLE stdinput = GetStdHandle(STD_INPUT_HANDLE);
 
-				ShowWindow(Window, SW_HIDE);
-				WriteFile(StdOut, "Press any key to exit...", 24, &bytes, NULL);
-				FlushConsoleInputBuffer(stdinput);
-				SetConsoleMode(stdinput, 0);
-				ReadConsole(stdinput, &bytes, 1, &bytes, NULL);
-			}
-			else if (StdOut == NULL)
-			{
-				ShowErrorPane(NULL);
-			}
+			ShowWindow (Window, SW_HIDE);
+			WriteFile(StdOut, "Press any key to exit...", 24, &bytes, NULL);
+			FlushConsoleInputBuffer(stdinput);
+			SetConsoleMode(stdinput, 0);
+			ReadConsole(stdinput, &bytes, 1, &bytes, NULL);
+		}
+		else if (StdOut == NULL)
+		{
+			ShowErrorPane(NULL);
 		}
 		exit(0);
 	}
@@ -1068,18 +1025,9 @@ void DoMain (HINSTANCE hInstance)
 	{
 		I_ShutdownGraphics ();
 		RestoreConView ();
-		S_StopMusic(true);
-		I_FlushBufferedConsoleStuff();
 		if (error.GetMessage ())
 		{
-			if (!batchrun)
-			{
-				ShowErrorPane(error.GetMessage());
-			}
-			else
-			{
-				Printf("%s\n", error.GetMessage());
-			}
+			ShowErrorPane (error.GetMessage());
 		}
 		exit (-1);
 	}
@@ -1121,10 +1069,10 @@ void DoomSpecificInfo (char *buffer, size_t bufflen)
 		}
 		else
 		{
-			buffer += mysnprintf (buffer, buffend - buffer, "\r\n\r\nviewx = %f", r_viewpoint.Pos.X);
-			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewy = %f", r_viewpoint.Pos.Y);
-			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewz = %f", r_viewpoint.Pos.Z);
-			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewangle = %f", r_viewpoint.Angles.Yaw);
+			buffer += mysnprintf (buffer, buffend - buffer, "\r\n\r\nviewx = %d", viewx);
+			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewy = %d", viewy);
+			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewz = %d", viewz);
+			buffer += mysnprintf (buffer, buffend - buffer, "\r\nviewangle = %x", viewangle);
 		}
 	}
 	*buffer++ = '\r';
@@ -1202,11 +1150,6 @@ void CALLBACK ExitFatally (ULONG_PTR dummy)
 //
 //==========================================================================
 
-namespace
-{
-	CONTEXT MainThreadContext;
-}
-
 LONG WINAPI CatchAllExceptions (LPEXCEPTION_POINTERS info)
 {
 #ifdef _DEBUG
@@ -1231,11 +1174,11 @@ LONG WINAPI CatchAllExceptions (LPEXCEPTION_POINTERS info)
 	// Otherwise, put the crashing thread to sleep and signal the main thread to clean up.
 	if (GetCurrentThreadId() == MainThreadID)
 	{
-#ifdef _M_X64
-		*info->ContextRecord = MainThreadContext;
-#else
+#ifndef _M_X64
 		info->ContextRecord->Eip = (DWORD_PTR)ExitFatally;
-#endif // _M_X64
+#else
+		info->ContextRecord->Rip = (DWORD_PTR)ExitFatally;
+#endif
 	}
 	else
 	{
@@ -1285,7 +1228,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 		// This should only happen on basic Windows 95 installations, but since we
 		// don't support Windows 95, we have no obligation to provide assistance in
 		// getting it installed.
-		MessageBoxA(NULL, "Could not load riched20.dll", GAMENAME " Error", MB_OK | MB_ICONSTOP);
+		MessageBoxA(NULL, "Could not load riched20.dll", "ZDoom Error", MB_OK | MB_ICONSTOP);
 		exit(0);
 	}
 
@@ -1327,17 +1270,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 	if (MainThread != INVALID_HANDLE_VALUE)
 	{
 		SetUnhandledExceptionFilter (CatchAllExceptions);
-
-#ifdef _M_X64
-		static bool setJumpResult = false;
-		RtlCaptureContext(&MainThreadContext);
-		if (setJumpResult)
-		{
-			ExitFatally(0);
-			return 0;
-		}
-		setJumpResult = true;
-#endif // _M_X64
 	}
 #endif
 
@@ -1351,7 +1283,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 	_CrtSetDbgFlag (_CrtSetDbgFlag(0) | _CRTDBG_LEAK_CHECK_DF);
 
 	// Use this to break at a specific allocation number.
-	//_crtBreakAlloc = 53039;
+	//_crtBreakAlloc = 77624;
 #endif
 
 	DoMain (hInstance);
@@ -1361,15 +1293,19 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE nothing, LPSTR cmdline, int n
 	return 0;
 }
 
-// each platform has its own specific version of this function.
-void I_SetWindowTitle(const char* caption)
+//==========================================================================
+//
+// CCMD crashout
+//
+// Debugging routine for testing the crash logger.
+// Useless in a debug build, because that doesn't enable the crash logger.
+//
+//==========================================================================
+
+#ifndef _DEBUG
+#include "c_dispatch.h"
+CCMD (crashout)
 {
-	if (caption)
-		SetWindowText(Window, (LPCTSTR)caption);
-	else
-	{
-		char default_caption[100];
-		mysnprintf(default_caption, countof(default_caption), "" GAMESIG " %s " X64 " (%s)", GetVersionString(), GetGitTime());
-		SetWindowText(Window, default_caption);
-	}
+	*(int *)0 = 0;
 }
+#endif

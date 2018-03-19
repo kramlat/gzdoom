@@ -9,18 +9,10 @@
 
 struct kvxslab_t
 {
-	uint8_t		ztop;			// starting z coordinate of top of slab
-	uint8_t		zleng;			// # of bytes in the color array - slab height
-	uint8_t		backfacecull;	// low 6 bits tell which of 6 faces are exposed
-	uint8_t		col[1/*zleng*/];// color data from top to bottom
-};
-
-struct kvxslab_bgra_t
-{
-	uint32_t	ztop;			// starting z coordinate of top of slab
-	uint32_t	zleng;			// # of bytes in the color array - slab height
-	uint32_t	backfacecull;	// low 6 bits tell which of 6 faces are exposed
-	uint32_t	col[1/*zleng*/];// color data from top to bottom
+	BYTE		ztop;			// starting z coordinate of top of slab
+	BYTE		zleng;			// # of bytes in the color array - slab height
+	BYTE		backfacecull;	// low 6 bits tell which of 6 faces are exposed
+	BYTE		col[1/*zleng*/];// color data from top to bottom
 };
 
 struct FVoxelMipLevel
@@ -31,11 +23,12 @@ struct FVoxelMipLevel
 	int			SizeX;
 	int			SizeY;
 	int			SizeZ;
-	DVector3	Pivot;
+	fixed_t		PivotX;		// 24.8 fixed point
+	fixed_t		PivotY;		// ""
+	fixed_t		PivotZ;		// ""
 	int			*OffsetX;
 	short		*OffsetXY;
-	uint8_t		*SlabData;
-	TArray<uint32_t> SlabDataBgra;
+	BYTE		*SlabData;
 };
 
 struct FVoxel
@@ -43,12 +36,11 @@ struct FVoxel
 	int LumpNum;
 	int NumMips;
 	int VoxelIndex;			// Needed by GZDoom
-	uint8_t *Palette;
+	BYTE *Palette;
 	FVoxelMipLevel Mips[MAXVOXMIPS];
 
 	FVoxel();
 	~FVoxel();
-	void CreateBgraSlabData();
 	void Remap();
 	void RemovePalette();
 };
@@ -59,8 +51,8 @@ struct FVoxelDef
 	int PlacedSpin;			// degrees/sec to spin actors without MF_DROPPED set
 	int DroppedSpin;		// degrees/sec to spin actors with MF_DROPPED set
 	int VoxeldefIndex;		// Needed by GZDoom
-	double		Scale;
-	DAngle		AngleOffset;// added to actor's angle to compensate for wrong-facing voxels
+	fixed_t Scale;
+	angle_t AngleOffset;	// added to actor's angle to compensate for wrong-facing voxels
 };
 
 extern TDeletingArray<FVoxel *> Voxels;	// used only to auto-delete voxels on exit.

@@ -35,7 +35,6 @@
 */
 
 
-#include "doomstat.h"
 #include "info.h"
 #include "m_fixed.h"
 #include "c_dispatch.h"
@@ -43,6 +42,7 @@
 #include "v_text.h"
 
 #include "gi.h"
+
 #include "actor.h"
 #include "r_state.h"
 #include "i_system.h"
@@ -50,136 +50,12 @@
 #include "templates.h"
 #include "cmdlib.h"
 #include "g_level.h"
-#include "stats.h"
-#include "thingdef.h"
-#include "d_player.h"
-#include "doomerrors.h"
-#include "events.h"
-#include "types.h"
-#include "vm.h"
 
 extern void LoadActors ();
 extern void InitBotStuff();
 extern void ClearStrifeTypes();
 
-TArray<PClassActor *> PClassActor::AllActorClasses;
 FRandom FState::pr_statetics("StateTics");
-
-cycle_t ActionCycles;
-
-
-//==========================================================================
-//
-// special type for the native ActorInfo. This allows to let this struct
-// be handled by the generic object constructors for the VM.
-//
-//==========================================================================
-
-class PActorInfo : public PCompoundType
-{
-public:
-	PActorInfo()
-		:PCompoundType(sizeof(FActorInfo), alignof(FActorInfo))
-	{
-	}
-
-	void SetDefaultValue(void *base, unsigned offset, TArray<FTypeAndOffset> *special) override
-	{
-		if (base != nullptr) new((uint8_t *)base + offset) FActorInfo;
-		if (special != nullptr)
-		{
-			special->Push(std::make_pair(this, offset));
-		}
-	}
-
-	void InitializeValue(void *addr, const void *def) const override
-	{
-		if (def == nullptr)
-		{
-			new(addr) FActorInfo;
-		}
-		else
-		{
-			new(addr) FActorInfo(*(const FActorInfo*)def);
-		}
-	}
-
-	void DestroyValue(void *addr) const override
-	{
-		FActorInfo *self = (FActorInfo*)addr;
-		self->~FActorInfo();
-	}
-
-};
-
-void AddActorInfo(PClass *cls)
-{
-	auto type = new PActorInfo;
-	TypeTable.AddType(type, NAME_Actor);
-	cls->AddField("*", type, VARF_Meta);
-}
-
-
-void FState::SetAction(const char *name)
-{
-	ActionFunc = FindVMFunction(RUNTIME_CLASS(AActor), name);
-}
-
-bool FState::CallAction(AActor *self, AActor *stateowner, FStateParamInfo *info, FState **stateret)
-{
-	if (ActionFunc != nullptr)
-	{
-		ActionCycles.Clock();
-
-		VMValue params[3] = { self, stateowner, VMValue(info) };
-		// If the function returns a state, store it at *stateret.
-		// If it doesn't return a state but stateret is non-nullptr, we need
-		// to set *stateret to nullptr.
-		if (stateret != nullptr)
-		{
-			*stateret = nullptr;
-			if (ActionFunc->Proto == nullptr ||
-				ActionFunc->Proto->ReturnTypes.Size() == 0 ||
-				ActionFunc->Proto->ReturnTypes[0] != TypeState)
-			{
-				stateret = nullptr;
-			}
-		}
-		try
-		{
-			if (stateret == nullptr)
-			{
-				VMCall(ActionFunc, params, ActionFunc->ImplicitArgs, nullptr, 0);
-			}
-			else
-			{
-				VMReturn ret;
-				ret.PointerAt((void **)stateret);
-				VMCall(ActionFunc, params, ActionFunc->ImplicitArgs, &ret, 1);
-			}
-		}
-		catch (CVMAbortException &err)
-		{
-			err.MaybePrintMessage();
-			const char *callinfo = "";
-			if (info != nullptr && info->mStateType == STATE_Psprite)
-			{
-				if (stateowner->IsKindOf(NAME_Weapon) && stateowner != self) callinfo = "weapon ";
-				else callinfo = "overlay ";
-			}
-			err.stacktrace.AppendFormat("Called from %sstate %s in %s\n", callinfo, FState::StaticGetStateName(this).GetChars(), stateowner->GetClass()->TypeName.GetChars());
-			throw;
-			throw;
-		}
-
-		ActionCycles.Unclock();
-		return true;
-	}
-	else
-	{
-		return false;
-	}
-}
 
 //==========================================================================
 //
@@ -223,20 +99,13 @@ int GetSpriteIndex(const char * spritename, bool add)
 	return (lastindex = (int)sprites.Push (temp));
 }
 
-DEFINE_ACTION_FUNCTION(AActor, GetSpriteIndex)
-{
-	PARAM_PROLOGUE;
-	PARAM_NAME(sprt);
-	ACTION_RETURN_INT(GetSpriteIndex(sprt.GetChars(), false));
-}
 
 //==========================================================================
 //
-// PClassActor :: StaticInit										STATIC
 //
 //==========================================================================
 
-void PClassActor::StaticInit()
+void FActorInfo::StaticInit ()
 {
 	sprites.Clear();
 	if (sprites.Size() == 0)
@@ -258,296 +127,247 @@ void PClassActor::StaticInit()
 		sprites.Push (temp);
 	}
 
-	if (!batchrun) Printf ("LoadActors: Load actor definitions.\n");
+	Printf ("LoadActors: Load actor definitions.\n");
 	ClearStrifeTypes();
 	LoadActors ();
 	InitBotStuff();
-
-	// reinit GLOBAL static stuff from gameinfo, once classes are loaded.
-	E_InitStaticHandlers(false);
 }
 
 //==========================================================================
-//
-// PClassActor :: StaticSetActorNums								STATIC
 //
 // Called after Dehacked patches are applied
 //
 //==========================================================================
 
-void PClassActor::StaticSetActorNums()
+void FActorInfo::StaticSetActorNums ()
 {
-	for (unsigned int i = 0; i < PClassActor::AllActorClasses.Size(); ++i)
+	SpawnableThings.Clear();
+	DoomEdMap.Empty ();
+
+	for (unsigned int i = 0; i < PClass::m_RuntimeActors.Size(); ++i)
 	{
-		PClassActor::AllActorClasses[i]->RegisterIDs();
+		PClass::m_RuntimeActors[i]->ActorInfo->RegisterIDs ();
 	}
 }
 
 //==========================================================================
 //
-// PClassActor :: SetReplacement
-//
-// Sets as a replacement class for another class.
 //
 //==========================================================================
 
-bool PClassActor::SetReplacement(FName replaceName)
+void FActorInfo::RegisterIDs ()
 {
-	// Check for "replaces"
-	if (replaceName != NAME_None)
+	const PClass *cls = PClass::FindClass(Class->TypeName);
+	bool set = false;
+
+	if (GameFilter == GAME_Any || (GameFilter & gameinfo.gametype))
 	{
-		// Get actor name
-		PClassActor *replacee = PClass::FindActor(replaceName);
-
-		if (replacee == nullptr)
-		{
-			return false;
-		}
-		if (replacee != nullptr)
-		{
-			replacee->ActorInfo()->Replacement = this;
-			ActorInfo()->Replacee = replacee;
-		}
-	}
-	return true;
-}
-
-//==========================================================================
-//
-// PClassActor :: Finalize
-//
-// Installs the parsed states and does some sanity checking
-//
-//==========================================================================
-
-void AActor::Finalize(FStateDefinitions &statedef)
-{
-	try
-	{
-		statedef.FinishStates(GetClass());
-	}
-	catch (CRecoverableError &)
-	{
-		statedef.MakeStateDefines(nullptr);
-		throw;
-	}
-	statedef.InstallStates(GetClass(), this);
-	statedef.MakeStateDefines(nullptr);
-}
-
-//==========================================================================
-//
-// PClassActor :: RegisterIDs
-//
-// Registers this class's SpawnID and DoomEdNum in the appropriate tables.
-//
-//==========================================================================
-
-void PClassActor::RegisterIDs()
-{
-	PClassActor *cls = PClass::FindActor(TypeName);
-
-	if (cls == nullptr)
-	{
-		Printf(TEXTCOLOR_RED"The actor '%s' has been hidden by a non-actor of the same name\n", TypeName.GetChars());
-		return;
-	}
-
-	FActorInfo *actorInfo = ActorInfo();
-
-	if (nullptr == actorInfo)
-	{
-		// Undefined class, exiting
-		return;
-	}
-
-	// Conversation IDs have never been filtered by game so we cannot start doing that.
-	auto ConversationID = actorInfo->ConversationID;
-	if (ConversationID > 0)
-	{
-		StrifeTypes[ConversationID] = cls;
-		if (cls != this) 
-		{
-			Printf(TEXTCOLOR_RED"Conversation ID %d refers to hidden class type '%s'\n", ConversationID, cls->TypeName.GetChars());
-		}
-	}
-	if (actorInfo->GameFilter == GAME_Any || (ActorInfo()->GameFilter & gameinfo.gametype))
-	{
-		auto SpawnID = actorInfo->SpawnID;
 		if (SpawnID > 0)
 		{
 			SpawnableThings[SpawnID] = cls;
-			if (cls != this) 
+			if (cls != Class) 
 			{
 				Printf(TEXTCOLOR_RED"Spawn ID %d refers to hidden class type '%s'\n", SpawnID, cls->TypeName.GetChars());
 			}
 		}
-		auto DoomEdNum = actorInfo->DoomEdNum;
 		if (DoomEdNum != -1)
 		{
-			FDoomEdEntry *oldent = DoomEdMap.CheckKey(DoomEdNum);
-			if (oldent != nullptr && oldent->Special == -2)
-			{
-				Printf(TEXTCOLOR_RED"Editor number %d defined twice for classes '%s' and '%s'\n", DoomEdNum, cls->TypeName.GetChars(), oldent->Type->TypeName.GetChars());
-			}
-			FDoomEdEntry ent;
-			memset(&ent, 0, sizeof(ent));
-			ent.Type = cls;
-			ent.Special = -2;	// use -2 instead of -1 so that we can recognize DECORATE defined entries and print a warning message if duplicates occur.
-			DoomEdMap.Insert(DoomEdNum, ent);
-			if (cls != this) 
+			DoomEdMap.AddType (DoomEdNum, cls);
+			if (cls != Class) 
 			{
 				Printf(TEXTCOLOR_RED"Editor number %d refers to hidden class type '%s'\n", DoomEdNum, cls->TypeName.GetChars());
 			}
 		}
 	}
+	// Fill out the list for Chex Quest with Doom's actors
+	if (gameinfo.gametype == GAME_Chex && DoomEdMap.FindType(DoomEdNum) == NULL &&
+		(GameFilter & GAME_Doom))
+	{
+		DoomEdMap.AddType (DoomEdNum, Class, true);
+		if (cls != Class) 
+		{
+			Printf(TEXTCOLOR_RED"Editor number %d refers to hidden class type '%s'\n", DoomEdNum, cls->TypeName.GetChars());
+		}
+	}
 }
 
 //==========================================================================
 //
-// PClassActor :: GetReplacement
 //
 //==========================================================================
 
-PClassActor *PClassActor::GetReplacement(bool lookskill)
+FActorInfo *FActorInfo::GetReplacement (bool lookskill)
 {
 	FName skillrepname;
 	
 	if (lookskill && AllSkills.Size() > (unsigned)gameskill)
 	{
-		skillrepname = AllSkills[gameskill].GetReplacement(TypeName);
-		if (skillrepname != NAME_None && PClass::FindClass(skillrepname) == nullptr)
+		skillrepname = AllSkills[gameskill].GetReplacement(this->Class->TypeName);
+		if (skillrepname != NAME_None && PClass::FindClass(skillrepname) == NULL)
 		{
 			Printf("Warning: incorrect actor name in definition of skill %s: \n"
 				   "class %s is replaced by non-existent class %s\n"
 				   "Skill replacement will be ignored for this actor.\n", 
 				   AllSkills[gameskill].Name.GetChars(), 
-				   TypeName.GetChars(), skillrepname.GetChars());
-			AllSkills[gameskill].SetReplacement(TypeName, NAME_None);
+				   this->Class->TypeName.GetChars(), skillrepname.GetChars());
+			AllSkills[gameskill].SetReplacement(this->Class->TypeName, NAME_None);
 			AllSkills[gameskill].SetReplacedBy(skillrepname, NAME_None);
 			lookskill = false; skillrepname = NAME_None;
 		}
 	}
-	auto Replacement = ActorInfo()->Replacement;
-	if (Replacement == nullptr && (!lookskill || skillrepname == NAME_None))
+	if (Replacement == NULL && (!lookskill || skillrepname == NAME_None))
 	{
 		return this;
 	}
 	// The Replacement field is temporarily NULLed to prevent
 	// potential infinite recursion.
-	ActorInfo()->Replacement = nullptr;
-	PClassActor *rep = Replacement;
+	FActorInfo *savedrep = Replacement;
+	Replacement = NULL;
+	FActorInfo *rep = savedrep;
 	// Handle skill-based replacement here. It has precedence on DECORATE replacement
 	// in that the skill replacement is applied first, followed by DECORATE replacement
 	// on the actor indicated by the skill replacement.
 	if (lookskill && (skillrepname != NAME_None))
 	{
-		rep = PClass::FindActor(skillrepname);
+		rep = PClass::FindClass(skillrepname)->ActorInfo;
 	}
 	// Now handle DECORATE replacement chain
 	// Skill replacements are not recursive, contrarily to DECORATE replacements
 	rep = rep->GetReplacement(false);
 	// Reset the temporarily NULLed field
-	ActorInfo()->Replacement = Replacement;
+	Replacement = savedrep;
 	return rep;
 }
 
-DEFINE_ACTION_FUNCTION(AActor, GetReplacement)
-{
-	PARAM_PROLOGUE;
-	PARAM_POINTER(c, PClassActor);
-	ACTION_RETURN_POINTER(c->GetReplacement());
-}
-
 //==========================================================================
 //
-// PClassActor :: GetReplacee
 //
 //==========================================================================
 
-PClassActor *PClassActor::GetReplacee(bool lookskill)
+FActorInfo *FActorInfo::GetReplacee (bool lookskill)
 {
 	FName skillrepname;
 	
 	if (lookskill && AllSkills.Size() > (unsigned)gameskill)
 	{
-		skillrepname = AllSkills[gameskill].GetReplacedBy(TypeName);
-		if (skillrepname != NAME_None && PClass::FindClass(skillrepname) == nullptr)
+		skillrepname = AllSkills[gameskill].GetReplacedBy(this->Class->TypeName);
+		if (skillrepname != NAME_None && PClass::FindClass(skillrepname) == NULL)
 		{
 			Printf("Warning: incorrect actor name in definition of skill %s: \n"
 				   "non-existent class %s is replaced by class %s\n"
 				   "Skill replacement will be ignored for this actor.\n", 
 				   AllSkills[gameskill].Name.GetChars(), 
-				   skillrepname.GetChars(), TypeName.GetChars());
-			AllSkills[gameskill].SetReplacedBy(TypeName, NAME_None);
+				   skillrepname.GetChars(), this->Class->TypeName.GetChars());
+			AllSkills[gameskill].SetReplacedBy(this->Class->TypeName, NAME_None);
 			AllSkills[gameskill].SetReplacement(skillrepname, NAME_None);
 			lookskill = false; 
 		}
 	}
-	PClassActor *savedrep = ActorInfo()->Replacee;
-	if (savedrep == nullptr && (!lookskill || skillrepname == NAME_None))
+	if (Replacee == NULL && (!lookskill || skillrepname == NAME_None))
 	{
 		return this;
 	}
 	// The Replacee field is temporarily NULLed to prevent
 	// potential infinite recursion.
-	ActorInfo()->Replacee = nullptr;
-	PClassActor *rep = savedrep;
-	if (lookskill && (skillrepname != NAME_None) && (PClass::FindClass(skillrepname) != nullptr))
+	FActorInfo *savedrep = Replacee;
+	Replacee = NULL;
+	FActorInfo *rep = savedrep;
+	if (lookskill && (skillrepname != NAME_None) && (PClass::FindClass(skillrepname) != NULL))
 	{
-		rep = PClass::FindActor(skillrepname);
+		rep = PClass::FindClass(skillrepname)->ActorInfo;
 	}
-	rep = rep->GetReplacee(false);
-	ActorInfo()->Replacee = savedrep;
+	rep = rep->GetReplacee (false);	Replacee = savedrep;
 	return rep;
 }
 
-DEFINE_ACTION_FUNCTION(AActor, GetReplacee)
+//==========================================================================
+//
+//
+//==========================================================================
+
+void FActorInfo::SetDamageFactor(FName type, fixed_t factor)
 {
-	PARAM_PROLOGUE;
-	PARAM_POINTER(c, PClassActor);
-	ACTION_RETURN_POINTER(c->GetReplacee());
+	if (DamageFactors == NULL)
+	{
+		DamageFactors = new DmgFactors;
+	}
+	DamageFactors->Insert(type, factor);
 }
 
 //==========================================================================
 //
-// PClassActor :: SetDamageFactor
 //
 //==========================================================================
 
-void PClassActor::SetDamageFactor(FName type, double factor)
+void FActorInfo::SetPainChance(FName type, int chance)
 {
-	for (auto & p : ActorInfo()->DamageFactors)
-	{
-		if (p.first == type)
-		{
-			p.second = factor;
-			return;
-		}
-	}
-	ActorInfo()->DamageFactors.Push({ type, factor });
-}
-
-//==========================================================================
-//
-// PClassActor :: SetPainChance
-//
-//==========================================================================
-
-void PClassActor::SetPainChance(FName type, int chance)
-{
-	for (auto & p : ActorInfo()->PainChances)
-	{
-		if (p.first == type)
-		{
-			p.second = chance;
-			return;
-		}
-	}
-
 	if (chance >= 0) 
 	{
-		ActorInfo()->PainChances.Push({ type, MIN(chance, 256) });
+		if (PainChances == NULL) PainChances=new PainChanceList;
+		PainChances->Insert(type, MIN(chance, 256));
+	}
+	else 
+	{
+		if (PainChances != NULL) 
+			PainChances->Remove(type);
+	}
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
+void FActorInfo::SetPainFlash(FName type, PalEntry color)
+{
+	if (PainFlashes == NULL)
+		PainFlashes = new PainFlashList;
+
+	PainFlashes->Insert(type, color);
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
+bool FActorInfo::GetPainFlash(FName type, PalEntry *color) const
+{
+	const FActorInfo *info = this;
+
+	while (info != NULL)
+	{
+		if (info->PainFlashes != NULL)
+		{
+			PalEntry *flash = info->PainFlashes->CheckKey(type);
+			if (flash != NULL)
+			{
+				*color = *flash;
+				return true;
+			}
+		}
+		// Try parent class
+		info = info->Class->ParentClass->ActorInfo;
+	}
+	return false;
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
+void FActorInfo::SetColorSet(int index, const FPlayerColorSet *set)
+{
+	if (set != NULL) 
+	{
+		if (ColorSets == NULL) ColorSets = new FPlayerColorSetMap;
+		ColorSets->Insert(index, *set);
+	}
+	else 
+	{
+		if (ColorSets != NULL) 
+			ColorSets->Remove(index);
 	}
 }
 
@@ -560,24 +380,146 @@ void PClassActor::SetPainChance(FName type, int chance)
 //
 //==========================================================================
 
-int DmgFactors::Apply(FName type, int damage)
+fixed_t *DmgFactors::CheckFactor(FName type)
 {
-	double factor = -1.;
-	for (auto & p : *this)
+	fixed_t *pdf = CheckKey(type);
+	if (pdf == NULL && type != NAME_None)
 	{
-		if (p.first == type)
+		pdf = CheckKey(NAME_None);
+	}
+	return pdf;
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
+FDoomEdMap DoomEdMap;
+
+FDoomEdMap::FDoomEdEntry *FDoomEdMap::DoomEdHash[DOOMED_HASHSIZE];
+
+FDoomEdMap::~FDoomEdMap()
+{
+	Empty();
+}
+
+void FDoomEdMap::AddType (int doomednum, const PClass *type, bool temporary)
+{
+	unsigned int hash = (unsigned int)doomednum % DOOMED_HASHSIZE;
+	FDoomEdEntry *entry = DoomEdHash[hash];
+	while (entry && entry->DoomEdNum != doomednum)
+	{
+		entry = entry->HashNext;
+	}
+	if (entry == NULL)
+	{
+		entry = new FDoomEdEntry;
+		entry->HashNext = DoomEdHash[hash];
+		entry->DoomEdNum = doomednum;
+		DoomEdHash[hash] = entry;
+	}
+	else if (!entry->temp)
+	{
+		Printf (PRINT_BOLD, "Warning: %s and %s both have doomednum %d.\n",
+			type->TypeName.GetChars(), entry->Type->TypeName.GetChars(), doomednum);
+	}
+	entry->temp = temporary;
+	entry->Type = type;
+}
+
+void FDoomEdMap::DelType (int doomednum)
+{
+	unsigned int hash = (unsigned int)doomednum % DOOMED_HASHSIZE;
+	FDoomEdEntry **prev = &DoomEdHash[hash];
+	FDoomEdEntry *entry = *prev;
+	while (entry && entry->DoomEdNum != doomednum)
+	{
+		prev = &entry->HashNext;
+		entry = entry->HashNext;
+	}
+	if (entry != NULL)
+	{
+		*prev = entry->HashNext;
+		delete entry;
+	}
+}
+
+void FDoomEdMap::Empty ()
+{
+	int bucket;
+
+	for (bucket = 0; bucket < DOOMED_HASHSIZE; ++bucket)
+	{
+		FDoomEdEntry *probe = DoomEdHash[bucket];
+
+		while (probe != NULL)
 		{
-			factor = p.second;
-			break;
+			FDoomEdEntry *next = probe->HashNext;
+			delete probe;
+			probe = next;
 		}
-		if (p.first == NAME_None)
+		DoomEdHash[bucket] = NULL;
+	}
+}
+
+const PClass *FDoomEdMap::FindType (int doomednum) const
+{
+	unsigned int hash = (unsigned int)doomednum % DOOMED_HASHSIZE;
+	FDoomEdEntry *entry = DoomEdHash[hash];
+	while (entry && entry->DoomEdNum != doomednum)
+		entry = entry->HashNext;
+	return entry ? entry->Type : NULL;
+}
+
+struct EdSorting
+{
+	const PClass *Type;
+	int DoomEdNum;
+};
+
+static int STACK_ARGS sortnums (const void *a, const void *b)
+{
+	return ((const EdSorting *)a)->DoomEdNum -
+		((const EdSorting *)b)->DoomEdNum;
+}
+
+void FDoomEdMap::DumpMapThings ()
+{
+	TArray<EdSorting> infos (PClass::m_Types.Size());
+	int i;
+
+	for (i = 0; i < DOOMED_HASHSIZE; ++i)
+	{
+		FDoomEdEntry *probe = DoomEdHash[i];
+
+		while (probe != NULL)
 		{
-			factor = p.second;
+			EdSorting sorting = { probe->Type, probe->DoomEdNum };
+			infos.Push (sorting);
+			probe = probe->HashNext;
 		}
 	}
 
-	if (factor < 0.) return damage;
-	return int(damage * factor);
+	if (infos.Size () == 0)
+	{
+		Printf ("No map things registered\n");
+	}
+	else
+	{
+		qsort (&infos[0], infos.Size (), sizeof(EdSorting), sortnums);
+
+		for (i = 0; i < (int)infos.Size (); ++i)
+		{
+			Printf ("%6d %s\n",
+				infos[i].DoomEdNum, infos[i].Type->TypeName.GetChars());
+		}
+	}
+}
+
+CCMD (dumpmapthings)
+{
+	FDoomEdMap::DumpMapThings ();
 }
 
 
@@ -588,23 +530,24 @@ static void SummonActor (int command, int command2, FCommandLine argv)
 
 	if (argv.argc() > 1)
 	{
-		PClassActor *type = PClass::FindActor(argv[1]);
-		if (type == nullptr)
+		const PClass *type = PClass::FindClass (argv[1]);
+		if (type == NULL)
 		{
-			Printf ("Unknown actor '%s'\n", argv[1]);
+			Printf ("Unknown class '%s'\n", argv[1]);
 			return;
 		}
 		Net_WriteByte (argv.argc() > 2 ? command2 : command);
 		Net_WriteString (type->TypeName.GetChars());
 
-		if (argv.argc () > 2)
-		{
+		if (argv.argc () > 2) {
 			Net_WriteWord (atoi (argv[2])); // angle
-			Net_WriteWord ((argv.argc() > 3) ? atoi(argv[3]) : 0); // TID
-			Net_WriteByte ((argv.argc() > 4) ? atoi(argv[4]) : 0); // special
-			for (int i = 5; i < 10; i++)
-			{ // args[5]
-				Net_WriteLong((i < argv.argc()) ? atoi(argv[i]) : 0);
+			if (argv.argc () > 3) Net_WriteWord (atoi (argv[3])); // TID
+			else Net_WriteWord (0);
+			if (argv.argc () > 4) Net_WriteByte (atoi (argv[4])); // special
+			else Net_WriteByte (0);
+			for(int i = 5; i < 10; i++) { // args[5]
+				if(i < argv.argc()) Net_WriteLong (atoi (argv[i]));
+				else Net_WriteLong (0);
 			}
 		}
 	}
@@ -635,37 +578,22 @@ CCMD (summonfoe)
 
 TMap<FName, DamageTypeDefinition> GlobalDamageDefinitions;
 
-void DamageTypeDefinition::Apply(FName type) 
+void DamageTypeDefinition::Apply(FName const type) 
 { 
 	GlobalDamageDefinitions[type] = *this; 
 }
 
-DamageTypeDefinition *DamageTypeDefinition::Get(FName type) 
+DamageTypeDefinition *DamageTypeDefinition::Get(FName const type) 
 { 
 	return GlobalDamageDefinitions.CheckKey(type); 
 }
 
-bool DamageTypeDefinition::IgnoreArmor(FName type)
+bool DamageTypeDefinition::IgnoreArmor(FName const type)
 { 
 	DamageTypeDefinition *dtd = Get(type);
 	if (dtd) return dtd->NoArmor;
 	return false;
 }
-
-DEFINE_ACTION_FUNCTION(_DamageTypeDefinition, IgnoreArmor)
-{
-	PARAM_PROLOGUE;
-	PARAM_NAME(type);
-	ACTION_RETURN_BOOL(DamageTypeDefinition::IgnoreArmor(type));
-}
-
-FString DamageTypeDefinition::GetObituary(FName type)
-{
-	DamageTypeDefinition *dtd = Get(type);
-	if (dtd) return dtd->Obituary;
-	return "";
-}
-
 
 //==========================================================================
 //
@@ -682,102 +610,48 @@ FString DamageTypeDefinition::GetObituary(FName type)
 //
 //==========================================================================
 
-double DamageTypeDefinition::GetMobjDamageFactor(FName type, DmgFactors const * const factors)
+int DamageTypeDefinition::ApplyMobjDamageFactor(int damage, FName const type, DmgFactors const * const factors)
 {
-	double defaultfac = -1.;
 	if (factors)
 	{
 		// If the actor has named damage factors, look for a specific factor
-		for (auto & p : *factors)
-		{
-			if (p.first == type) return p.second; // type specific damage type
-			if (p.first == NAME_None) defaultfac = p.second;
-		}
+		fixed_t const *pdf = factors->CheckKey(type);
+		if (pdf) return FixedMul(damage, *pdf); // type specific damage type
+		
 		// If this was nonspecific damage, don't fall back to nonspecific search
-		if (type == NAME_None) return 1.;
+		if (type == NAME_None) return damage;
 	}
 	
 	// If this was nonspecific damage, don't fall back to nonspecific search
 	else if (type == NAME_None) 
 	{ 
-		return 1.;
+		return damage; 
 	}
 	else
 	{
 		// Normal is unsupplied / 1.0, so there's no difference between modifying and overriding
 		DamageTypeDefinition *dtd = Get(type);
-		return dtd ? dtd->DefaultFactor : 1.;
+		return dtd ? FixedMul(damage, dtd->DefaultFactor) : damage;
 	}
 	
 	{
+		fixed_t const *pdf  = factors->CheckKey(NAME_None);
 		DamageTypeDefinition *dtd = Get(type);
 		// Here we are looking for modifications to untyped damage
 		// If the calling actor defines untyped damage factor, that is contained in "pdf".
-		if (defaultfac >= 0.) // normal damage available
+		if (pdf) // normal damage available
 		{
 			if (dtd)
 			{
-				if (dtd->ReplaceFactor) return dtd->DefaultFactor; // use default instead of untyped factor
-				return defaultfac * dtd->DefaultFactor; // use default as modification of untyped factor
+				if (dtd->ReplaceFactor) return FixedMul(damage, dtd->DefaultFactor); // use default instead of untyped factor
+				return FixedMul(damage, FixedMul(*pdf, dtd->DefaultFactor)); // use default as modification of untyped factor
 			}
-			return defaultfac; // there was no default, so actor default is used
+			return FixedMul(damage, *pdf); // there was no default, so actor default is used
 		}
 		else if (dtd)
 		{
-			return dtd->DefaultFactor; // implicit untyped factor 1.0 does not need to be applied/replaced explicitly
+			return FixedMul(damage, dtd->DefaultFactor); // implicit untyped factor 1.0 does not need to be applied/replaced explicitly
 		}
 	}
-	return 1.;
-}
-
-int DamageTypeDefinition::ApplyMobjDamageFactor(int damage, FName type, DmgFactors const * const factors)
-{
-	double factor = GetMobjDamageFactor(type, factors);
-	return int(damage * factor);
-}
-
-//==========================================================================
-//
-// Reads a damage definition
-//
-//==========================================================================
-
-void FMapInfoParser::ParseDamageDefinition()
-{
-	sc.MustGetString();
-	FName damageType = sc.String;
-
-	DamageTypeDefinition dtd;
-
-	ParseOpenBrace();
-	while (sc.MustGetAnyToken(), sc.TokenType != '}')
-	{
-		if (sc.Compare("FACTOR"))
-		{
-			sc.MustGetStringName("=");
-			sc.MustGetFloat();
-			dtd.DefaultFactor = sc.Float;
-			if (dtd.DefaultFactor == 0) dtd.ReplaceFactor = true;
-		}
-		else if (sc.Compare("OBITUARY"))
-		{
-			sc.MustGetStringName("=");
-			sc.MustGetString();
-			dtd.Obituary = sc.String;
-		}
-		else if (sc.Compare("REPLACEFACTOR"))
-		{
-			dtd.ReplaceFactor = true;
-		}
-		else if (sc.Compare("NOARMOR"))
-		{
-			dtd.NoArmor = true;
-		}
-		else
-		{
-			sc.ScriptError("Unexpected data (%s) in damagetype definition.", sc.String);
-		}
-	}
-
-	dtd.Apply(damageType);
+	return damage;
 }

@@ -1,4 +1,6 @@
-#pragma once
+#ifndef __R_BLEND_H
+#define __R_BLEND_H
+
 /*
 ** r_blend.h
 ** Constants and types for specifying texture blending.
@@ -32,17 +34,6 @@
 **---------------------------------------------------------------------------
 **
 */
-#include <stdint.h>
-
-// <wingdi.h> also #defines OPAQUE
-#ifdef OPAQUE
-#undef OPAQUE
-#endif
-
-enum
-{
-	OPAQUE = 65536,
-};
 
 // Legacy render styles
 enum ERenderStyle
@@ -125,35 +116,27 @@ union FRenderStyle
 {
 	struct
 	{
-		uint8_t BlendOp;	// Of ERenderOp type
-		uint8_t SrcAlpha;	// Of ERenderAlpha type
-		uint8_t DestAlpha;	// Of ERenderAlpha type
-		uint8_t Flags;
+		BYTE BlendOp;	// Of ERenderOp type
+		BYTE SrcAlpha;	// Of ERenderAlpha type
+		BYTE DestAlpha;	// Of ERenderAlpha type
+		BYTE Flags;
 	};
-	uint32_t AsDWORD;
+	uint32 AsDWORD;
 
 	inline FRenderStyle &operator= (ERenderStyle legacy);
+	operator uint32() const { return AsDWORD; }
 	bool operator==(const FRenderStyle &o) const { return AsDWORD == o.AsDWORD; }
 	void CheckFuzz();
-	bool IsVisible(double alpha) const throw();
+	bool IsVisible(fixed_t alpha) const throw();
 private:
 	// Code that compares an actor's render style with a legacy render
-	// style value should be updated.
-	operator ERenderStyle() = delete;
-	operator int() const = delete;
+	// style value should be updated. Making these conversion operators
+	// private will catch those cases.
+	operator ERenderStyle() const { return STYLE_Normal; }
+	operator int() const { return STYLE_Normal; }
 };
 
 extern FRenderStyle LegacyRenderStyles[STYLE_Count];
-
-inline FRenderStyle DefaultRenderStyle()
-{
-	return LegacyRenderStyles[STYLE_Normal];
-}
-
-inline FRenderStyle BadRenderStyle()	// This is just a marker to find places where work is still needed.
-{
-	return LegacyRenderStyles[STYLE_Normal];
-}
 
 inline FRenderStyle &FRenderStyle::operator= (ERenderStyle legacy)
 {
@@ -165,3 +148,9 @@ inline FRenderStyle &FRenderStyle::operator= (ERenderStyle legacy)
 	return *this;
 }
 
+class FArchive;
+
+FArchive &operator<< (FArchive &arc, FRenderStyle &style);
+fixed_t GetAlpha(int type, fixed_t alpha);
+
+#endif

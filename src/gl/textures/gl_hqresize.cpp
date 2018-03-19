@@ -40,26 +40,14 @@
 #include "gl/textures/gl_texture.h"
 #include "c_cvars.h"
 #include "gl/hqnx/hqx.h"
-#ifdef HAVE_MMX
+#ifdef _MSC_VER
 #include "gl/hqnx_asm/hqnx_asm.h"
 #endif
-#include "gl/xbr/xbrz.h"
-#include "gl/xbr/xbrz_old.h"
-
-#include "parallel_for.h"
 
 CUSTOM_CVAR(Int, gl_texture_hqresize, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
 {
-	if (self < 0 || self > 16)
-	{
+	if (self < 0 || self > 6)
 		self = 0;
-	}
-	#ifndef HAVE_MMX
-		// This is to allow the menu option to work properly so that these filters can be skipped while cycling through them.
-		if (self == 7) self = 10;
-		if (self == 8) self = 10;
-		if (self == 9) self = 6;
-	#endif
 	GLRenderer->FlushTextures();
 }
 
@@ -78,22 +66,8 @@ CVAR (Flag, gl_texture_hqresize_textures, gl_texture_hqresize_targets, 1);
 CVAR (Flag, gl_texture_hqresize_sprites, gl_texture_hqresize_targets, 2);
 CVAR (Flag, gl_texture_hqresize_fonts, gl_texture_hqresize_targets, 4);
 
-CVAR(Bool, gl_texture_hqresize_multithread, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG);
 
-CUSTOM_CVAR(Int, gl_texture_hqresize_mt_width, 16, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
-{
-	if (self < 2)    self = 2;
-	if (self > 1024) self = 1024;
-}
-
-CUSTOM_CVAR(Int, gl_texture_hqresize_mt_height, 4, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
-{
-	if (self < 2)    self = 2;
-	if (self > 1024) self = 1024;
-}
-
-
-static void scale2x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth, int inHeight )
+static void scale2x ( uint32* inputBuffer, uint32* outputBuffer, int inWidth, int inHeight )
 {
 	const int width = 2* inWidth;
 	const int height = 2 * inHeight;
@@ -106,15 +80,15 @@ static void scale2x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth
 		{
 			const int jMinus = (j > 0) ? (j-1) : 0;
 			const int jPlus = (j < inHeight - 1 ) ? (j+1) : j;
-			const uint32_t A = inputBuffer[ iMinus +inWidth*jMinus];
-			const uint32_t B = inputBuffer[ iMinus +inWidth*j    ];
-			const uint32_t C = inputBuffer[ iMinus +inWidth*jPlus];
-			const uint32_t D = inputBuffer[ i     +inWidth*jMinus];
-			const uint32_t E = inputBuffer[ i     +inWidth*j    ];
-			const uint32_t F = inputBuffer[ i     +inWidth*jPlus];
-			const uint32_t G = inputBuffer[ iPlus +inWidth*jMinus];
-			const uint32_t H = inputBuffer[ iPlus +inWidth*j    ];
-			const uint32_t I = inputBuffer[ iPlus +inWidth*jPlus];
+			const uint32 A = inputBuffer[ iMinus +inWidth*jMinus];
+			const uint32 B = inputBuffer[ iMinus +inWidth*j    ];
+			const uint32 C = inputBuffer[ iMinus +inWidth*jPlus];
+			const uint32 D = inputBuffer[ i     +inWidth*jMinus];
+			const uint32 E = inputBuffer[ i     +inWidth*j    ];
+			const uint32 F = inputBuffer[ i     +inWidth*jPlus];
+			const uint32 G = inputBuffer[ iPlus +inWidth*jMinus];
+			const uint32 H = inputBuffer[ iPlus +inWidth*j    ];
+			const uint32 I = inputBuffer[ iPlus +inWidth*jPlus];
 			if (B != H && D != F) {
 				outputBuffer[2*i   + width*2*j    ] = D == B ? D : E;
 				outputBuffer[2*i   + width*(2*j+1)] = B == F ? F : E;
@@ -130,7 +104,7 @@ static void scale2x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth
 	}
 }
 
-static void scale3x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth, int inHeight )
+static void scale3x ( uint32* inputBuffer, uint32* outputBuffer, int inWidth, int inHeight )
 {
 	const int width = 3* inWidth;
 	const int height = 3 * inHeight;
@@ -143,15 +117,15 @@ static void scale3x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth
 		{
 			const int jMinus = (j > 0) ? (j-1) : 0;
 			const int jPlus = (j < inHeight - 1 ) ? (j+1) : j;
-			const uint32_t A = inputBuffer[ iMinus +inWidth*jMinus];
-			const uint32_t B = inputBuffer[ iMinus +inWidth*j    ];
-			const uint32_t C = inputBuffer[ iMinus +inWidth*jPlus];
-			const uint32_t D = inputBuffer[ i     +inWidth*jMinus];
-			const uint32_t E = inputBuffer[ i     +inWidth*j    ];
-			const uint32_t F = inputBuffer[ i     +inWidth*jPlus];
-			const uint32_t G = inputBuffer[ iPlus +inWidth*jMinus];
-			const uint32_t H = inputBuffer[ iPlus +inWidth*j    ];
-			const uint32_t I = inputBuffer[ iPlus +inWidth*jPlus];
+			const uint32 A = inputBuffer[ iMinus +inWidth*jMinus];
+			const uint32 B = inputBuffer[ iMinus +inWidth*j    ];
+			const uint32 C = inputBuffer[ iMinus +inWidth*jPlus];
+			const uint32 D = inputBuffer[ i     +inWidth*jMinus];
+			const uint32 E = inputBuffer[ i     +inWidth*j    ];
+			const uint32 F = inputBuffer[ i     +inWidth*jPlus];
+			const uint32 G = inputBuffer[ iPlus +inWidth*jMinus];
+			const uint32 H = inputBuffer[ iPlus +inWidth*j    ];
+			const uint32 I = inputBuffer[ iPlus +inWidth*jPlus];
 			if (B != H && D != F) {
 				outputBuffer[3*i   + width*3*j    ] = D == B ? D : E;
 				outputBuffer[3*i   + width*(3*j+1)] = (D == B && E != C) || (B == F && E != A) ? B : E;
@@ -177,21 +151,21 @@ static void scale3x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth
 	}
 }
 
-static void scale4x ( uint32_t* inputBuffer, uint32_t* outputBuffer, int inWidth, int inHeight )
+static void scale4x ( uint32* inputBuffer, uint32* outputBuffer, int inWidth, int inHeight )
 {
 	int width = 2* inWidth;
 	int height = 2 * inHeight;
-	uint32_t * buffer2x = new uint32_t[width*height];
+	uint32 * buffer2x = new uint32[width*height];
 
-	scale2x ( reinterpret_cast<uint32_t*> ( inputBuffer ), reinterpret_cast<uint32_t*> ( buffer2x ), inWidth, inHeight );
+	scale2x ( reinterpret_cast<uint32*> ( inputBuffer ), reinterpret_cast<uint32*> ( buffer2x ), inWidth, inHeight );
 	width *= 2;
 	height *= 2;
-	scale2x ( reinterpret_cast<uint32_t*> ( buffer2x ), reinterpret_cast<uint32_t*> ( outputBuffer ), 2*inWidth, 2*inHeight );
+	scale2x ( reinterpret_cast<uint32*> ( buffer2x ), reinterpret_cast<uint32*> ( outputBuffer ), 2*inWidth, 2*inHeight );
 	delete[] buffer2x;
 }
 
 
-static unsigned char *scaleNxHelper( void (*scaleNxFunction) ( uint32_t* , uint32_t* , int , int),
+static unsigned char *scaleNxHelper( void (*scaleNxFunction) ( uint32* , uint32* , int , int),
 							  const int N,
 							  unsigned char *inputBuffer,
 							  const int inWidth,
@@ -203,12 +177,13 @@ static unsigned char *scaleNxHelper( void (*scaleNxFunction) ( uint32_t* , uint3
 	outHeight = N *inHeight;
 	unsigned char * newBuffer = new unsigned char[outWidth*outHeight*4];
 
-	scaleNxFunction ( reinterpret_cast<uint32_t*> ( inputBuffer ), reinterpret_cast<uint32_t*> ( newBuffer ), inWidth, inHeight );
+	scaleNxFunction ( reinterpret_cast<uint32*> ( inputBuffer ), reinterpret_cast<uint32*> ( newBuffer ), inWidth, inHeight );
 	delete[] inputBuffer;
 	return newBuffer;
 }
 
-#ifdef HAVE_MMX
+// [BB] hqnx scaling is only supported with the MS compiler.
+#ifdef _MSC_VER
 static unsigned char *hqNxAsmHelper( void (*hqNxFunction) ( int*, unsigned char*, int, int, int ),
 							  const int N,
 							  unsigned char *inputBuffer,
@@ -264,50 +239,6 @@ static unsigned char *hqNxHelper( void (*hqNxFunction) ( unsigned*, unsigned*, i
 }
 
 
-			
-static unsigned char *xbrzHelper( void (*xbrzFunction) ( size_t, const uint32_t*, uint32_t*, int, int, xbrz::ColorFormat, const xbrz::ScalerCfg&, int, int ),
-							  const int N,
-							  unsigned char *inputBuffer,
-							  const int inWidth,
-							  const int inHeight,
-							  int &outWidth,
-							  int &outHeight )
-{
-	outWidth = N * inWidth;
-	outHeight = N *inHeight;
-
-	unsigned char * newBuffer = new unsigned char[outWidth*outHeight*4];
-	
-	const int thresholdWidth  = gl_texture_hqresize_mt_width;
-	const int thresholdHeight = gl_texture_hqresize_mt_height;
-	
-	if (gl_texture_hqresize_multithread
-		&& inWidth  > thresholdWidth
-		&& inHeight > thresholdHeight)
-	{
-		parallel_for(inHeight, thresholdHeight, [=](int sliceY)
-		{
-			xbrzFunction(N, reinterpret_cast<uint32_t*>(inputBuffer), reinterpret_cast<uint32_t*>(newBuffer),
-				inWidth, inHeight, xbrz::ARGB, xbrz::ScalerCfg(), sliceY, sliceY + thresholdHeight);
-		});
-	}
-	else
-	{
-		xbrzFunction(N, reinterpret_cast<uint32_t*>(inputBuffer), reinterpret_cast<uint32_t*>(newBuffer),
-			inWidth, inHeight, xbrz::ARGB, xbrz::ScalerCfg(), 0, std::numeric_limits<int>::max());
-	}
-
-	delete[] inputBuffer;
-	return newBuffer;
-}
-
-static void xbrzOldScale(size_t factor, const uint32_t* src, uint32_t* trg, int srcWidth, int srcHeight, xbrz::ColorFormat colFmt, const xbrz::ScalerCfg& cfg, int yFirst, int yLast)
-{
-	static_assert(sizeof(xbrz::ScalerCfg) == sizeof(xbrz_old::ScalerCfg), "ScalerCfg classes have different layout");
-	xbrz_old::scale(factor, src, trg, srcWidth, srcHeight, reinterpret_cast<const xbrz_old::ScalerCfg&>(cfg), yFirst, yLast);
-}
-
-
 //===========================================================================
 // 
 // [BB] Upsamples the texture in inputBuffer, frees inputBuffer and returns
@@ -329,14 +260,6 @@ unsigned char *gl_CreateUpsampledTextureBuffer ( const FTexture *inputTexture, u
 	if ( inputTexture->bHasCanvas )
 		return inputBuffer;
 
-	// [BB] Don't upsample non-shader handled warped textures. Needs too much memory and time
-	if (gl.legacyMode && inputTexture->bWarped)
-		return inputBuffer;
-
-	// already scaled?
-	if (inputTexture->Scale.X >= 2 && inputTexture->Scale.Y >= 2)
-		return inputBuffer;
-
 	switch (inputTexture->UseType)
 	{
 	case FTexture::TEX_Sprite:
@@ -355,14 +278,14 @@ unsigned char *gl_CreateUpsampledTextureBuffer ( const FTexture *inputTexture, u
 
 	if (inputBuffer)
 	{
-		int type = gl_texture_hqresize;
 		outWidth = inWidth;
 		outHeight = inHeight;
-#ifdef HAVE_MMX
-		// hqNx MMX does not preserve the alpha channel so fall back to C-version for such textures
-		if (hasAlpha && type > 6 && type <= 9)
+		int type = gl_texture_hqresize;
+#ifdef _MSC_VER
+		// ASM-hqNx does not preserve the alpha channel so fall back to C-version for such textures
+		if (!hasAlpha && type > 3 && type <= 6)
 		{
-			type -= 3;
+			type += 3;
 		}
 #endif
 
@@ -380,7 +303,7 @@ unsigned char *gl_CreateUpsampledTextureBuffer ( const FTexture *inputTexture, u
 			return hqNxHelper( &hq3x_32, 3, inputBuffer, inWidth, inHeight, outWidth, outHeight );
 		case 6:
 			return hqNxHelper( &hq4x_32, 4, inputBuffer, inWidth, inHeight, outWidth, outHeight );
-#ifdef HAVE_MMX
+#ifdef _MSC_VER
 		case 7:
 			return hqNxAsmHelper( &HQnX_asm::hq2x_32, 2, inputBuffer, inWidth, inHeight, outWidth, outHeight );
 		case 8:
@@ -388,16 +311,6 @@ unsigned char *gl_CreateUpsampledTextureBuffer ( const FTexture *inputTexture, u
 		case 9:
 			return hqNxAsmHelper( &HQnX_asm::hq4x_32, 4, inputBuffer, inWidth, inHeight, outWidth, outHeight );
 #endif
-		case 10:
-		case 11:
-		case 12:
-			return xbrzHelper(xbrz::scale, type - 8, inputBuffer, inWidth, inHeight, outWidth, outHeight );
-			
-		case 13:
-		case 14:
-		case 15:
-			return xbrzHelper(xbrzOldScale, type - 11, inputBuffer, inWidth, inHeight, outWidth, outHeight );
-			
 		}
 	}
 	return inputBuffer;

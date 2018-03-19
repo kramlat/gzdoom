@@ -13,7 +13,7 @@ class DLightningThinker : public DThinker
 public:
 	DLightningThinker ();
 	~DLightningThinker ();
-	void Serialize(FSerializer &arc);
+	void Serialize (FArchive &arc);
 	void Tick ();
 	void ForceLightning (int mode);
 	void TerminateLightning();
@@ -24,7 +24,7 @@ protected:
 	int NextLightningFlash;
 	int LightningFlashCount;
 	bool Stopped;
-	TArray<short> LightningLightLevels;
+	short *LightningLightLevels;
 };
 
 void P_StartLightning ();

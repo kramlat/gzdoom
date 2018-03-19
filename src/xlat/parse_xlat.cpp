@@ -80,8 +80,8 @@ struct SpecialArg
 
 struct ListFilter
 {
-	uint16_t filter;
-	uint8_t value;
+	WORD filter;
+	BYTE value;
 };
 
 struct MoreFilters
@@ -98,8 +98,8 @@ struct MoreLines
 
 struct ParseBoomArg
 {
-	uint8_t constant;
-	uint16_t mask;
+	BYTE constant;
+	WORD mask;
 	MoreFilters *filters;
 };
 

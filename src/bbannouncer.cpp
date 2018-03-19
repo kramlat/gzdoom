@@ -49,7 +49,6 @@
 #include "d_player.h"
 #include "g_level.h"
 #include "doomstat.h"
-#include "g_levellocals.h"
 
 // MACROS ------------------------------------------------------------------
 

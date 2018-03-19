@@ -37,45 +37,48 @@
 #include "cmdlib.h"
 #include "i_system.h"
 
+IMPLEMENT_CLASS (DArgs)
+
 //===========================================================================
 //
-// FArgs Default Constructor
+// DArgs Default Constructor
 //
 //===========================================================================
 
-FArgs::FArgs()
+DArgs::DArgs()
 {
 }
 
 //===========================================================================
 //
-// FArgs Copy Constructor
+// DArgs Copy Constructor
 //
 //===========================================================================
 
-FArgs::FArgs(const FArgs &other)
-: Argv(other.Argv)
+DArgs::DArgs(const DArgs &other)
+: DObject()
 {
+	Argv = other.Argv;
 }
 
 //===========================================================================
 //
-// FArgs Argv Constructor
+// DArgs Argv Constructor
 //
 //===========================================================================
 
-FArgs::FArgs(int argc, char **argv)
+DArgs::DArgs(int argc, char **argv)
 {
 	SetArgs(argc, argv);
 }
 
 //===========================================================================
 //
-// FArgs String Argv Constructor
+// DArgs String Argv Constructor
 //
 //===========================================================================
 
-FArgs::FArgs(int argc, FString *argv)
+DArgs::DArgs(int argc, FString *argv)
 {
 	AppendArgs(argc, argv);
 }
@@ -84,11 +87,11 @@ FArgs::FArgs(int argc, FString *argv)
 
 //===========================================================================
 //
-// FArgs Copy Operator
+// DArgs Copy Operator
 //
 //===========================================================================
 
-FArgs &FArgs::operator=(const FArgs &other)
+DArgs &DArgs::operator=(const DArgs &other)
 {
 	Argv = other.Argv;
 	return *this;
@@ -96,11 +99,11 @@ FArgs &FArgs::operator=(const FArgs &other)
 
 //===========================================================================
 //
-// FArgs :: SetArgs
+// DArgs :: SetArgs
 //
 //===========================================================================
 
-void FArgs::SetArgs(int argc, char **argv)
+void DArgs::SetArgs(int argc, char **argv)
 {
 	Argv.Resize(argc);
 	for (int i = 0; i < argc; ++i)
@@ -111,25 +114,25 @@ void FArgs::SetArgs(int argc, char **argv)
 
 //===========================================================================
 //
-// FArgs :: FlushArgs
+// DArgs :: FlushArgs
 //
 //===========================================================================
 
-void FArgs::FlushArgs()
+void DArgs::FlushArgs()
 {
 	Argv.Clear();
 }
 
 //===========================================================================
 //
-// FArgs :: CheckParm
+// DArgs :: CheckParm
 //
 // Checks for the given parameter in the program's command line arguments.
 // Returns the argument number (1 to argc-1) or 0 if not present
 //
 //===========================================================================
 
-int FArgs::CheckParm(const char *check, int start) const
+int DArgs::CheckParm(const char *check, int start) const
 {
 	for (unsigned i = start; i < Argv.Size(); ++i)
 	{
@@ -143,14 +146,14 @@ int FArgs::CheckParm(const char *check, int start) const
 
 //===========================================================================
 //
-// FArgs :: CheckParmList
+// DArgs :: CheckParmList
 //
 // Returns the number of arguments after the parameter (if found) and also
 // returns a pointer to the first argument.
 //
 //===========================================================================
 
-int FArgs::CheckParmList(const char *check, FString **strings, int start) const
+int DArgs::CheckParmList(const char *check, FString **strings, int start) const
 {
 	unsigned int i, parmat = CheckParm(check, start);
 
@@ -178,14 +181,14 @@ int FArgs::CheckParmList(const char *check, FString **strings, int start) const
 
 //===========================================================================
 //
-// FArgs :: CheckValue
+// DArgs :: CheckValue
 //
 // Like CheckParm, but it also checks that the parameter has a value after
 // it and returns that or NULL if not present.
 //
 //===========================================================================
 
-const char *FArgs::CheckValue(const char *check) const
+const char *DArgs::CheckValue(const char *check) const
 {
 	int i = CheckParm(check);
 
@@ -202,14 +205,14 @@ const char *FArgs::CheckValue(const char *check) const
 
 //===========================================================================
 //
-// FArgs :: TakeValue
+// DArgs :: TakeValue
 //
 // Like CheckValue, except it also removes the parameter and its argument
 // (if present) from argv.
 //
 //===========================================================================
 
-FString FArgs::TakeValue(const char *check)
+FString DArgs::TakeValue(const char *check)
 {
 	int i = CheckParm(check);
 	FString out;
@@ -231,11 +234,11 @@ FString FArgs::TakeValue(const char *check)
 
 //===========================================================================
 //
-// FArgs :: RemoveArg
+// DArgs :: RemoveArg
 //
 //===========================================================================
 
-void FArgs::RemoveArgs(const char *check)
+void DArgs::RemoveArgs(const char *check)
 {
 	int i = CheckParm(check);
 
@@ -251,64 +254,65 @@ void FArgs::RemoveArgs(const char *check)
 
 //===========================================================================
 //
-// FArgs :: GetArg
+// DArgs :: GetArg
 //
 // Gets the argument at a particular position.
 //
 //===========================================================================
 
-const char *FArgs::GetArg(int arg) const
+const char *DArgs::GetArg(int arg) const
 {
 	return ((unsigned)arg < Argv.Size()) ? Argv[arg].GetChars() : NULL;
+		return Argv[arg];
 }
 
 //===========================================================================
 //
-// FArgs :: GetArgList
+// DArgs :: GetArgList
 //
 // Returns a pointer to the FString at a particular position.
 //
 //===========================================================================
 
-FString *FArgs::GetArgList(int arg) const
+FString *DArgs::GetArgList(int arg) const
 {
 	return ((unsigned)arg < Argv.Size()) ? &Argv[arg] : NULL;
 }
 
 //===========================================================================
 //
-// FArgs :: NumArgs
+// DArgs :: NumArgs
 //
 //===========================================================================
 
-int FArgs::NumArgs() const
+int DArgs::NumArgs() const
 {
 	return (int)Argv.Size();
 }
 
 //===========================================================================
 //
-// FArgs :: AppendArg
+// DArgs :: AppendArg
 //
 // Adds another argument to argv. Invalidates any previous results from
 // GetArgList().
 //
 //===========================================================================
 
-void FArgs::AppendArg(FString arg)
+void DArgs::AppendArg(FString arg)
 {
 	Argv.Push(arg);
 }
 
 //===========================================================================
 //
-// FArgs :: AppendArgs
+// DArgs :: AppendArgs
 //
 // Adds an array of FStrings to argv.
 //
 //===========================================================================
 
-void FArgs::AppendArgs(int argc, const FString *argv)
+void DArgs::AppendArgs(int argc, const FString *argv)
 {
 	if (argv != NULL && argc > 0)
 	{
@@ -322,20 +326,20 @@ void FArgs::AppendArgs(int argc, const FString *argv)
 
 //===========================================================================
 //
-// FArgs :: RemoveArg
+// DArgs :: RemoveArg
 //
 // Removes a single argument from argv.
 //
 //===========================================================================
 
-void FArgs::RemoveArg(int argindex)
+void DArgs::RemoveArg(int argindex)
 {
 	Argv.Delete(argindex);
 }
 
 //===========================================================================
 //
-// FArgs :: CollectFiles
+// DArgs :: CollectFiles
 //
 // Takes all arguments after any instance of -param and any arguments before
 // all switches that end in .extension and combines them into a single
@@ -344,9 +348,10 @@ void FArgs::RemoveArg(int argindex)
 //
 //===========================================================================
 
-void FArgs::CollectFiles(const char *param, const char *extension)
+void DArgs::CollectFiles(const char *param, const char *extension)
 {
 	TArray<FString> work;
+	DArgs *out = new DArgs;
 	unsigned int i;
 	size_t extlen = extension == NULL ? 0 : strlen(extension);
 
@@ -405,7 +410,7 @@ void FArgs::CollectFiles(const char *param, const char *extension)
 
 //===========================================================================
 //
-// FArgs :: GatherFiles
+// DArgs :: GatherFiles
 //
 // Returns all the arguments after the first instance of -param. If you want
 // to combine more than one or get switchless stuff included, you need to
@@ -413,11 +418,11 @@ void FArgs::CollectFiles(const char *param, const char *extension)
 //
 //===========================================================================
 
-FArgs *FArgs::GatherFiles(const char *param) const
+DArgs *DArgs::GatherFiles(const char *param) const
 {
 	FString *files;
 	int filecount;
 
 	filecount = CheckParmList(param, &files);
-	return new FArgs(filecount, files);
+	return new DArgs(filecount, files);
 }

@@ -53,19 +53,19 @@
 
 struct TGAHeader
 {
-	uint8_t		id_len;
-	uint8_t		has_cm;
-	uint8_t		img_type;
-	int16_t		cm_first;
-	int16_t		cm_length;
-	uint8_t		cm_size;
+	BYTE		id_len;
+	BYTE		has_cm;
+	BYTE		img_type;
+	SWORD		cm_first;
+	SWORD		cm_length;
+	BYTE		cm_size;
 	
-	int16_t		x_origin;
-	int16_t		y_origin;
-	int16_t		width;
-	int16_t		height;
-	uint8_t		bpp;
-	uint8_t		img_desc;
+	SWORD		x_origin;
+	SWORD		y_origin;
+	SWORD		width;
+	SWORD		height;
+	BYTE		bpp;
+	BYTE		img_desc;
 };
 
 #pragma pack()
@@ -76,18 +76,29 @@ struct TGAHeader
 //
 //==========================================================================
 
-class FTGATexture : public FWorldTexture
+class FTGATexture : public FTexture
 {
 public:
 	FTGATexture (int lumpnum, TGAHeader *);
+	~FTGATexture ();
 
-	FTextureFormat GetFormat () override;
-	int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCopyInfo *inf = NULL) override;
-	bool UseBasePalette() override;
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload ();
+	FTextureFormat GetFormat ();
+
+	int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCopyInfo *inf = NULL);
+	bool UseBasePalette();
 
 protected:
-	void ReadCompressed(FileReader &lump, uint8_t * buffer, int bytesperpixel);
-	uint8_t *MakeTexture (FRenderStyle style) override;
+	BYTE *Pixels;
+	Span **Spans;
+
+	void ReadCompressed(FileReader &lump, BYTE * buffer, int bytesperpixel);
+
+	virtual void MakeTexture ();
+
+	friend class FTexture;
 };
 
 //==========================================================================
@@ -102,7 +113,7 @@ FTexture *TGATexture_TryCreate(FileReader & file, int lumpnum)
 
 	if (file.GetLength() < (long)sizeof(hdr)) return NULL;
 	
-	file.Seek(0, FileReader::SeekSet);
+	file.Seek(0, SEEK_SET);
 	file.Read(&hdr, sizeof(hdr));
 	hdr.width = LittleShort(hdr.width);
 	hdr.height = LittleShort(hdr.height);
@@ -116,7 +127,7 @@ FTexture *TGATexture_TryCreate(FileReader & file, int lumpnum)
 	if (hdr.img_type >=4  && hdr.img_type <= 8) return NULL;
 	if ((hdr.img_desc & 16) != 0) return NULL;
 
-	file.Seek(0, FileReader::SeekSet);
+	file.Seek(0, SEEK_SET);
 	file.Read(&hdr, sizeof(hdr));
 	hdr.width = LittleShort(hdr.width);
 	hdr.height = LittleShort(hdr.height);
@@ -131,7 +142,7 @@ FTexture *TGATexture_TryCreate(FileReader & file, int lumpnum)
 //==========================================================================
 
 FTGATexture::FTGATexture (int lumpnum, TGAHeader * hdr)
-: FWorldTexture(NULL, lumpnum)
+: FTexture(NULL, lumpnum), Pixels(0), Spans(0)
 {
 	Wads.GetLumpName (Name, lumpnum);
 	Width = hdr->width;
@@ -139,6 +150,37 @@ FTGATexture::FTGATexture (int lumpnum, TGAHeader * hdr)
 	// Alpha channel is used only for 32 bit RGBA and paletted images with RGBA palettes.
 	bMasked = (hdr->img_desc&15)==8 && (hdr->bpp==32 || (hdr->img_type==1 && hdr->cm_size==32));
 	CalcBitSize();
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+FTGATexture::~FTGATexture ()
+{
+	Unload ();
+	if (Spans != NULL)
+	{
+		FreeSpans (Spans);
+		Spans = NULL;
+	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FTGATexture::Unload ()
+{
+	if (Pixels != NULL)
+	{
+		delete[] Pixels;
+		Pixels = NULL;
+	}
 }
 
 //==========================================================================
@@ -158,14 +200,64 @@ FTextureFormat FTGATexture::GetFormat()
 //
 //==========================================================================
 
-void FTGATexture::ReadCompressed(FileReader &lump, uint8_t * buffer, int bytesperpixel)
+const BYTE *FTGATexture::GetColumn (unsigned int column, const Span **spans_out)
 {
-	uint8_t data[4];
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	if ((unsigned)column >= (unsigned)Width)
+	{
+		if (WidthMask + 1 == Width)
+		{
+			column &= WidthMask;
+		}
+		else
+		{
+			column %= Width;
+		}
+	}
+	if (spans_out != NULL)
+	{
+		if (Spans == NULL)
+		{
+			Spans = CreateSpans (Pixels);
+		}
+		*spans_out = Spans[column];
+	}
+	return Pixels + column*Height;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FTGATexture::GetPixels ()
+{
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	return Pixels;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FTGATexture::ReadCompressed(FileReader &lump, BYTE * buffer, int bytesperpixel)
+{
+	BYTE b;
+	BYTE data[4];
 	int Size = Width * Height;
 	
 	while (Size > 0) 
 	{
-		uint8_t b = lump.ReadUInt8();
+		lump >> b;
 		if (b & 128)
 		{
 			b&=~128;
@@ -194,19 +286,18 @@ void FTGATexture::ReadCompressed(FileReader &lump, uint8_t * buffer, int bytespe
 //
 //==========================================================================
 
-uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
+void FTGATexture::MakeTexture ()
 {
-	uint8_t PaletteMap[256];
-	auto lump = Wads.OpenLumpReader (SourceLump);
+	BYTE PaletteMap[256];
+	FWadLump lump = Wads.OpenLumpNum (SourceLump);
 	TGAHeader hdr;
-	uint16_t w;
-	uint8_t r,g,b,a;
-	uint8_t * buffer;
-	bool alphatex = !!(style.Flags & STYLEF_RedIsAlpha);
+	WORD w;
+	BYTE r,g,b,a;
+	BYTE * buffer;
 
-	auto Pixels = new uint8_t[Width*Height];
+	Pixels = new BYTE[Width*Height];
 	lump.Read(&hdr, sizeof(hdr));
-	lump.Seek(hdr.id_len, FileReader::SeekCur);
+	lump.Seek(hdr.id_len, SEEK_CUR);
 	
 	hdr.width = LittleShort(hdr.width);
 	hdr.height = LittleShort(hdr.height);
@@ -222,7 +313,7 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 			{
 			case 15:
 			case 16:
-				w = lump.ReadUInt16();
+				lump >> w;
 				r = (w & 0x001F) << 3;
 				g = (w & 0x03E0) >> 2;
 				b = (w & 0x7C00) >> 7;
@@ -230,17 +321,12 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 				break;
 				
 			case 24:
-				b = lump.ReadUInt8();
-				g = lump.ReadUInt8();
-				r = lump.ReadUInt8();
+				lump >> b >> g >> r;
 				a=255;
 				break;
 				
 			case 32:
-				b = lump.ReadUInt8();
-				g = lump.ReadUInt8();
-				r = lump.ReadUInt8();
-				a = lump.ReadUInt8();
+				lump >> b >> g >> r >> a;
 				if ((hdr.img_desc&15)!=8) a=255;
 				break;
 				
@@ -248,12 +334,12 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 				r=g=b=a=0;
 				break;
 			}
-			PaletteMap[i] = !alphatex? (a>=128? ColorMatcher.Pick(r, g, b) : 0) : (r * a) >> 8;
+			PaletteMap[i] = a>=128? ColorMatcher.Pick(r, g, b) : 0;
 		}
     }
     
     int Size = Width * Height * (hdr.bpp>>3);
-   	buffer = new uint8_t[Size];
+   	buffer = new BYTE[Size];
    	
     if (hdr.img_type < 4)	// uncompressed
     {
@@ -264,7 +350,7 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
     	ReadCompressed(lump, buffer, hdr.bpp>>3);
     }
     
-	uint8_t * ptr = buffer;
+	BYTE * ptr = buffer;
 	int step_x = (hdr.bpp>>3);
 	int Pitch = Width * step_x;
 
@@ -286,7 +372,7 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 	case 1:	// paletted
 		for(int y=0;y<Height;y++)
 		{
-			uint8_t * p = ptr + y * Pitch;
+			BYTE * p = ptr + y * Pitch;
 			for(int x=0;x<Width;x++)
 			{
 				Pixels[x*Height+y] = PaletteMap[*p];
@@ -303,11 +389,11 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 			step_x>>=1;
 			for(int y=0;y<Height;y++)
 			{
-				uint16_t * p = (uint16_t*)(ptr + y * Pitch);
+				WORD * p = (WORD*)(ptr + y * Pitch);
 				for(int x=0;x<Width;x++)
 				{
-					int v = LittleShort(*p);
-					Pixels[x*Height + y] = !alphatex ? RGB256k.RGB[((v >> 10) & 0x1f) * 2][((v >> 5) & 0x1f) * 2][(v & 0x1f) * 2] : ((v >> 10) & 0x1f) * 8;
+					int v = LittleLong(*p);
+					Pixels[x*Height+y] = RGB32k[(v>>10) & 0x1f][(v>>5) & 0x1f][v & 0x1f];
 					p+=step_x;
 				}
 			}
@@ -316,10 +402,10 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 		case 24:
 			for(int y=0;y<Height;y++)
 			{
-				uint8_t * p = ptr + y * Pitch;
+				BYTE * p = ptr + y * Pitch;
 				for(int x=0;x<Width;x++)
 				{
-					Pixels[x*Height + y] = !alphatex ? RGB256k.RGB[p[2] >> 2][p[1] >> 2][p[0] >> 2] : p[2];
+					Pixels[x*Height+y] = RGB32k[p[2]>>3][p[1]>>3][p[0]>>3];
 					p+=step_x;
 				}
 			}
@@ -330,10 +416,10 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 			{
 				for(int y=0;y<Height;y++)
 				{
-					uint8_t * p = ptr + y * Pitch;
+					BYTE * p = ptr + y * Pitch;
 					for(int x=0;x<Width;x++)
 					{
-						Pixels[x*Height + y] = !alphatex ? RGB256k.RGB[p[2] >> 2][p[1] >> 2][p[0] >> 2] : p[2];
+						Pixels[x*Height+y] = RGB32k[p[2]>>3][p[1]>>3][p[0]>>3];
 						p+=step_x;
 					}
 				}
@@ -342,10 +428,10 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 			{
 				for(int y=0;y<Height;y++)
 				{
-					uint8_t * p = ptr + y * Pitch;
+					BYTE * p = ptr + y * Pitch;
 					for(int x=0;x<Width;x++)
 					{
-						Pixels[x*Height + y] = !alphatex ? (p[3] >= 128 ? RGB256k.RGB[p[2] >> 2][p[1] >> 2][p[0] >> 2] : 0) : (p[2] * p[3]) >> 8;
+						Pixels[x*Height+y] = p[3] >= 128? RGB32k[p[2]>>3][p[1]>>3][p[0]>>3] : 0;
 						p+=step_x;
 					}
 				}
@@ -363,10 +449,10 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 		case 8:
 			for(int y=0;y<Height;y++)
 			{
-				uint8_t * p = ptr + y * Pitch;
+				BYTE * p = ptr + y * Pitch;
 				for(int x=0;x<Width;x++)
 				{
-					Pixels[x*Height+y] = !alphatex? FTexture::GrayMap[*p] : *p;
+					Pixels[x*Height+y] = GrayMap[*p];
 					p+=step_x;
 				}
 			}
@@ -375,10 +461,10 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 		case 16:
 			for(int y=0;y<Height;y++)
 			{
-				uint8_t * p = ptr + y * Pitch;
+				BYTE * p = ptr + y * Pitch;
 				for(int x=0;x<Width;x++)
 				{
-					Pixels[x*Height+y] = !alphatex ? FTexture::GrayMap[p[1]] : p[1];	// only use the high byte
+					Pixels[x*Height+y] = GrayMap[p[1]];	// only use the high byte
 					p+=step_x;
 				}
 			}
@@ -393,7 +479,6 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 		break;
     }
 	delete [] buffer;
-	return Pixels;
 }	
 
 //===========================================================================
@@ -405,15 +490,15 @@ uint8_t *FTGATexture::MakeTexture (FRenderStyle style)
 int FTGATexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCopyInfo *inf)
 {
 	PalEntry pe[256];
-	auto lump = Wads.OpenLumpReader (SourceLump);
+	FWadLump lump = Wads.OpenLumpNum (SourceLump);
 	TGAHeader hdr;
-	uint16_t w;
-	uint8_t r,g,b,a;
-	uint8_t * sbuffer;
+	WORD w;
+	BYTE r,g,b,a;
+	BYTE * sbuffer;
 	int transval = 0;
 
 	lump.Read(&hdr, sizeof(hdr));
-	lump.Seek(hdr.id_len, FileReader::SeekCur);
+	lump.Seek(hdr.id_len, SEEK_CUR);
 	
 	hdr.width = LittleShort(hdr.width);
 	hdr.height = LittleShort(hdr.height);
@@ -429,29 +514,24 @@ int FTGATexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCo
 			{
 			case 15:
 			case 16:
-				w = lump.ReadUInt16();
+				lump >> w;
 				r = (w & 0x001F) << 3;
 				g = (w & 0x03E0) >> 2;
 				b = (w & 0x7C00) >> 7;
 				a = 255;
 				break;
-
+				
 			case 24:
-				b = lump.ReadUInt8();
-				g = lump.ReadUInt8();
-				r = lump.ReadUInt8();
-				a = 255;
+				lump >> b >> g >> r;
+				a=255;
 				break;
-
+				
 			case 32:
-				b = lump.ReadUInt8();
-				g = lump.ReadUInt8();
-				r = lump.ReadUInt8();
-				a = lump.ReadUInt8();
-				if ((hdr.img_desc & 15) != 8) a = 255;
-				else if (a != 0 && a != 255) transval = true;
+				lump >> b >> g >> r >> a;
+				if ((hdr.img_desc&15)!=8) a=255;
+				else if (a!=0 && a!=255) transval = true;
 				break;
-
+				
 			default:	// should never happen
 				r=g=b=a=0;
 				break;
@@ -461,7 +541,7 @@ int FTGATexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCo
     }
     
     int Size = Width * Height * (hdr.bpp>>3);
-   	sbuffer = new uint8_t[Size];
+   	sbuffer = new BYTE[Size];
    	
     if (hdr.img_type < 4)	// uncompressed
     {
@@ -472,7 +552,7 @@ int FTGATexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCo
     	ReadCompressed(lump, sbuffer, hdr.bpp>>3);
     }
     
-	uint8_t * ptr = sbuffer;
+	BYTE * ptr = sbuffer;
 	int step_x = (hdr.bpp>>3);
 	int Pitch = Width * step_x;
 

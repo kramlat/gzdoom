@@ -1,36 +1,4 @@
 /*
-** ancientzip.cpp
-**
-**---------------------------------------------------------------------------
-** Copyright 2010-2011 Randy Heit
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-** Based in information from
-**
     gunzip.c by Pasi Ojala,	a1bert@iki.fi
 				http://www.iki.fi/a1bert/
 
@@ -70,7 +38,7 @@
 			if (bs < be) \
 				c = ReadBuf[bs++]; \
 			else { \
-				be = (decltype(be))In->Read(&ReadBuf, sizeof(ReadBuf)); \
+				be = In->Read(&ReadBuf, sizeof(ReadBuf)); \
 				c = ReadBuf[0]; \
 				bs = 1; \
 			} \
@@ -167,7 +135,7 @@ unsigned int FZipExploder::InitTable(TArray<HuffNode> &decoder, int numspots)
 	return start;
 }
 
-int FZipExploder::buildercmp(const void *a, const void *b)
+int STACK_ARGS FZipExploder::buildercmp(const void *a, const void *b)
 {
 	const TableBuilder *v1 = (const TableBuilder *)a;
 	const TableBuilder *v2 = (const TableBuilder *)b;
@@ -259,7 +227,7 @@ int FZipExploder::DecodeSF(TArray<HuffNode> &decoder, int numvals)
 }
 
 int FZipExploder::Explode(unsigned char *out, unsigned int outsize,
-						  FileReader &in, unsigned int insize,
+						  FileReader *in, unsigned int insize,
 						  int flags)
 {
 	int c, i, minMatchLen = 3, len, dist;
@@ -268,7 +236,7 @@ int FZipExploder::Explode(unsigned char *out, unsigned int outsize,
 
 	Hold = 0;
 	Bits = 0;
-	In = &in;
+	In = in;
 	InLeft = insize;
 	bs = be = 0;
 
@@ -337,9 +305,9 @@ int FZipExploder::Explode(unsigned char *out, unsigned int outsize,
 #define FREE_CODE  HSIZE         /* 0x2000 (code is unused or was cleared) */
 #define HAS_CHILD  (HSIZE << 1)  /* 0x4000 (code has a child--do not clear) */
 
-int ShrinkLoop(unsigned char *out, unsigned int outsize, FileReader &_In, unsigned int InLeft)
+int ShrinkLoop(unsigned char *out, unsigned int outsize,
+			   FileReader *In, unsigned int InLeft)
 {
-	FileReader *In = &_In;
 	unsigned char ReadBuf[256];
 	unsigned short Parent[HSIZE];
 	unsigned char Value[HSIZE], Stack[HSIZE];

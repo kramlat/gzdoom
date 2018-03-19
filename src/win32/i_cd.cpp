@@ -39,12 +39,12 @@
 #include <ctype.h>
 #include <stdlib.h>
 
+#define USE_WINDOWS_DWORD
 #include "doomtype.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
 #include "m_argv.h"
 #include "i_system.h"
-#include "version.h"
 
 #include "i_cd.h"
 #include "helperthread.h"
@@ -175,7 +175,7 @@ bool FCDThread::Init ()
 	CD_WindowClass.style = CS_NOCLOSE;
 	CD_WindowClass.lpfnWndProc = CD_WndProc;
 	CD_WindowClass.hInstance = g_hInst;
-	CD_WindowClass.lpszClassName = GAMENAME " CD Player";
+	CD_WindowClass.lpszClassName = "ZDoom CD Player";
 	CD_WindowAtom = RegisterClass (&CD_WindowClass);
 
 	if (CD_WindowAtom == 0)
@@ -183,7 +183,7 @@ bool FCDThread::Init ()
 
 	CD_Window = CreateWindow (
 		(LPCTSTR)(INT_PTR)(int)CD_WindowAtom,
-		GAMENAME " CD Player",
+		"ZDoom CD Player",
 		0,
 		0, 0, 10, 10,
 		NULL,

@@ -38,11 +38,12 @@
 
 #include "doomtype.h"
 #include "r_data/renderstyle.h"
+#include "textures/textures.h"
 
 class FScanner;
 class FDecalTemplate;
 struct FDecalAnimator;
-class PClass;
+struct PClass;
 class DBaseDecal;
 struct side_t;
 
@@ -59,7 +60,7 @@ protected:
 
 	FDecalBase *Left, *Right;
 	FName Name;
-	uint16_t SpawnID;
+	WORD SpawnID;
 	TArray<const PClass *> Users;	// Which actors generate this decal
 };
 
@@ -73,13 +74,13 @@ public:
 	const FDecalTemplate *GetDecal () const;
 	void ReplaceDecalRef (FDecalBase *from, FDecalBase *to);
 
-	double ScaleX, ScaleY;
-	uint32_t ShadeColor;
-	uint32_t Translation;
+	fixed_t ScaleX, ScaleY;
+	DWORD ShadeColor;
+	DWORD Translation;
 	FRenderStyle RenderStyle;
 	FTextureID PicNum;
-	uint16_t RenderFlags;
-	double Alpha;				// same as actor->alpha
+	WORD RenderFlags;
+	WORD Alpha;				// same as (actor->alpha >> 1)
 	const FDecalAnimator *Animator;
 	const FDecalBase *LowerDecal;
 
@@ -96,22 +97,22 @@ public:
 	void ReadDecals (FScanner &sc);
 	void ReadAllDecals ();
 
-	const FDecalTemplate *GetDecalByNum (uint16_t num) const;
+	const FDecalTemplate *GetDecalByNum (WORD num) const;
 	const FDecalTemplate *GetDecalByName (const char *name) const;
 
 private:
 	struct FTranslation;
 
 	static void DelTree (FDecalBase *root);
-	static FDecalBase *ScanTreeForNum (const uint16_t num, FDecalBase *root);
+	static FDecalBase *ScanTreeForNum (const WORD num, FDecalBase *root);
 	static FDecalBase *ScanTreeForName (const char *name, FDecalBase *root);
 	static void ReplaceDecalRef (FDecalBase *from, FDecalBase *to, FDecalBase *root);
-	FTranslation *GenerateTranslation (uint32_t start, uint32_t end);
-	void AddDecal (const char *name, uint16_t num, const FDecalTemplate &decal);
+	FTranslation *GenerateTranslation (DWORD start, DWORD end);
+	void AddDecal (const char *name, WORD num, const FDecalTemplate &decal);
 	void AddDecal (FDecalBase *decal);
 	FDecalAnimator *FindAnimator (const char *name);
 
-	uint16_t GetDecalID (FScanner &sc);
+	WORD GetDecalID (FScanner &sc);
 	void ParseDecal (FScanner &sc);
 	void ParseDecalGroup (FScanner &sc);
 	void ParseGenerator (FScanner &sc);

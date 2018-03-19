@@ -48,7 +48,6 @@
 #include "v_palette.h"
 #include "v_video.h"
 #include "v_text.h"
-#include "cmdlib.h"
 #include "m_fixed.h"
 #include "textures/textures.h"
 #include "r_data/colormaps.h"
@@ -58,7 +57,7 @@
 // all and only while initing the textures is beyond me.
 
 #ifdef ALPHA
-#define SAFESHORT(s)	((short)(((uint8_t *)&(s))[0] + ((uint8_t *)&(s))[1] * 256))
+#define SAFESHORT(s)	((short)(((BYTE *)&(s))[0] + ((BYTE *)&(s))[1] * 256))
 #else
 #define SAFESHORT(s)	LittleShort(s)
 #endif
@@ -78,11 +77,11 @@
 //
 struct mappatch_t
 {
-	int16_t	originx;
-	int16_t	originy;
-	int16_t	patch;
-	int16_t	stepdir;
-	int16_t	colormap;
+	SWORD	originx;
+	SWORD	originy;
+	SWORD	patch;
+	SWORD	stepdir;
+	SWORD	colormap;
 };
 
 //
@@ -91,14 +90,14 @@ struct mappatch_t
 //
 struct maptexture_t
 {
-	uint8_t		name[8];
-	uint16_t		Flags;				// [RH] Was unused
-	uint8_t		ScaleX;				// [RH] Scaling (8 is normal)
-	uint8_t		ScaleY;				// [RH] Same as above
-	int16_t		width;
-	int16_t		height;
-	uint8_t		columndirectory[4];	// OBSOLETE
-	int16_t		patchcount;
+	BYTE		name[8];
+	WORD		Flags;				// [RH] Was unused
+	BYTE		ScaleX;				// [RH] Scaling (8 is normal)
+	BYTE		ScaleY;				// [RH] Same as above
+	SWORD		width;
+	SWORD		height;
+	BYTE		columndirectory[4];	// OBSOLETE
+	SWORD		patchcount;
 	mappatch_t	patches[1];
 };
 
@@ -108,9 +107,9 @@ struct maptexture_t
 
 struct strifemappatch_t
 {
-	int16_t	originx;
-	int16_t	originy;
-	int16_t	patch;
+	SWORD	originx;
+	SWORD	originy;
+	SWORD	patch;
 };
 
 //
@@ -119,13 +118,13 @@ struct strifemappatch_t
 //
 struct strifemaptexture_t
 {
-	uint8_t		name[8];
-	uint16_t		Flags;				// [RH] Was unused
-	uint8_t		ScaleX;				// [RH] Scaling (8 is normal)
-	uint8_t		ScaleY;				// [RH] Same as above
-	int16_t		width;
-	int16_t		height;
-	int16_t		patchcount;
+	BYTE		name[8];
+	WORD		Flags;				// [RH] Was unused
+	BYTE		ScaleX;				// [RH] Scaling (8 is normal)
+	BYTE		ScaleY;				// [RH] Same as above
+	SWORD		width;
+	SWORD		height;
+	SWORD		patchcount;
 	strifemappatch_t	patches[1];
 };
 
@@ -139,6 +138,7 @@ struct strifemaptexture_t
 struct FPatchLookup
 {
 	FString Name;
+	FTexture *Texture;
 };
 
 
@@ -148,67 +148,53 @@ struct FPatchLookup
 //
 //==========================================================================
 
-class FMultiPatchTexture : public FWorldTexture
+class FMultiPatchTexture : public FTexture
 {
 public:
 	FMultiPatchTexture (const void *texdef, FPatchLookup *patchlookup, int maxpatchnum, bool strife, int deflump);
 	FMultiPatchTexture (FScanner &sc, int usetype);
 	~FMultiPatchTexture ();
 
-	FTextureFormat GetFormat() override;
-	bool UseBasePalette() override;
-	virtual void SetFrontSkyLayer () override;
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	FTextureFormat GetFormat();
+	bool UseBasePalette() ;
+	void Unload ();
+	virtual void SetFrontSkyLayer ();
 
-	int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCopyInfo *inf = NULL) override;
-	int GetSourceLump() override { return DefinitionLump; }
-	FTexture *GetRedirect(bool wantwarped) override;
-	FTexture *GetRawTexture() override;
-	void ResolvePatches();
+	int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate, FCopyInfo *inf = NULL);
+	int GetSourceLump() { return DefinitionLump; }
+	FTexture *GetRedirect(bool wantwarped);
+	FTexture *GetRawTexture();
 
 protected:
-	uint8_t *Pixels;
+	BYTE *Pixels;
 	Span **Spans;
 	int DefinitionLump;
 
 	struct TexPart
 	{
-		FRemapTable *Translation = nullptr;
-		FTexture *Texture = nullptr;
-		PalEntry Blend = 0;
-		blend_t Alpha = FRACUNIT;
-		int16_t OriginX = 0;
-		int16_t OriginY = 0;
-		uint8_t Rotate = 0;
-		uint8_t op = OP_COPY;
-	};
+		SWORD OriginX, OriginY;
+		BYTE Rotate;
+		BYTE op;
+		FRemapTable *Translation;
+		PalEntry Blend;
+		FTexture *Texture;
+		fixed_t Alpha;
 
-	struct TexInit
-	{
-		FString TexName;
-		int UseType = TEX_Null;
-		bool Silent = false;
-		bool HasLine = false;
-		bool UseOffsets = false;
-		FScriptPosition sc;
+		TexPart();
 	};
 
 	int NumParts;
 	TexPart *Parts;
-	TexInit *Inits;
-	bool bRedirect;
-	bool bTranslucentPatches;
+	bool bRedirect:1;
+	bool bTranslucentPatches:1;
 
-	uint8_t *MakeTexture (FRenderStyle style);
-
-	// The getters must optionally redirect if it's a simple one-patch texture.
-	const uint8_t *GetPixels(FRenderStyle style) override { return bRedirect ? Parts->Texture->GetPixels(style) : FWorldTexture::GetPixels(style); }
-	const uint8_t *GetColumn(FRenderStyle style, unsigned int col, const Span **out) override
-		{ return bRedirect ? Parts->Texture->GetColumn(style, col, out) : FWorldTexture::GetColumn(style, col, out); }
-
+	void MakeTexture ();
 
 private:
 	void CheckForHacks ();
-	void ParsePatch(FScanner &sc, TexPart & part, TexInit &init);
+	void ParsePatch(FScanner &sc, TexPart & part, bool silent, int usetype);
 };
 
 //==========================================================================
@@ -218,7 +204,7 @@ private:
 //==========================================================================
 
 FMultiPatchTexture::FMultiPatchTexture (const void *texdef, FPatchLookup *patchlookup, int maxpatchnum, bool strife, int deflumpnum)
-: Pixels (0), Spans(0), Parts(nullptr), Inits(nullptr), bRedirect(false), bTranslucentPatches(false)
+: Pixels (0), Spans(0), Parts(0), bRedirect(false), bTranslucentPatches(false)
 {
 	union
 	{
@@ -254,15 +240,14 @@ FMultiPatchTexture::FMultiPatchTexture (const void *texdef, FPatchLookup *patchl
 	}
 
 	UseType = FTexture::TEX_Wall;
-	Parts = NumParts > 0 ? new TexPart[NumParts] : nullptr;
-	Inits = NumParts > 0 ? new TexInit[NumParts] : nullptr;
+	Parts = NumParts > 0 ? new TexPart[NumParts] : NULL;
 	Width = SAFESHORT(mtexture.d->width);
 	Height = SAFESHORT(mtexture.d->height);
 	Name = (char *)mtexture.d->name;
 	CalcBitSize ();
 
-	Scale.X = mtexture.d->ScaleX ? mtexture.d->ScaleX / 8. : 1.;
-	Scale.Y = mtexture.d->ScaleY ? mtexture.d->ScaleY / 8. : 1.;
+	xScale = mtexture.d->ScaleX ? mtexture.d->ScaleX*(FRACUNIT/8) : FRACUNIT;
+	yScale = mtexture.d->ScaleY ? mtexture.d->ScaleY*(FRACUNIT/8) : FRACUNIT;
 
 	if (mtexture.d->Flags & MAPTEXF_WORLDPANNING)
 	{
@@ -287,9 +272,17 @@ FMultiPatchTexture::FMultiPatchTexture (const void *texdef, FPatchLookup *patchl
 		}
 		Parts[i].OriginX = LittleShort(mpatch.d->originx);
 		Parts[i].OriginY = LittleShort(mpatch.d->originy);
-		Parts[i].Texture = nullptr;
-		Inits[i].TexName = patchlookup[LittleShort(mpatch.d->patch)].Name;
-		Inits[i].UseType = TEX_WallPatch;
+		Parts[i].Texture = patchlookup[LittleShort(mpatch.d->patch)].Texture;
+		if (Parts[i].Texture == NULL)
+		{
+			Printf(TEXTCOLOR_RED "Unknown patch %s in texture %s\n", patchlookup[LittleShort(mpatch.d->patch)].Name.GetChars(), Name.GetChars());
+			NumParts--;
+			i--;
+		}
+		else
+		{
+			Parts[i].Texture->bKeepAround = true;
+		}
 		if (strife)
 			mpatch.s++;
 		else
@@ -300,6 +293,19 @@ FMultiPatchTexture::FMultiPatchTexture (const void *texdef, FPatchLookup *patchl
 		Printf ("Texture %s is left without any patches\n", Name.GetChars());
 	}
 
+	CheckForHacks ();
+
+	// If this texture is just a wrapper around a single patch, we can simply
+	// forward GetPixels() and GetColumn() calls to that patch.
+	if (NumParts == 1)
+	{
+		if (Parts->OriginX == 0 && Parts->OriginY == 0 &&
+			Parts->Texture->GetWidth() == Width &&
+			Parts->Texture->GetHeight() == Height)
+		{
+			bRedirect = true;
+		}
+	}
 	DefinitionLump = deflumpnum;
 }
 
@@ -321,10 +327,10 @@ FMultiPatchTexture::~FMultiPatchTexture ()
 		delete[] Parts;
 		Parts = NULL;
 	}
-	if (Inits != nullptr)
+	if (Spans != NULL)
 	{
-		delete[] Inits;
-		Inits = nullptr;
+		FreeSpans (Spans);
+		Spans = NULL;
 	}
 }
 
@@ -345,12 +351,86 @@ void FMultiPatchTexture::SetFrontSkyLayer ()
 
 //==========================================================================
 //
+// FMultiPatchTexture :: Unload
+//
+//==========================================================================
+
+void FMultiPatchTexture::Unload ()
+{
+	if (Pixels != NULL)
+	{
+		delete[] Pixels;
+		Pixels = NULL;
+	}
+}
+
+//==========================================================================
+//
+// FMultiPatchTexture :: GetPixels
+//
+//==========================================================================
+
+const BYTE *FMultiPatchTexture::GetPixels ()
+{
+	if (bRedirect)
+	{
+		return Parts->Texture->GetPixels ();
+	}
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	return Pixels;
+}
+
+//==========================================================================
+//
+// FMultiPatchTexture :: GetColumn
+//
+//==========================================================================
+
+const BYTE *FMultiPatchTexture::GetColumn (unsigned int column, const Span **spans_out)
+{
+	if (bRedirect)
+	{
+		return Parts->Texture->GetColumn (column, spans_out);
+	}
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	if ((unsigned)column >= (unsigned)Width)
+	{
+		if (WidthMask + 1 == Width)
+		{
+			column &= WidthMask;
+		}
+		else
+		{
+			column %= Width;
+		}
+	}
+	if (spans_out != NULL)
+	{
+		if (Spans == NULL)
+		{
+			Spans = CreateSpans (Pixels);
+		}
+		*spans_out = Spans[column];
+	}
+	return Pixels + column*Height;
+}
+
+
+//==========================================================================
+//
 // GetBlendMap
 //
 //==========================================================================
 
-uint8_t *GetBlendMap(PalEntry blend, uint8_t *blendwork)
+BYTE *GetBlendMap(PalEntry blend, BYTE *blendwork)
 {
+
 	switch (blend.a==0 ? int(blend) : -1)
 	{
 	case BLEND_ICEMAP:
@@ -403,54 +483,39 @@ uint8_t *GetBlendMap(PalEntry blend, uint8_t *blendwork)
 //
 //==========================================================================
 
-uint8_t *FMultiPatchTexture::MakeTexture (FRenderStyle style)
+void FMultiPatchTexture::MakeTexture ()
 {
 	// Add a little extra space at the end if the texture's height is not
 	// a power of 2, in case somebody accidentally makes it repeat vertically.
 	int numpix = Width * Height + (1 << HeightBits) - Height;
-	uint8_t blendwork[256];
-	bool buildrgb = bComplex;
+	BYTE blendwork[256];
+	bool hasTranslucent = false;
 
-	auto Pixels = new uint8_t[numpix];
+	Pixels = new BYTE[numpix];
 	memset (Pixels, 0, numpix);
 
-	if (style.Flags & STYLEF_RedIsAlpha)
+	for (int i = 0; i < NumParts; ++i)
 	{
-		// The rules here are as follows:
-		// A texture uses its palette index as alpha only if it reports to use the base palette.
-		// In summary this means:
-		// If a texture is marked 'complex', it will use the red channel.
-		// If a texture uses non-base-palette patches, it will use the red channel for all pixels, even those coming from a base palette patch.
-		// If a texture only uses base-palette patches and no compositing effects it will use the palette index.
-		//
-		buildrgb = !UseBasePalette();
-	}
-	else
-	{
-		// For regular textures we can use paletted compositing if all patches are just being copied because they all can create a paletted buffer.
-		if (!buildrgb) for (int i = 0; i < NumParts; ++i)
+		if (Parts[i].op != OP_COPY)
 		{
-			if (Parts[i].op != OP_COPY)
-			{
-				buildrgb = true;
-			}
+			hasTranslucent = true;
 		}
 	}
 
-	if (!buildrgb)
-	{	
+	if (!hasTranslucent)
+	{
 		for (int i = 0; i < NumParts; ++i)
 		{
 			if (Parts[i].Texture->bHasCanvas) continue;	// cannot use camera textures as patch.
 		
-			uint8_t *trans = Parts[i].Translation? Parts[i].Translation->Remap : nullptr;
+			BYTE *trans = Parts[i].Translation ? Parts[i].Translation->Remap : NULL;
 			{
 				if (Parts[i].Blend != 0)
 				{
 					trans = GetBlendMap(Parts[i].Blend, blendwork);
 				}
 				Parts[i].Texture->CopyToBlock (Pixels, Width, Height,
-					Parts[i].OriginX, Parts[i].OriginY, Parts[i].Rotate, trans, style);
+					Parts[i].OriginX, Parts[i].OriginY, Parts[i].Rotate, trans);
 			}
 		}
 	}
@@ -458,18 +523,18 @@ uint8_t *FMultiPatchTexture::MakeTexture (FRenderStyle style)
 	{
 		// In case there are translucent patches let's do the composition in
 		// True color to keep as much precision as possible before downconverting to the palette.
-		uint8_t *buffer = new uint8_t[Width * Height * 4];
+		BYTE *buffer = new BYTE[Width * Height * 4];
 		memset(buffer, 0, Width * Height * 4);
 		FillBuffer(buffer, Width * 4, Height, TEX_RGB);
 		for(int y = 0; y < Height; y++)
 		{
-			uint8_t *in = buffer + Width * y * 4;
-			uint8_t *out = Pixels + y;
+			BYTE *in = buffer + Width * y * 4;
+			BYTE *out = Pixels + y;
 			for (int x = 0; x < Width; x++)
 			{
 				if (*out == 0 && in[3] != 0)
 				{
-					*out = (style.Flags & STYLEF_RedIsAlpha)? in[2]*in[3] : RGB256k.RGB[in[2]>>2][in[1]>>2][in[0]>>2];
+					*out = RGB32k[in[2]>>3][in[1]>>3][in[0]>>3];
 				}
 				out += Height;
 				in += 4;
@@ -477,7 +542,6 @@ uint8_t *FMultiPatchTexture::MakeTexture (FRenderStyle style)
 		}
 		delete [] buffer;
 	}
-	return Pixels;
 }
 
 //===========================================================================
@@ -529,7 +593,7 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 
 		memset (&info, 0, sizeof(info));
 		info.alpha = Parts[i].Alpha;
-		info.invalpha = BLENDUNIT - info.alpha;
+		info.invalpha = FRACUNIT - info.alpha;
 		info.op = ECopyOp(Parts[i].op);
 		PalEntry b = Parts[i].Blend;
 		if (b.a == 0 && b != BLEND_NONE)
@@ -540,14 +604,14 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 		{
 			if (b.a == 255)
 			{
-				info.blendcolor[0] = b.r * BLENDUNIT / 255;
-				info.blendcolor[1] = b.g * BLENDUNIT / 255;
-				info.blendcolor[2] = b.b * BLENDUNIT / 255;
+				info.blendcolor[0] = b.r * FRACUNIT / 255;
+				info.blendcolor[1] = b.g * FRACUNIT / 255;
+				info.blendcolor[2] = b.b * FRACUNIT / 255;
 				info.blend = BLEND_MODULATE;
 			}
 			else
 			{
-				blend_t blendalpha = b.a * BLENDUNIT / 255;
+				fixed_t blendalpha = b.a * FRACUNIT / 255;
 				info.blendcolor[0] = b.r * blendalpha;
 				info.blendcolor[1] = b.g * blendalpha;
 				info.blendcolor[2] = b.b * blendalpha;
@@ -558,15 +622,14 @@ int FMultiPatchTexture::CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rota
 
 		if (Parts[i].Translation != NULL)
 		{ // Using a translation forces downconversion to the base palette
-			ret = Parts[i].Texture->CopyTrueColorTranslated(bmp, x+Parts[i].OriginX, y+Parts[i].OriginY, Parts[i].Rotate, Parts[i].Translation->Palette, &info);
+			ret = Parts[i].Texture->CopyTrueColorTranslated(bmp, x+Parts[i].OriginX, y+Parts[i].OriginY, Parts[i].Rotate, Parts[i].Translation, &info);
 		}
 		else
 		{
 			ret = Parts[i].Texture->CopyTrueColorPixels(bmp, x+Parts[i].OriginX, y+Parts[i].OriginY, Parts[i].Rotate, &info);
 		}
-		// treat -1 (i.e. unknown) as absolute. We have no idea if this may have overwritten previous info so a real check needs to be done.
-		if (ret == -1) retv = ret;
-		else if (retv != -1 && ret > retv) retv = ret;
+
+		if (ret > retv) retv = ret;
 	}
 	// Restore previous clipping rectangle.
 	bmp->SetClipRect(saved_cr);
@@ -694,6 +757,14 @@ void FMultiPatchTexture::CheckForHacks ()
 				break;
 			}
 		}
+
+		if (i == NumParts)
+		{
+			for (i = 0; i < NumParts; ++i)
+			{
+				Parts[i].Texture->HackHack(256);
+			}
+		}
 	}
 }
 
@@ -729,6 +800,23 @@ FTexture *FMultiPatchTexture::GetRawTexture()
 
 //==========================================================================
 //
+// FMultiPatchTexture :: TexPart :: TexPart
+//
+//==========================================================================
+
+FMultiPatchTexture::TexPart::TexPart()
+{
+	OriginX = OriginY = 0;
+	Rotate = 0;
+	Texture = NULL;
+	Translation = NULL;
+	Blend = 0;
+	Alpha = FRACUNIT;
+	op = OP_COPY;
+}
+
+//==========================================================================
+//
 // FTextureManager :: AddTexturesLump
 //
 //==========================================================================
@@ -737,7 +825,7 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 {
 	FPatchLookup *patchlookup = NULL;
 	int i;
-	uint32_t numpatches;
+	DWORD numpatches;
 
 	if (firstdup == 0)
 	{
@@ -745,8 +833,9 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 	}
 
 	{
-		auto pnames = Wads.OpenLumpReader(patcheslump);
-		numpatches = pnames.ReadUInt32();
+		FWadLump pnames = Wads.OpenLumpNum (patcheslump);
+
+		pnames >> numpatches;
 
 		// Check whether the amount of names reported is correct.
 		if ((signed)numpatches < 0)
@@ -757,7 +846,7 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 
 		// Check whether the amount of names reported is correct.
 		int lumplength = Wads.LumpLength(patcheslump);
-		if (numpatches > uint32_t((lumplength-4)/8))
+		if (numpatches > DWORD((lumplength-4)/8))
 		{
 			Printf("PNAMES lump is shorter than required (%u entries reported but only %d bytes (%d entries) long\n",
 				numpatches, lumplength, (lumplength-4)/8);
@@ -768,26 +857,39 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 		// Catalog the patches these textures use so we know which
 		// textures they represent.
 		patchlookup = new FPatchLookup[numpatches];
-		for (uint32_t i = 0; i < numpatches; ++i)
+		for (DWORD i = 0; i < numpatches; ++i)
 		{
 			char pname[9];
 			pnames.Read(pname, 8);
 			pname[8] = '\0';
 			patchlookup[i].Name = pname;
+			FTextureID j = CheckForTexture (patchlookup[i].Name, FTexture::TEX_WallPatch);
+			if (j.isValid())
+			{
+				patchlookup[i].Texture = Textures[j.GetIndex()].Texture;
+			}
+			else
+			{
+				// Shareware Doom has the same PNAMES lump as the registered
+				// Doom, so printing warnings for patches that don't really
+				// exist isn't such a good idea.
+				//Printf ("Patch %s not found.\n", patchlookup[i].Name);
+				patchlookup[i].Texture = NULL;
+			}
 		}
 	}
 
 	bool isStrife = false;
-	const uint32_t *maptex, *directory;
-	uint32_t maxoff;
+	const DWORD *maptex, *directory;
+	DWORD maxoff;
 	int numtextures;
-	uint32_t offset = 0;   // Shut up, GCC!
+	DWORD offset = 0;   // Shut up, GCC!
 
-	maptex = (const uint32_t *)lumpdata;
+	maptex = (const DWORD *)lumpdata;
 	numtextures = LittleLong(*maptex);
 	maxoff = lumpsize;
 
-	if (maxoff < uint32_t(numtextures+1)*4)
+	if (maxoff < DWORD(numtextures+1)*4)
 	{
 		Printf ("Texture directory is too short");
 		delete[] patchlookup;
@@ -805,7 +907,7 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 			return;
 		}
 
-		maptexture_t *tex = (maptexture_t *)((uint8_t *)maptex + offset);
+		maptexture_t *tex = (maptexture_t *)((BYTE *)maptex + offset);
 
 		// There is bizzarely a Doom editing tool that writes to the
 		// first two elements of columndirectory, so I can't check those.
@@ -828,7 +930,7 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 			// The very first texture is just a dummy. Copy its dimensions to texture 0.
 			// It still needs to be created in case someone uses it by name.
 			offset = LittleLong(directory[1]);
-			const maptexture_t *tex = (const maptexture_t *)((const uint8_t *)maptex + offset);
+			const maptexture_t *tex = (const maptexture_t *)((const BYTE *)maptex + offset);
 			FDummyTexture *tex0 = static_cast<FDummyTexture *>(Textures[0].Texture);
 			tex0->SetSize (SAFESHORT(tex->width), SAFESHORT(tex->height));
 		}
@@ -852,7 +954,7 @@ void FTextureManager::AddTexturesLump (const void *lumpdata, int lumpsize, int d
 		}
 		if (j + 1 == firstdup)
 		{
-			FMultiPatchTexture *tex = new FMultiPatchTexture ((const uint8_t *)maptex + offset, patchlookup, numpatches, isStrife, deflumpnum);
+			FMultiPatchTexture *tex = new FMultiPatchTexture ((const BYTE *)maptex + offset, patchlookup, numpatches, isStrife, deflumpnum);
 			if (i == 1 && texture1)
 			{
 				tex->UseType = FTexture::TEX_FirstDefined;
@@ -894,13 +996,35 @@ void FTextureManager::AddTexturesLumps (int lump1, int lump2, int patcheslump)
 //
 //==========================================================================
 
-void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, TexInit &init)
+void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, bool silent, int usetype)
 {
 	FString patchname;
-	int Mirror = 0;
 	sc.MustGetString();
 
-	init.TexName = sc.String;
+	FTextureID texno = TexMan.CheckForTexture(sc.String, usetype);
+	int Mirror = 0;
+
+	if (!texno.isValid())
+	{
+		if (strlen(sc.String) <= 8 && !strpbrk(sc.String, "./"))
+		{
+			int lumpnum = Wads.CheckNumForName(sc.String, usetype == TEX_MiscPatch? ns_graphics : ns_patches);
+			if (lumpnum >= 0)
+			{
+				part.Texture = FTexture::CreateTexture(lumpnum, usetype);
+				TexMan.AddTexture(part.Texture);
+			}
+		}
+	}
+	else
+	{
+		part.Texture = TexMan[texno];
+		bComplex |= part.Texture->bComplex;
+	}
+	if (part.Texture == NULL)
+	{
+		if (!silent) Printf(TEXTCOLOR_RED "Unknown patch '%s' in texture '%s'\n", sc.String, Name.GetChars());
+	}
 	sc.MustGetStringName(",");
 	sc.MustGetNumber();
 	part.OriginX = sc.Number;
@@ -1011,7 +1135,7 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, TexInit &init)
 				if (!sc.CheckNumber())
 				{
 					sc.MustGetString();
-					part.Blend = V_GetColor(NULL, sc);
+					part.Blend = V_GetColor(NULL, sc.String);
 				}
 				else
 				{
@@ -1024,7 +1148,7 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, TexInit &init)
 					sc.MustGetStringName(",");
 					sc.MustGetNumber();
 					b = sc.Number;
-					//sc.MustGetStringName(","); This was never supposed to be here. 
+					sc.MustGetStringName(",");
 					part.Blend = MAKERGB(r, g, b);
 				}
 				// Blend.a may never be 0 here.
@@ -1041,7 +1165,7 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, TexInit &init)
 			else if (sc.Compare("alpha"))
 			{
 				sc.MustGetFloat();
-				part.Alpha = clamp<blend_t>(int(sc.Float * BLENDUNIT), 0, BLENDUNIT);
+				part.Alpha = clamp(FLOAT2FIXED(sc.Float), 0, FRACUNIT);
 				// bComplex is not set because it is only needed when the style is not OP_COPY.
 			}
 			else if (sc.Compare("style"))
@@ -1054,7 +1178,11 @@ void FMultiPatchTexture::ParsePatch(FScanner &sc, TexPart & part, TexInit &init)
 			}
 			else if (sc.Compare("useoffsets"))
 			{
-				init.UseOffsets = true;
+				if (part.Texture != NULL)
+				{
+					part.OriginX -= part.Texture->LeftOffset;
+					part.OriginY -= part.Texture->TopOffset;
+				}
 			}
 		}
 	}
@@ -1079,7 +1207,6 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 : Pixels (0), Spans(0), Parts(0), bRedirect(false), bTranslucentPatches(false)
 {
 	TArray<TexPart> parts;
-	TArray<TexInit> inits;
 	bool bSilent = false;
 
 	bMultiPatch = true;
@@ -1116,14 +1243,14 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 			if (sc.Compare("XScale"))
 			{
 				sc.MustGetFloat();
-				Scale.X = sc.Float;
-				if (Scale.X == 0) sc.ScriptError("Texture %s is defined with null x-scale\n", Name.GetChars());
+				xScale = FLOAT2FIXED(sc.Float);
+				if (xScale == 0) sc.ScriptError("Texture %s is defined with null x-scale\n", Name.GetChars());
 			}
 			else if (sc.Compare("YScale"))
 			{
 				sc.MustGetFloat();
-				Scale.Y = sc.Float;
-				if (Scale.Y == 0) sc.ScriptError("Texture %s is defined with null y-scale\n", Name.GetChars());
+				yScale = FLOAT2FIXED(sc.Float);
+				if (yScale == 0) sc.ScriptError("Texture %s is defined with null y-scale\n", Name.GetChars());
 			}
 			else if (sc.Compare("WorldPanning"))
 			{
@@ -1140,51 +1267,16 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 			else if (sc.Compare("Patch"))
 			{
 				TexPart part;
-				TexInit init;
-				ParsePatch(sc, part, init);
-				if (init.TexName.IsNotEmpty())
-				{
-					parts.Push(part);
-					init.UseType = TEX_WallPatch;
-					init.Silent = bSilent;
-					init.HasLine = true;
-					init.sc = sc;
-					inits.Push(init);
-				}
-				part.Texture = NULL;
-				part.Translation = NULL;
-			}
-			else if (sc.Compare("Sprite"))
-			{
-				TexPart part;
-				TexInit init;
-				ParsePatch(sc, part, init);
-				if (init.TexName.IsNotEmpty())
-				{
-					parts.Push(part);
-					init.UseType = TEX_Sprite;
-					init.Silent = bSilent;
-					init.HasLine = true;
-					init.sc = sc;
-					inits.Push(init);
-				}
+				ParsePatch(sc, part, bSilent, TEX_WallPatch);
+				if (part.Texture != NULL) parts.Push(part);
 				part.Texture = NULL;
 				part.Translation = NULL;
 			}
 			else if (sc.Compare("Graphic"))
 			{
 				TexPart part;
-				TexInit init;
-				ParsePatch(sc, part, init);
-				if (init.TexName.IsNotEmpty())
-				{
-					parts.Push(part);
-					init.UseType = TEX_MiscPatch;
-					init.Silent = bSilent;
-					init.HasLine = true;
-					init.sc = sc;
-					inits.Push(init);
-				}
+				ParsePatch(sc, part, bSilent, TEX_MiscPatch);
+				if (part.Texture != NULL) parts.Push(part);
 				part.Texture = NULL;
 				part.Translation = NULL;
 			}
@@ -1205,10 +1297,21 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 		NumParts = parts.Size();
 		Parts = new TexPart[NumParts];
 		memcpy(Parts, &parts[0], NumParts * sizeof(*Parts));
-		Inits = new TexInit[NumParts];
-		for (int i = 0; i < NumParts; i++)
+
+		//CalcBitSize ();
+
+		// If this texture is just a wrapper around a single patch, we can simply
+		// forward GetPixels() and GetColumn() calls to that patch.
+		if (NumParts == 1)
 		{
-			Inits[i] = inits[i];
+			if (Parts->OriginX == 0 && Parts->OriginY == 0 &&
+				Parts->Texture->GetWidth() == Width &&
+				Parts->Texture->GetHeight() == Height &&
+				Parts->Rotate == 0 && 
+				!bComplex)
+			{
+				bRedirect = true;
+			}
 		}
 	}
 	
@@ -1224,89 +1327,6 @@ FMultiPatchTexture::FMultiPatchTexture (FScanner &sc, int usetype)
 	sc.SetCMode(false);
 }
 
-
-void FMultiPatchTexture::ResolvePatches()
-{
-	if (Inits != nullptr)
-	{
-		for (int i = 0; i < NumParts; i++)
-		{
-			FTextureID texno = TexMan.CheckForTexture(Inits[i].TexName, Inits[i].UseType);
-			if (texno == id)	// we found ourselves. Try looking for another one with the same name which is not a multipatch texture itself.
-			{
-				TArray<FTextureID> list;
-				TexMan.ListTextures(Inits[i].TexName, list, true);
-				for (int i = list.Size() - 1; i >= 0; i--)
-				{
-					if (list[i] != id && !TexMan[list[i]]->bMultiPatch)
-					{
-						texno = list[i];
-						break;
-					}
-				}
-				if (texno == id)
-				{
-					if (Inits[i].HasLine) Inits[i].sc.Message(MSG_WARNING, "Texture '%s' references itself as patch\n", Inits[i].TexName.GetChars());
-					else Printf(TEXTCOLOR_YELLOW  "Texture '%s' references itself as patch\n", Inits[i].TexName.GetChars());
-					continue;
-				}
-				else
-				{
-					// If it could be resolved, just print a developer warning.
-					DPrintf(DMSG_WARNING, "Resolved self-referencing texture by picking an older entry for %s\n", Inits[i].TexName.GetChars());
-				}
-			}
-
-			if (!texno.isValid())
-			{
-				if (!Inits[i].Silent)
-				{
-					if (Inits[i].HasLine) Inits[i].sc.Message(MSG_WARNING, "Unknown patch '%s' in texture '%s'\n", Inits[i].TexName.GetChars(), Name.GetChars());
-					else Printf(TEXTCOLOR_YELLOW  "Unknown patch '%s' in texture '%s'\n", Inits[i].TexName.GetChars(), Name.GetChars());
-				}
-			}
-			else
-			{
-				Parts[i].Texture = TexMan[texno];
-				bComplex |= Parts[i].Texture->bComplex;
-				Parts[i].Texture->bKeepAround = true;
-				if (Inits[i].UseOffsets)
-				{
-					Parts[i].OriginX -= Parts[i].Texture->LeftOffset;
-					Parts[i].OriginY -= Parts[i].Texture->TopOffset;
-				}
-			}
-		}
-		for (int i = 0; i < NumParts; i++)
-		{
-			if (Parts[i].Texture == nullptr)
-			{
-				memcpy(&Parts[i], &Parts[i + 1], (NumParts - i - 1) * sizeof(TexPart));
-				i--;
-				NumParts--;
-			}
-		}
-	}
-	delete[] Inits;
-	Inits = nullptr;
-
-	CheckForHacks();
-
-	// If this texture is just a wrapper around a single patch, we can simply
-	// forward GetPixels() and GetColumn() calls to that patch.
-
-	if (NumParts == 1)
-	{
-		if (Parts->OriginX == 0 && Parts->OriginY == 0 &&
-			Parts->Texture->GetWidth() == Width &&
-			Parts->Texture->GetHeight() == Height &&
-			Parts->Rotate == 0 &&
-			!bComplex)
-		{
-			bRedirect = true;
-		}
-	}
-}
 
 
 void FTextureManager::ParseXTexture(FScanner &sc, int usetype)

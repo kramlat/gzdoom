@@ -53,9 +53,10 @@
 #include "m_joy.h"
 #include "sbar.h"
 #include "hardware.h"
-#include "vm.h"
-#include "r_videoscale.h"
-#include "i_time.h"
+
+#define NO_IMP
+#include "optionmenuitems.h"
+
 
 /*=======================================
  *
@@ -65,7 +66,7 @@
 static void BuildModesList (int hiwidth, int hiheight, int hi_id);
 static bool GetSelectedSize (int *width, int *height);
 static void SetModesMenu (int w, int h, int bits);
-DOptionMenuDescriptor *GetVideoModeMenu();
+FOptionMenuDescriptor *GetVideoModeMenu();
 
 extern bool setmodeneeded;
 extern int NewWidth, NewHeight, NewBits;
@@ -75,22 +76,52 @@ EXTERN_CVAR (Int, vid_defwidth)
 EXTERN_CVAR (Int, vid_defheight)
 EXTERN_CVAR (Int, vid_defbits)
 EXTERN_CVAR (Bool, fullscreen)
+EXTERN_CVAR (Bool, vid_tft)		// Defined below
 
 int testingmode;		// Holds time to revert to old mode
 int OldWidth, OldHeight, OldBits;
 static FIntCVar DummyDepthCvar (NULL, 0, 0);
-static uint8_t BitTranslate[32];
+static BYTE BitTranslate[32];
 
 CUSTOM_CVAR (Int, menu_screenratios, -1, CVAR_ARCHIVE)
 {
-	if (self < -1 || self > 6)
+	if (self < -1 || self > 4)
 	{
 		self = -1;
 	}
+	else if (self == 4 && !vid_tft)
+	{
+		self = 0;
+	}
 	else
 	{
-		BuildModesList (screen->VideoWidth, screen->VideoHeight, DisplayBits);
+		BuildModesList (SCREENWIDTH, SCREENHEIGHT, DisplayBits);
 	}
+}
+
+CUSTOM_CVAR (Bool, vid_tft, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+{
+	FOptionMenuDescriptor *opt = GetVideoModeMenu();
+	if (opt != NULL)
+	{
+		FOptionMenuItem *it = opt->GetItem("menu_screenratios");
+		if (it != NULL)
+		{
+			if (self)
+			{
+				it->SetString(FOptionMenuItemOptionBase::OP_VALUES, "RatiosTFT");
+			}
+			else
+			{
+				it->SetString(FOptionMenuItemOptionBase::OP_VALUES, "Ratios");
+			}
+		}
+	}
+	setsizeneeded = true;
+	if (StatusBar != NULL)
+	{
+		StatusBar->ScreenSizeChanged();
+	}	
 }
 
 
@@ -100,28 +131,73 @@ CUSTOM_CVAR (Int, menu_screenratios, -1, CVAR_ARCHIVE)
 //
 //=============================================================================
 
-struct OptionMenuItemScreenResolution	// temporary workaround
+class DVideoModeMenu : public DOptionMenu
 {
-	enum EValues
+	DECLARE_CLASS(DVideoModeMenu, DOptionMenu)
+
+public:
+
+	DVideoModeMenu()
 	{
-		SRL_INDEX = 0x30000,
-		SRL_SELECTION = 0x30003,
-		SRL_HIGHLIGHT = 0x30004,
-	};
+		SetModesMenu (SCREENWIDTH, SCREENHEIGHT, DisplayBits);
+	}
+
+	bool MenuEvent(int mkey, bool fromcontroller)
+	{
+		if ((mkey == MKEY_Up || mkey == MKEY_Down) && mDesc->mSelectedItem >= 0 && 
+			mDesc->mSelectedItem < (int)mDesc->mItems.Size())
+		{
+			int sel;
+			bool selected = mDesc->mItems[mDesc->mSelectedItem]->GetValue(FOptionMenuScreenResolutionLine::SRL_SELECTION, &sel);
+			bool res = Super::MenuEvent(mkey, fromcontroller);
+			if (selected) mDesc->mItems[mDesc->mSelectedItem]->SetValue(FOptionMenuScreenResolutionLine::SRL_SELECTION, sel);
+			return res;
+		}
+		return Super::MenuEvent(mkey, fromcontroller);
+	}
+
+	bool Responder(event_t *ev)
+	{
+		if (ev->type == EV_GUI_Event && ev->subtype == EV_GUI_KeyDown &&
+			(ev->data1 == 't' || ev->data1 == 'T'))
+		{
+			if (!GetSelectedSize (&NewWidth, &NewHeight))
+			{
+				NewWidth = SCREENWIDTH;
+				NewHeight = SCREENHEIGHT;
+			}
+			else
+			{
+				OldWidth = SCREENWIDTH;
+				OldHeight = SCREENHEIGHT;
+				OldBits = DisplayBits;
+				NewBits = BitTranslate[DummyDepthCvar];
+				setmodeneeded = true;
+				testingmode = I_GetTime(false) + 5 * TICRATE;
+				S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", snd_menuvolume, ATTN_NONE);
+				SetModesMenu (NewWidth, NewHeight, NewBits);
+				return true;
+			}
+		}
+		return Super::Responder(ev);
+	}
 };
 
+IMPLEMENT_CLASS(DVideoModeMenu)
+
+
 //=============================================================================
 //
 //
 //
 //=============================================================================
 
-DOptionMenuDescriptor *GetVideoModeMenu()
+FOptionMenuDescriptor *GetVideoModeMenu()
 {
-	DMenuDescriptor **desc = MenuDescriptors.CheckKey(NAME_VideoModeMenu);
-	if (desc != NULL && (*desc)->IsKindOf(RUNTIME_CLASS(DOptionMenuDescriptor)))
+	FMenuDescriptor **desc = MenuDescriptors.CheckKey(NAME_VideoModeMenu);
+	if (desc != NULL && (*desc)->mType == MDESC_OptionsMenu)
 	{
-		return (DOptionMenuDescriptor *)*desc;
+		return (FOptionMenuDescriptor *)*desc;
 	}
 	return NULL;
 }
@@ -140,7 +216,7 @@ static void BuildModesList (int hiwidth, int hiheight, int hi_bits)
 	bool letterbox=false;
 	int  ratiomatch;
 
-	if (menu_screenratios >= 0 && menu_screenratios <= 6)
+	if (menu_screenratios >= 0 && menu_screenratios <= 4)
 	{
 		ratiomatch = menu_screenratios;
 	}
@@ -155,15 +231,15 @@ static void BuildModesList (int hiwidth, int hiheight, int hi_bits)
 		Video->StartModeIterator (showbits, screen->IsFullscreen());
 	}
 
-	DOptionMenuDescriptor *opt = GetVideoModeMenu();
+	FOptionMenuDescriptor *opt = GetVideoModeMenu();
 	if (opt != NULL)
 	{
 		for (i = NAME_res_0; i<= NAME_res_9; i++)
 		{
-			DMenuItemBase *it = opt->GetItem((ENamedName)i);
+			FOptionMenuItem *it = opt->GetItem((ENamedName)i);
 			if (it != NULL)
 			{
-				it->SetValue(OptionMenuItemScreenResolution::SRL_HIGHLIGHT, -1);
+				it->SetValue(FOptionMenuScreenResolutionLine::SRL_HIGHLIGHT, -1);
 				for (c = 0; c < 3; c++)
 				{
 					bool haveMode = false;
@@ -171,12 +247,8 @@ static void BuildModesList (int hiwidth, int hiheight, int hi_bits)
 					if (Video != NULL)
 					{
 						while ((haveMode = Video->NextMode (&width, &height, &letterbox)) &&
-							ratiomatch >= 0)
+							(ratiomatch >= 0 && CheckRatio (width, height) != ratiomatch))
 						{
-							int ratio;
-							CheckRatio (width, height, &ratio);
-							if (ratio == ratiomatch)
-								break;
 						}
 					}
 
@@ -184,16 +256,16 @@ static void BuildModesList (int hiwidth, int hiheight, int hi_bits)
 					{
 						if (width == hiwidth && height == hiheight)
 						{
-							it->SetValue(OptionMenuItemScreenResolution::SRL_SELECTION, c);
-							it->SetValue(OptionMenuItemScreenResolution::SRL_HIGHLIGHT, c);
+							it->SetValue(FOptionMenuScreenResolutionLine::SRL_SELECTION, c);
+							it->SetValue(FOptionMenuScreenResolutionLine::SRL_HIGHLIGHT, c);
 						}
 						
 						mysnprintf (strtemp, countof(strtemp), "%dx%d%s", width, height, letterbox?TEXTCOLOR_BROWN" LB":"");
-						it->SetString(OptionMenuItemScreenResolution::SRL_INDEX+c, strtemp);
+						it->SetString(FOptionMenuScreenResolutionLine::SRL_INDEX+c, strtemp);
 					}
 					else
 					{
-						it->SetString(OptionMenuItemScreenResolution::SRL_INDEX+c, "");
+						it->SetString(FOptionMenuScreenResolutionLine::SRL_INDEX+c, "");
 					}
 				}
 			}
@@ -221,11 +293,11 @@ void M_RestoreMode ()
 void M_SetDefaultMode ()
 {
 	// Make current resolution the default
-	vid_defwidth = screen->VideoWidth;
-	vid_defheight = screen->VideoHeight;
+	vid_defwidth = SCREENWIDTH;
+	vid_defheight = SCREENHEIGHT;
 	vid_defbits = DisplayBits;
 	testingmode = 0;
-	SetModesMenu (screen->VideoWidth, screen->VideoHeight, DisplayBits);
+	SetModesMenu (SCREENWIDTH, SCREENHEIGHT, DisplayBits);
 }
 
 
@@ -238,7 +310,7 @@ void M_SetDefaultMode ()
 
 void M_RefreshModesList ()
 {
-	BuildModesList (screen->VideoWidth, screen->VideoHeight, DisplayBits);
+	BuildModesList (SCREENWIDTH, SCREENHEIGHT, DisplayBits);
 }
 
 void M_InitVideoModesMenu ()
@@ -247,6 +319,7 @@ void M_InitVideoModesMenu ()
 	size_t currval = 0;
 
 	M_RefreshModesList();
+	vid_tft.Callback();
 
 	for (unsigned int i = 1; i <= 32 && currval < countof(BitTranslate); i++)
 	{
@@ -277,47 +350,26 @@ void M_InitVideoModesMenu ()
 
 static bool GetSelectedSize (int *width, int *height)
 {
-	DOptionMenuDescriptor *opt = GetVideoModeMenu();
+	FOptionMenuDescriptor *opt = GetVideoModeMenu();
 	if (opt != NULL && (unsigned)opt->mSelectedItem < opt->mItems.Size())
 	{
 		int line = opt->mSelectedItem;
 		int hsel;
-		DMenuItemBase *it = opt->mItems[line];
-		if (it->GetValue(OptionMenuItemScreenResolution::SRL_SELECTION, &hsel))
+		FOptionMenuItem *it = opt->mItems[line];
+		if (it->GetValue(FOptionMenuScreenResolutionLine::SRL_SELECTION, &hsel))
 		{
 			char buffer[32];
 			char *breakpt;
-			if (it->GetString(OptionMenuItemScreenResolution::SRL_INDEX+hsel, buffer, sizeof(buffer)))
+			if (it->GetString(FOptionMenuScreenResolutionLine::SRL_INDEX+hsel, buffer, sizeof(buffer)))
 			{
-				*width = (int)strtoll (buffer, &breakpt, 10);
-				*height = (int)strtoll (breakpt+1, NULL, 10);
+				*width = strtol (buffer, &breakpt, 10);
+				*height = strtol (breakpt+1, NULL, 10);
 				return true;
 			}
 		}
 	}
 	return false;
 }
-
-DEFINE_ACTION_FUNCTION(DVideoModeMenu, SetSelectedSize)
-{
-	if (!GetSelectedSize (&NewWidth, &NewHeight))
-	{
-		NewWidth = screen->VideoWidth;
-		NewHeight = screen->VideoHeight;
-		ACTION_RETURN_BOOL(false);
-	}
-	else
-	{
-		OldWidth = screen->VideoWidth;
-		OldHeight = screen->VideoHeight;
-		OldBits = DisplayBits;
-		NewBits = BitTranslate[DummyDepthCvar];
-		setmodeneeded = true;
-		testingmode = I_GetTime() + 5 * TICRATE;
-		SetModesMenu (NewWidth, NewHeight, NewBits);
-		ACTION_RETURN_BOOL(true);
-	}
-}	
 
 //=============================================================================
 //
@@ -329,8 +381,8 @@ void M_SetVideoMode()
 {
 	if (!GetSelectedSize (&NewWidth, &NewHeight))
 	{
-		NewWidth = screen->VideoWidth;
-		NewHeight = screen->VideoHeight;
+		NewWidth = SCREENWIDTH;
+		NewHeight = SCREENHEIGHT;
 	}
 	else
 	{
@@ -341,11 +393,6 @@ void M_SetVideoMode()
 	SetModesMenu (NewWidth, NewHeight, NewBits);
 }
 
-DEFINE_ACTION_FUNCTION(DMenu, SetVideoMode)
-{
-	M_SetVideoMode();
-	return 0;
-}
 //=============================================================================
 //
 //
@@ -369,10 +416,10 @@ static void SetModesMenu (int w, int h, int bits)
 {
 	DummyDepthCvar = FindBits (bits);
 
-	DOptionMenuDescriptor *opt = GetVideoModeMenu();
+	FOptionMenuDescriptor *opt = GetVideoModeMenu();
 	if (opt != NULL)
 	{
-		DMenuItemBase *it;
+		FOptionMenuItem *it;
 		if (testingmode <= 1)
 		{
 			it = opt->GetItem(NAME_VMEnterText);
@@ -396,9 +443,4 @@ static void SetModesMenu (int w, int h, int bits)
 		}
 	}
 	BuildModesList (w, h, bits);
-}
-
-void M_InitVideoModes()
-{
-	SetModesMenu (screen->VideoWidth, screen->VideoHeight, DisplayBits);
 }

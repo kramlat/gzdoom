@@ -42,8 +42,6 @@ class AActor;
 class player_t;
 struct pspdef_s;
 struct FState;
-class DThinker;
-class FSerializer;
 
 class FThinkerIterator;
 
@@ -66,13 +64,10 @@ class DThinker : public DObject
 	DECLARE_CLASS (DThinker, DObject)
 public:
 	DThinker (int statnum = STAT_DEFAULT) throw();
-	void OnDestroy () override;
+	void Destroy ();
 	virtual ~DThinker ();
 	virtual void Tick ();
-	void CallTick();
 	virtual void PostBeginPlay ();	// Called just before the first tick
-	virtual void CallPostBeginPlay(); // different in actor.
-	virtual void PostSerialize();
 	size_t PropagateMark();
 	
 	void ChangeStatNum (int statnum);
@@ -80,34 +75,28 @@ public:
 	static void RunThinkers ();
 	static void RunThinkers (int statnum);
 	static void DestroyAllThinkers ();
-	static void DestroyThinkersInList(int statnum)
-	{
-		DestroyThinkersInList(Thinkers[statnum]);
-		DestroyThinkersInList(FreshThinkers[statnum]);
-	}
-	static void SerializeThinkers(FSerializer &arc, bool keepPlayers);
+	static void DestroyMostThinkers ();
+	static void SerializeAll (FArchive &arc, bool keepPlayers);
 	static void MarkRoots();
 
 	static DThinker *FirstThinker (int statnum);
-	static bool bSerialOverride;
 
-	// only used internally but Create needs access.
+private:
 	enum no_link_type { NO_LINK };
 	DThinker(no_link_type) throw();
-private:
 	static void DestroyThinkersInList (FThinkerList &list);
+	static void DestroyMostThinkersInList (FThinkerList &list, int stat);
 	static int TickThinkers (FThinkerList *list, FThinkerList *dest);	// Returns: # of thinkers ticked
-	static int ProfileThinkers(FThinkerList *list, FThinkerList *dest);
-	static void SaveList(FSerializer &arc, DThinker *node);
+	static void SaveList(FArchive &arc, DThinker *node);
 	void Remove();
 
 	static FThinkerList Thinkers[MAX_STATNUM+2];		// Current thinkers
 	static FThinkerList FreshThinkers[MAX_STATNUM+1];	// Newly created thinkers
+	static bool bSerialOverride;
 
 	friend struct FThinkerList;
 	friend class FThinkerIterator;
 	friend class DObject;
-	friend class FSerializer;
 
 	DThinker *NextThinker, *PrevThinker;
 };
@@ -118,18 +107,15 @@ protected:
 	const PClass *m_ParentType;
 private:
 	DThinker *m_CurrThinker;
-	uint8_t m_Stat;
+	BYTE m_Stat;
 	bool m_SearchStats;
 	bool m_SearchingFresh;
 
 public:
 	FThinkerIterator (const PClass *type, int statnum=MAX_STATNUM+1);
 	FThinkerIterator (const PClass *type, int statnum, DThinker *prev);
-	DThinker *Next (bool exact = false);
+	DThinker *Next ();
 	void Reinit ();
-
-protected:
-	FThinkerIterator() {}
 };
 
 template <class T> class TThinkerIterator : public FThinkerIterator
@@ -153,9 +139,9 @@ public:
 	TThinkerIterator (const char *subclass, int statnum=MAX_STATNUM+1) : FThinkerIterator(PClass::FindClass(subclass), statnum)
 	{
 	}
-	T *Next (bool exact = false)
+	T *Next ()
 	{
-		return static_cast<T *>(FThinkerIterator::Next (exact));
+		return static_cast<T *>(FThinkerIterator::Next ());
 	}
 };
 

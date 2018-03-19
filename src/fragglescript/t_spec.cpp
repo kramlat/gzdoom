@@ -27,6 +27,19 @@
 //
 //---------------------------------------------------------------------------
 //
+// FraggleScript is from SMMU which is under the GPL. Technically, 
+// therefore, combining the FraggleScript code with the non-free 
+// ZDoom code is a violation of the GPL.
+//
+// As this may be a problem for you, I hereby grant an exception to my 
+// copyright on the SMMU source (including FraggleScript). You may use 
+// any code from SMMU in (G)ZDoom, provided that:
+//
+//    * For any binary release of the port, the source code is also made 
+//      available.
+//    * The copyright notice is kept on any file containing my code.
+//
+//
 
 #include "t_script.h"
 
@@ -404,7 +417,7 @@ void FParser::spec_script()
 		return;
     }
 	
-	newscript = Create<DFsScript>();
+	newscript = new DFsScript;
 	
 	// add to scripts list of parent
 	Script->children[scriptnum] = newscript;

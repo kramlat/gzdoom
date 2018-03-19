@@ -46,11 +46,21 @@
 //
 //==========================================================================
 
-class FRawPageTexture : public FWorldTexture
+class FRawPageTexture : public FTexture
 {
 public:
 	FRawPageTexture (int lumpnum);
-	uint8_t *MakeTexture (FRenderStyle style) override;
+	~FRawPageTexture ();
+
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload ();
+
+protected:
+	BYTE *Pixels;
+	static const Span DummySpans[2];
+
+	void MakeTexture ();
 };
 
 //==========================================================================
@@ -70,7 +80,7 @@ static bool CheckIfRaw(FileReader & data)
 	int width;
 
 	foo = (patch_t *)M_Malloc (data.GetLength());
-	data.Seek (0, FileReader::SeekSet);
+	data.Seek (0, SEEK_SET);
 	data.Read (foo, data.GetLength());
 
 	height = LittleShort(foo->height);
@@ -87,8 +97,8 @@ static bool CheckIfRaw(FileReader & data)
 
 		for (x = 0; x < width; ++x)
 		{
-			uint32_t ofs = LittleLong(foo->columnofs[x]);
-			if (ofs == (uint32_t)width * 4 + 8)
+			DWORD ofs = LittleLong(foo->columnofs[x]);
+			if (ofs == (DWORD)width * 4 + 8)
 			{
 				gapAtStart = false;
 			}
@@ -100,7 +110,7 @@ static bool CheckIfRaw(FileReader & data)
 			else
 			{
 				// Ensure this column does not extend beyond the end of the patch
-				const uint8_t *foo2 = (const uint8_t *)foo;
+				const BYTE *foo2 = (const BYTE *)foo;
 				while (ofs < 64000)
 				{
 					if (foo2[ofs] == 255)
@@ -151,8 +161,19 @@ FTexture *RawPageTexture_TryCreate(FileReader & file, int lumpnum)
 //
 //==========================================================================
 
+const FTexture::Span FRawPageTexture::DummySpans[2] =
+{
+	{ 0, 200 }, { 0, 0 }
+};
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
 FRawPageTexture::FRawPageTexture (int lumpnum)
-: FWorldTexture(NULL, lumpnum)
+: FTexture(NULL, lumpnum), Pixels(0)
 {
 	Width = 320;
 	Height = 200;
@@ -167,14 +188,78 @@ FRawPageTexture::FRawPageTexture (int lumpnum)
 //
 //==========================================================================
 
-uint8_t *FRawPageTexture::MakeTexture (FRenderStyle style)
+FRawPageTexture::~FRawPageTexture ()
+{
+	Unload ();
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FRawPageTexture::Unload ()
+{
+	if (Pixels != NULL)
+	{
+		delete[] Pixels;
+		Pixels = NULL;
+	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FRawPageTexture::GetColumn (unsigned int column, const Span **spans_out)
+{
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	if ((unsigned)column >= (unsigned)Width)
+	{
+		column %= 320;
+	}
+	if (spans_out != NULL)
+	{
+		*spans_out = DummySpans;
+	}
+	return Pixels + column*Height;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+const BYTE *FRawPageTexture::GetPixels ()
+{
+	if (Pixels == NULL)
+	{
+		MakeTexture ();
+	}
+	return Pixels;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FRawPageTexture::MakeTexture ()
 {
 	FMemLump lump = Wads.ReadLump (SourceLump);
-	const uint8_t *source = (const uint8_t *)lump.GetMem();
-	const uint8_t *source_p = source;
-	uint8_t *dest_p;
+	const BYTE *source = (const BYTE *)lump.GetMem();
+	const BYTE *source_p = source;
+	BYTE *dest_p;
 
-	auto Pixels = new uint8_t[Width*Height];
+	Pixels = new BYTE[Width*Height];
 	dest_p = Pixels;
 
 	// Convert the source image from row-major to column-major format
@@ -182,12 +267,11 @@ uint8_t *FRawPageTexture::MakeTexture (FRenderStyle style)
 	{
 		for (int x = 320; x != 0; --x)
 		{
-			*dest_p = (style.Flags & STYLEF_RedIsAlpha)? *source_p : GPalette.Remap[*source_p];
+			*dest_p = GPalette.Remap[*source_p];
 			dest_p += 200;
 			source_p++;
 		}
 		dest_p -= 200*320-1;
 	}
-	return Pixels;
 }
 

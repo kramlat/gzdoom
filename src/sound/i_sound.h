@@ -38,8 +38,6 @@
 #include "doomtype.h"
 #include "i_soundinternal.h"
 
-class FileReader;
-
 enum ECodecType
 {
 	CODEC_Unknown,
@@ -84,19 +82,6 @@ public:
 
 typedef bool (*SoundStreamCallback)(SoundStream *stream, void *buff, int len, void *userdata);
 
-struct SoundDecoder;
-class MIDIDevice;
-
-struct FSoundLoadBuffer
-{
-	TArray<uint8_t> mBuffer;
-	uint32_t loop_start;
-	uint32_t loop_end;
-	ChannelConfig chans;
-	SampleType type;
-	int srate;
-};
-
 class SoundRenderer
 {
 public:
@@ -106,11 +91,9 @@ public:
 	virtual bool IsNull() { return false; }
 	virtual void SetSfxVolume (float volume) = 0;
 	virtual void SetMusicVolume (float volume) = 0;
-    // Returns a pair containing a sound handle and a boolean indicating the sound can be used in 3D.
-	virtual std::pair<SoundHandle,bool> LoadSound(uint8_t *sfxdata, int length, bool monoize=false, FSoundLoadBuffer *pBuffer = nullptr) = 0;
-	std::pair<SoundHandle,bool> LoadSoundVoc(uint8_t *sfxdata, int length, bool monoize=false);
-	virtual std::pair<SoundHandle,bool> LoadSoundRaw(uint8_t *sfxdata, int length, int frequency, int channels, int bits, int loopstart, int loopend = -1, bool monoize = false) = 0;
-	virtual std::pair<SoundHandle, bool> LoadSoundBuffered(FSoundLoadBuffer *buffer, bool monoize);
+	virtual SoundHandle LoadSound(BYTE *sfxdata, int length) = 0;
+	SoundHandle LoadSoundVoc(BYTE *sfxdata, int length);
+	virtual SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart, int loopend = -1) = 0;
 	virtual void UnloadSound (SoundHandle sfx) = 0;	// unloads a sound from memory
 	virtual unsigned int GetMSLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
 	virtual unsigned int GetSampleLength(SoundHandle sfx) = 0;	// Gets the length of a sound at its default frequency
@@ -118,7 +101,7 @@ public:
 
 	// Streaming sounds.
 	virtual SoundStream *CreateStream (SoundStreamCallback callback, int buffbytes, int flags, int samplerate, void *userdata) = 0;
-    virtual SoundStream *OpenStream (FileReader &reader, int flags) = 0;
+	virtual SoundStream *OpenStream (const char *filename, int flags, int offset, int length) = 0;
 
 	// Starts a sound.
 	virtual FISoundChannel *StartSound (SoundHandle sfx, float vol, int pitch, int chanflags, FISoundChannel *reuse_chan) = 0;
@@ -167,8 +150,6 @@ public:
 	virtual short *DecodeSample(int outlen, const void *coded, int sizebytes, ECodecType type);
 
 	virtual void DrawWaveDebug(int mode);
-
-    static SoundDecoder *CreateDecoder(FileReader &reader);
 };
 
 extern SoundRenderer *GSnd;
@@ -184,7 +165,5 @@ float S_GetRolloff(FRolloffInfo *rolloff, float distance, bool logarithmic);
 FISoundChannel *S_GetChannel(void *syschan);
 
 extern ReverbContainer *DefaultEnvironments[26];
-
-bool IsOpenALPresent();
 
 #endif

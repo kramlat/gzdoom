@@ -35,13 +35,27 @@
 
 
 #include <sys/stat.h>
+#include <sys/types.h>
 #ifdef _WIN32
 #include <io.h>
+#define stat _stat
 #else
+#include <dirent.h>
+#ifndef __sun
 #include <fts.h>
 #endif
+#endif
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <time.h>
 
+#include "doomtype.h"
+#include "tarray.h"
 #include "resourcefile.h"
+#include "zstring.h"
 #include "cmdlib.h"
 #include "doomerrors.h"
 
@@ -55,10 +69,10 @@
 
 struct FDirectoryLump : public FResourceLump
 {
-	virtual FileReader NewReader();
+	virtual FileReader *NewReader();
 	virtual int FillCache();
 
-	FString mFullPath;
+private:
 };
 
 
@@ -71,6 +85,8 @@ struct FDirectoryLump : public FResourceLump
 class FDirectory : public FResourceFile
 {
 	TArray<FDirectoryLump> Lumps;
+
+	static int STACK_ARGS lumpcmp(const void * a, const void * b);
 
 	int AddDirectory(const char *dirpath);
 	void AddEntry(const char *fullpath, int size);
@@ -90,24 +106,35 @@ public:
 //==========================================================================
 
 FDirectory::FDirectory(const char * directory)
-: FResourceFile(NULL)
+: FResourceFile(NULL, NULL)
 {
 	FString dirname;
 
 	#ifdef _WIN32
 		directory = _fullpath(NULL, directory, _MAX_PATH);
 	#else
-		// Todo for Linux: Resolve the path before using it
+		// Todo for Linux: Resolve the path befire using it
 	#endif
 	dirname = directory;
-	#ifdef _WIN32
-		free((void *)directory);
-	#endif
 	dirname.ReplaceChars('\\', '/');
 	if (dirname[dirname.Len()-1] != '/') dirname += '/';
 	Filename = copystring(dirname);
 }
 
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+int STACK_ARGS FDirectory::lumpcmp(const void * a, const void * b)
+{
+	FDirectoryLump * rec1 = (FDirectoryLump *)a;
+	FDirectoryLump * rec2 = (FDirectoryLump *)b;
+
+	return stricmp(rec1->FullName, rec2->FullName);
+}
 
 #ifdef _WIN32
 //==========================================================================
@@ -171,6 +198,46 @@ int FDirectory::AddDirectory(const char *dirpath)
 	return count;
 }
 
+#elif defined(__sun) || defined(__APPLE__)
+
+int FDirectory::AddDirectory(const char *dirpath)
+{
+	int count = 0;
+	TArray<FString> scanDirectories;
+	scanDirectories.Push(dirpath);
+	for(unsigned int i = 0;i < scanDirectories.Size();i++)
+	{
+		DIR* directory = opendir(scanDirectories[i].GetChars());
+		if (directory == NULL)
+		{
+			Printf("Could not read directory: %s\n", strerror(errno));
+			return 0;
+		}
+
+		struct dirent *file;
+		while((file = readdir(directory)) != NULL)
+		{
+			if(file->d_name[0] == '.') //File is hidden or ./.. directory so ignore it.
+				continue;
+
+			FString fullFileName = scanDirectories[i] + file->d_name;
+
+			struct stat fileStat;
+			stat(fullFileName.GetChars(), &fileStat);
+
+			if(S_ISDIR(fileStat.st_mode))
+			{
+				scanDirectories.Push(scanDirectories[i] + file->d_name + "/");
+				continue;
+			}
+			AddEntry(scanDirectories[i] + file->d_name, fileStat.st_size);
+			count++;
+		}
+		closedir(directory);
+	}
+	return count;
+}
+
 #else
 
 //==========================================================================
@@ -195,10 +262,6 @@ int FDirectory::AddDirectory(const char *dirpath)
 		Printf("Failed to start directory traversal: %s\n", strerror(errno));
 		return 0;
 	}
-
-	const size_t namepos = strlen(Filename);
-	FString pathfix;
-
 	while ((ent = fts_read(fts)) != NULL)
 	{
 		if (ent->fts_info == FTS_D && ent->fts_name[0] == '.')
@@ -216,22 +279,7 @@ int FDirectory::AddDirectory(const char *dirpath)
 			// We're only interested in remembering files.
 			continue;
 		}
-
-		// Some implementations add an extra separator between
-		// root of the hierarchy and entity's path.
-		// It needs to be removed in order to resolve
-		// lumps' relative paths properly.
-		const char* path = ent->fts_path;
-
-		if ('/' == path[namepos])
-		{
-			pathfix = FString(path, namepos);
-			pathfix.AppendCStrPart(&path[namepos + 1], ent->fts_pathlen - namepos - 1);
-
-			path = pathfix.GetChars();
-		}
-
-		AddEntry(path, ent->fts_statp->st_size);
+		AddEntry(ent->fts_path, ent->fts_statp->st_size);
 		count++;
 	}
 	fts_close(fts);
@@ -251,7 +299,8 @@ bool FDirectory::Open(bool quiet)
 {
 	NumLumps = AddDirectory(Filename);
 	if (!quiet) Printf(", %d lumps\n", NumLumps);
-	PostProcessArchive(&Lumps[0], sizeof(FDirectoryLump));
+	// Entries in Zips are sorted alphabetically.
+	qsort(&Lumps[0], NumLumps, sizeof(FDirectoryLump), lumpcmp);
 	return true;
 }
 
@@ -265,15 +314,8 @@ void FDirectory::AddEntry(const char *fullpath, int size)
 {
 	FDirectoryLump *lump_p = &Lumps[Lumps.Reserve(1)];
 
-	// Store the full path here so that we can access the file later, even if it is from a filter directory.
-	lump_p->mFullPath = fullpath;
-
-	// [mxd] Convert name to lowercase
-	FString name = fullpath + strlen(Filename);
-	name.ToLower();
-
 	// The lump's name is only the part relative to the main directory
-	lump_p->LumpNameSetup(name);
+	lump_p->LumpNameSetup(fullpath + strlen(Filename));
 	lump_p->LumpSize = size;
 	lump_p->Owner = this;
 	lump_p->Flags = 0;
@@ -287,11 +329,18 @@ void FDirectory::AddEntry(const char *fullpath, int size)
 //
 //==========================================================================
 
-FileReader FDirectoryLump::NewReader()
+FileReader *FDirectoryLump::NewReader()
 {
-	FileReader fr;
-	fr.OpenFile(mFullPath);
-	return fr;
+	try
+	{
+		FString fullpath = Owner->Filename;
+		fullpath += FullName;
+		return new FileReader(fullpath);
+	}
+	catch (CRecoverableError &)
+	{
+		return NULL;
+	}
 }
 
 //==========================================================================
@@ -302,14 +351,10 @@ FileReader FDirectoryLump::NewReader()
 
 int FDirectoryLump::FillCache()
 {
-	FileReader fr;
 	Cache = new char[LumpSize];
-	if (!fr.OpenFile(mFullPath))
-	{
-		memset(Cache, 0, LumpSize);
-		return 0;
-	}
-	fr.Read(Cache, LumpSize);
+	FileReader *reader = NewReader();
+	reader->Read(Cache, LumpSize);
+	delete reader;
 	RefCount = 1;
 	return 1;
 }
@@ -320,7 +365,7 @@ int FDirectoryLump::FillCache()
 //
 //==========================================================================
 
-FResourceFile *CheckDir(const char *filename, bool quiet)
+FResourceFile *CheckDir(const char *filename, FileReader *file, bool quiet)
 {
 	FResourceFile *rf = new FDirectory(filename);
 	if (rf->Open(quiet)) return rf;

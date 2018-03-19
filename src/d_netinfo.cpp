@@ -56,12 +56,14 @@
 #include "r_data/r_translate.h"
 #include "templates.h"
 #include "cmdlib.h"
-#include "serializer.h"
-#include "vm.h"
+#include "farchive.h"
 
 static FRandom pr_pickteam ("PickRandomTeam");
 
-CVAR (Float,	autoaim,				35.f,		CVAR_USERINFO | CVAR_ARCHIVE);
+extern bool st_firsttime;
+EXTERN_CVAR (Bool, teamplay)
+
+CVAR (Float,	autoaim,				5000.f,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	name,					"Player",	CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Color,	color,					0x40cf00,	CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Int,		colorset,				0,			CVAR_USERINFO | CVAR_ARCHIVE);
@@ -71,9 +73,7 @@ CVAR (String,	gender,					"male",		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Bool,		neverswitchonpickup,	false,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Float,	movebob,				0.25f,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (Float,	stillbob,				0.f,		CVAR_USERINFO | CVAR_ARCHIVE);
-CVAR (Float,	wbobspeed,				1.f,		CVAR_USERINFO | CVAR_ARCHIVE);
 CVAR (String,	playerclass,			"Fighter",	CVAR_USERINFO | CVAR_ARCHIVE);
-CVAR (Bool,		classicflight,			false,		CVAR_USERINFO | CVAR_ARCHIVE);
 
 enum
 {
@@ -86,10 +86,8 @@ enum
 	INFO_NeverSwitchOnPickup,
 	INFO_MoveBob,
 	INFO_StillBob,
-	INFO_WBobSpeed,
 	INFO_PlayerClass,
 	INFO_ColorSet,
-	INFO_ClassicFlight,
 };
 
 const char *GenderNames[3] = { "male", "female", "other" };
@@ -159,9 +157,9 @@ int D_PlayerClassToInt (const char *classname)
 	{
 		for (unsigned int i = 0; i < PlayerClasses.Size (); ++i)
 		{
-			auto type = PlayerClasses[i].Type;
+			const PClass *type = PlayerClasses[i].Type;
 
-			if (type->GetDisplayName().IsNotEmpty() && stricmp(type->GetDisplayName(), classname) == 0)
+			if (stricmp (type->Meta.GetMetaString (APMETA_DisplayName), classname) == 0)
 			{
 				return i;
 			}
@@ -178,12 +176,12 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 {
 	userinfo_t *info = &players[player].userinfo;
 	FPlayerColorSet *colorset = NULL;
-	uint32_t color;
+	uint32 color;
 	int team;
 
 	if (players[player].mo != NULL)
 	{
-		colorset = GetColorSet(players[player].mo->GetClass(), info->GetColorSet());
+		colorset = P_GetPlayerColorSet(players[player].mo->GetClass()->TypeName, info->GetColorSet());
 	}
 	if (colorset != NULL)
 	{
@@ -220,18 +218,6 @@ void D_GetPlayerColor (int player, float *h, float *s, float *v, FPlayerColorSet
 	}
 }
 
-DEFINE_ACTION_FUNCTION(_PlayerInfo, GetDisplayColor)
-{
-	float h, s, v, r, g, b;
-	PARAM_SELF_STRUCT_PROLOGUE(player_t);
-	D_GetPlayerColor(int(self-players), &h, &s, &v, NULL);
-	HSVtoRGB(&r, &g, &b, h, s, v);
-	int c = MAKERGB(clamp(int(r*255.f), 0, 255),
-		clamp(int(g*255.f), 0, 255),
-		clamp(int(b*255.f), 0, 255));
-	ACTION_RETURN_INT(c);
-}
-
 // Find out which teams are present. If there is only one,
 // then another team should be chosen at random.
 //
@@ -243,7 +229,7 @@ void D_PickRandomTeam (int player)
 {
 	static char teamline[8] = "\\team\\X";
 
-	uint8_t *foo = (uint8_t *)teamline;
+	BYTE *foo = (BYTE *)teamline;
 	teamline[6] = (char)D_PickRandomTeam() + '0';
 	D_ReadUserInfoStrings (player, &foo, teamplay);
 }
@@ -500,7 +486,7 @@ int userinfo_t::ColorSetChanged(int setnum)
 	return setnum;
 }
 
-uint32_t userinfo_t::ColorChanged(const char *colorname)
+uint32 userinfo_t::ColorChanged(const char *colorname)
 {
 	FColorCVar *color = static_cast<FColorCVar *>((*this)[NAME_Color]);
 	assert(color != NULL);
@@ -511,7 +497,7 @@ uint32_t userinfo_t::ColorChanged(const char *colorname)
 	return *color;
 }
 
-uint32_t userinfo_t::ColorChanged(uint32_t colorval)
+uint32 userinfo_t::ColorChanged(uint32 colorval)
 {
 	FColorCVar *color = static_cast<FColorCVar *>((*this)[NAME_Color]);
 	assert(color != NULL);
@@ -535,9 +521,9 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 			autoaim = 0.0f;
 			return;
 		}
-		else if (autoaim > 35.0f)
+		else if (autoaim > 5000.0f)
 		{
-			autoaim = 35.f;
+			autoaim = 5000.f;
 			return;
 		}
 	}
@@ -553,7 +539,7 @@ void D_UserInfoChanged (FBaseCVar *cvar)
 	Net_WriteString (foo);
 }
 
-static const char *SetServerVar (char *name, ECVarType type, uint8_t **stream, bool singlebit)
+static const char *SetServerVar (char *name, ECVarType type, BYTE **stream, bool singlebit)
 {
 	FBaseCVar *var = FindCVar (name, NULL);
 	UCVarValue value;
@@ -634,8 +620,8 @@ void D_SendServerInfoChange (const FBaseCVar *cvar, UCVarValue value, ECVarType 
 	namelen = strlen (cvar->GetName ());
 
 	Net_WriteByte (DEM_SINFCHANGED);
-	Net_WriteByte ((uint8_t)(namelen | (type << 6)));
-	Net_WriteBytes ((uint8_t *)cvar->GetName (), (int)namelen);
+	Net_WriteByte ((BYTE)(namelen | (type << 6)));
+	Net_WriteBytes ((BYTE *)cvar->GetName (), (int)namelen);
 	switch (type)
 	{
 	case CVAR_Bool:		Net_WriteByte (value.Bool);		break;
@@ -653,12 +639,12 @@ void D_SendServerFlagChange (const FBaseCVar *cvar, int bitnum, bool set)
 	namelen = (int)strlen (cvar->GetName ());
 
 	Net_WriteByte (DEM_SINFCHANGEDXOR);
-	Net_WriteByte ((uint8_t)namelen);
-	Net_WriteBytes ((uint8_t *)cvar->GetName (), namelen);
-	Net_WriteByte (uint8_t(bitnum | (set << 5)));
+	Net_WriteByte ((BYTE)namelen);
+	Net_WriteBytes ((BYTE *)cvar->GetName (), namelen);
+	Net_WriteByte (BYTE(bitnum | (set << 5)));
 }
 
-void D_DoServerInfoChange (uint8_t **stream, bool singlebit)
+void D_DoServerInfoChange (BYTE **stream, bool singlebit)
 {
 	const char *value;
 	char name[64];
@@ -680,21 +666,21 @@ void D_DoServerInfoChange (uint8_t **stream, bool singlebit)
 	}
 }
 
-static int userinfosortfunc(const void *a, const void *b)
+static int STACK_ARGS userinfosortfunc(const void *a, const void *b)
 {
 	TMap<FName, FBaseCVar *>::ConstPair *pair1 = *(TMap<FName, FBaseCVar *>::ConstPair **)a;
 	TMap<FName, FBaseCVar *>::ConstPair *pair2 = *(TMap<FName, FBaseCVar *>::ConstPair **)b;
 	return stricmp(pair1->Key.GetChars(), pair2->Key.GetChars());
 }
 
-static int namesortfunc(const void *a, const void *b)
+static int STACK_ARGS namesortfunc(const void *a, const void *b)
 {
 	FName *name1 = (FName *)a;
 	FName *name2 = (FName *)b;
 	return stricmp(name1->GetChars(), name2->GetChars());
 }
 
-void D_WriteUserInfoStrings (int pnum, uint8_t **stream, bool compact)
+void D_WriteUserInfoStrings (int pnum, BYTE **stream, bool compact)
 {
 	if (pnum >= MAXPLAYERS)
 	{
@@ -740,11 +726,11 @@ void D_WriteUserInfoStrings (int pnum, uint8_t **stream, bool compact)
 
 		case NAME_PlayerClass:
 			*stream += sprintf(*((char **)stream), "\\%s", info->GetPlayerClassNum() == -1 ? "Random" :
-				D_EscapeUserInfo(info->GetPlayerClassType()->GetDisplayName().GetChars()).GetChars());
+				D_EscapeUserInfo(info->GetPlayerClassType()->Meta.GetMetaString(APMETA_DisplayName)).GetChars());
 			break;
 
 		case NAME_Skin:
-			*stream += sprintf(*((char **)stream), "\\%s", D_EscapeUserInfo(Skins[info->GetSkin()].Name).GetChars());
+			*stream += sprintf(*((char **)stream), "\\%s", D_EscapeUserInfo(skins[info->GetSkin()].name).GetChars());
 			break;
 
 		default:
@@ -756,7 +742,7 @@ void D_WriteUserInfoStrings (int pnum, uint8_t **stream, bool compact)
 	*(*stream)++ = '\0';
 }
 
-void D_ReadUserInfoStrings (int pnum, uint8_t **stream, bool update)
+void D_ReadUserInfoStrings (int pnum, BYTE **stream, bool update)
 {
 	userinfo_t *info = &players[pnum].userinfo;
 	TArray<FName> compact_names(info->CountUsed());
@@ -843,7 +829,7 @@ void D_ReadUserInfoStrings (int pnum, uint8_t **stream, bool update)
 						players[pnum].mo->state->sprite ==
 						GetDefaultByType (players[pnum].cls)->SpawnState->sprite)
 					{ // Only change the sprite if the player is using a standard one
-						players[pnum].mo->sprite = Skins[info->GetSkin()].sprite;
+						players[pnum].mo->sprite = skins[info->GetSkin()].sprite;
 					}
 				}
 				// Rebuild translation in case the new skin uses a different range
@@ -895,75 +881,102 @@ void D_ReadUserInfoStrings (int pnum, uint8_t **stream, bool update)
 	*stream += strlen (*((char **)stream)) + 1;
 }
 
-void WriteUserInfo(FSerializer &arc, userinfo_t &info)
+void ReadCompatibleUserInfo(FArchive &arc, userinfo_t &info)
 {
-	if (arc.BeginObject("userinfo"))
-	{
-		TMapIterator<FName, FBaseCVar *> it(info);
-		TMap<FName, FBaseCVar *>::Pair *pair;
-		FString name;
-		const char *string;
-		UCVarValue val;
-		int i;
+	char netname[MAXPLAYERNAME + 1];
+	BYTE team;
+	int aimdist, color, colorset, skin, gender;
+	bool neverswitch;
+	//fixed_t movebob, stillbob;	These were never serialized!
+	//int playerclass;				"
 
-		while (it.NextPair(pair))
-		{
-			name = pair->Key;
-			name.ToLower();
-			switch (pair->Key.GetIndex())
-			{
-			case NAME_Skin:
-				string = Skins[info.GetSkin()].Name;
-				break;
+	info.Reset();
 
-			case NAME_PlayerClass:
-				i = info.GetPlayerClassNum();
-				string = (i == -1 ? "Random" : PlayerClasses[i].Type->GetDisplayName().GetChars());
-				break;
+	arc.Read(&netname, sizeof(netname));
+	arc << team << aimdist << color << skin << gender << neverswitch << colorset;
 
-			default:
-				val = pair->Value->GetGenericRep(CVAR_String);
-				string = val.String;
-				break;
-			}
-			arc.StringPtr(name, string);
-		}
-		arc.EndObject();
-	}
+	*static_cast<FStringCVar *>(info[NAME_Name]) = netname;
+	*static_cast<FIntCVar *>(info[NAME_Team]) = team;
+	*static_cast<FFloatCVar *>(info[NAME_Autoaim]) = (float)aimdist / ANGLE_1;
+	*static_cast<FIntCVar *>(info[NAME_Skin]) = skin;
+	*static_cast<FIntCVar *>(info[NAME_Gender]) = gender;
+	*static_cast<FBoolCVar *>(info[NAME_NeverSwitchOnPickup]) = neverswitch;
+	*static_cast<FIntCVar *>(info[NAME_ColorSet]) = colorset;
+
+	UCVarValue val;
+	val.Int = color;
+	static_cast<FColorCVar *>(info[NAME_Color])->SetGenericRep(val, CVAR_Int);
 }
 
-void ReadUserInfo(FSerializer &arc, userinfo_t &info, FString &skin)
+void WriteUserInfo(FArchive &arc, userinfo_t &info)
+{
+	TMapIterator<FName, FBaseCVar *> it(info);
+	TMap<FName, FBaseCVar *>::Pair *pair;
+	FName name;
+	UCVarValue val;
+	int i;
+
+	while (it.NextPair(pair))
+	{
+		name = pair->Key;
+		arc << name;
+		switch (name.GetIndex())
+		{
+		case NAME_Skin:
+			arc.WriteString(skins[info.GetSkin()].name);
+			break;
+
+		case NAME_PlayerClass:
+			i = info.GetPlayerClassNum();
+			arc.WriteString(i == -1 ? "Random" : PlayerClasses[i].Type->Meta.GetMetaString(APMETA_DisplayName));
+			break;
+
+		default:
+			val = pair->Value->GetGenericRep(CVAR_String);
+			arc.WriteString(val.String);
+			break;
+		}
+	}
+	name = NAME_None;
+	arc << name;
+}
+
+void ReadUserInfo(FArchive &arc, userinfo_t &info, FString &skin)
 {
 	FName name;
 	FBaseCVar **cvar;
+	char *str = NULL;
 	UCVarValue val;
-	const char *key;
-	const char *str;
+
+	if (SaveVersion < 4253)
+	{
+		ReadCompatibleUserInfo(arc, info);
+		return;
+	}
 
 	info.Reset();
 	skin = NULL;
-	if (arc.BeginObject("userinfo"))
+	for (arc << name; name != NAME_None; arc << name)
 	{
-		while ((key = arc.GetKey()))
+		cvar = info.CheckKey(name);
+		arc << str;
+		if (cvar != NULL && *cvar != NULL)
 		{
-			arc.StringPtr(nullptr, str);
-			name = key;
-			cvar = info.CheckKey(name);
-			if (cvar != NULL && *cvar != NULL)
+			switch (name)
 			{
-				switch (name)
-				{
-				case NAME_Team:			info.TeamChanged(atoi(str)); break;
-				case NAME_Skin:			skin = str; break;	// Caller must call SkinChanged() once current calss is known
-				case NAME_PlayerClass:	info.PlayerClassChanged(str); break;
-				default:
-					val.String = str;
-					(*cvar)->SetGenericRep(val, CVAR_String);
-					break;
-				}
+			case NAME_Team:			info.TeamChanged(atoi(str)); break;
+			case NAME_Skin:			skin = str; break;	// Caller must call SkinChanged() once current calss is known
+			case NAME_PlayerClass:	info.PlayerClassChanged(str); break;
+			default:
+				val.String = str;
+				(*cvar)->SetGenericRep(val, CVAR_String);
+				break;
 			}
 		}
-		arc.EndObject();
+	}
+	if (str != NULL)
+	{
+		delete[] str;
 	}
 }
 
@@ -1001,10 +1014,10 @@ CCMD (playerinfo)
 		// Print special info
 		Printf("%20s: %s\n",      "Name", ui->GetName());
 		Printf("%20s: %s (%d)\n", "Team", ui->GetTeam() == TEAM_NONE ? "None" : Teams[ui->GetTeam()].GetName(), ui->GetTeam());
-		Printf("%20s: %s (%d)\n", "Skin", Skins[ui->GetSkin()].Name.GetChars(), ui->GetSkin());
+		Printf("%20s: %s (%d)\n", "Skin", skins[ui->GetSkin()].name, ui->GetSkin());
 		Printf("%20s: %s (%d)\n", "Gender", GenderNames[ui->GetGender()], ui->GetGender());
 		Printf("%20s: %s (%d)\n", "PlayerClass",
-			ui->GetPlayerClassNum() == -1 ? "Random" : ui->GetPlayerClassType()->GetDisplayName().GetChars(),
+			ui->GetPlayerClassNum() == -1 ? "Random" : ui->GetPlayerClassType()->Meta.GetMetaString (APMETA_DisplayName),
 			ui->GetPlayerClassNum());
 
 		// Print generic info
@@ -1016,7 +1029,8 @@ CCMD (playerinfo)
 			if (pair->Key != NAME_Name && pair->Key != NAME_Team && pair->Key != NAME_Skin &&
 				pair->Key != NAME_Gender && pair->Key != NAME_PlayerClass)
 			{
-				Printf("%20s: %s\n", pair->Key.GetChars(), pair->Value->GetHumanString());
+				UCVarValue val = pair->Value->GetGenericRep(CVAR_String);
+				Printf("%20s: %s\n", pair->Key.GetChars(), val.String);
 			}
 		}
 		if (argv.argc() > 2)

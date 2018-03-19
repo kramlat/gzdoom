@@ -39,7 +39,6 @@
 #include "s_playlist.h"
 #include "templates.h"
 #include "v_text.h"
-#include "files.h"
 
 FPlayList::FPlayList (const char *path)
 {
@@ -54,7 +53,7 @@ bool FPlayList::ChangeList (const char *path)
 {
 	FString playlistdir;
 	FString song;
-	FileReader fr;
+	FILE *file;
 	bool first;
 	bool pls;
 	int i;
@@ -62,7 +61,7 @@ bool FPlayList::ChangeList (const char *path)
 	Songs.Clear();
 	Position = 0;
 
-	if (!fr.OpenFile(path))
+	if ( (file = fopen (path, "rb")) == NULL)
 	{
 		Printf ("Could not open " TEXTCOLOR_BOLD "%s" TEXTCOLOR_NORMAL ": %s\n", path, strerror(errno));
 		return false;
@@ -71,7 +70,7 @@ bool FPlayList::ChangeList (const char *path)
 	first = true;
 	pls = false;
 	playlistdir = ExtractFilePath(path);
-	while ((song = NextLine(fr)).IsNotEmpty())
+	while ((song = NextLine(file)).IsNotEmpty())
 	{
 		if (first)
 		{
@@ -130,17 +129,19 @@ bool FPlayList::ChangeList (const char *path)
 			Songs.Push(song);
 		}
 	}
+	fclose (file);
+
 	return Songs.Size() != 0;
 }
 
-FString FPlayList::NextLine (FileReader &file)
+FString FPlayList::NextLine (FILE *file)
 {
 	char buffer[512];
 	char *skipper;
 
 	do
 	{
-		if (nullptr == file.Gets (buffer, countof(buffer)))
+		if (NULL == fgets (buffer, countof(buffer), file))
 			return "";
 
 		for (skipper = buffer; *skipper != 0 && *skipper <= ' '; skipper++)
@@ -181,7 +182,7 @@ int FPlayList::SetPosition (int position)
 	{
 		Position = position;
 	}
-	DPrintf (DMSG_NOTIFY, "Playlist position set to %d\n", Position);
+	DPrintf ("Playlist position set to %d\n", Position);
 	return Position;
 }
 
@@ -196,7 +197,7 @@ int FPlayList::Advance ()
 	{
 		Position = 0;
 	}
-	DPrintf (DMSG_NOTIFY, "Playlist advanced to song %d\n", Position);
+	DPrintf ("Playlist advanced to song %d\n", Position);
 	return Position;
 }
 
@@ -206,7 +207,7 @@ int FPlayList::Backup ()
 	{
 		Position = Songs.Size() - 1;
 	}
-	DPrintf (DMSG_NOTIFY, "Playlist backed up to song %d\n", Position);
+	DPrintf ("Playlist backed up to song %d\n", Position);
 	return Position;
 }
 

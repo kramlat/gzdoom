@@ -56,15 +56,8 @@
 
 // MACROS ------------------------------------------------------------------
 
-#ifdef __GNUC__
-// With versions of GCC newer than 4.2, it appears it was determined that the
-// cost of an unaligned pointer on PPC was high enough to add padding to the
-// end of packed structs.  For whatever reason __packed__ and pragma pack are
-// handled differently in this regard. Note that this only needs to be applied
-// to types which are used in arrays.
-#define FORCE_PACKED __attribute__((__packed__))
-#else
-#define FORCE_PACKED
+#ifndef _WIN32
+#define __cdecl
 #endif
 
 #ifndef __BIG_ENDIAN__
@@ -157,7 +150,7 @@ typedef struct
 	UINT32	UncompressedSize;			// 22
 	WORD	NameLength;					// 26
 	WORD	ExtraLength;				// 28
-} FORCE_PACKED LocalFileHeader;
+} LocalFileHeader;
 
 typedef struct
 {
@@ -178,7 +171,7 @@ typedef struct
 	WORD	InternalAttributes;
 	UINT32	ExternalAttributes;
 	UINT32	LocalHeaderOffset;
-} FORCE_PACKED CentralDirectoryEntry;
+} CentralDirectoryEntry;
 
 typedef struct
 {
@@ -190,7 +183,7 @@ typedef struct
 	UINT32	DirectorySize;
 	UINT32	DirectoryOffset;
 	WORD	ZipCommentLength;
-} FORCE_PACKED EndOfCentralDirectory;
+} EndOfCentralDirectory;
 //#pragma pack(pop)
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
@@ -208,7 +201,7 @@ dir_tree_t *add_dir(const char *dirpath);
 #endif
 dir_tree_t *add_dirs(char **argv);
 int count_files(dir_tree_t *trees);
-int sort_cmp(const void *a, const void *b);
+int __cdecl sort_cmp(const void *a, const void *b);
 file_sorted_t *sort_files(dir_tree_t *trees, int num_files);
 void write_zip(const char *zipname, dir_tree_t *trees, int update);
 int append_to_zip(FILE *zip_file, file_sorted_t *file, FILE *ozip, BYTE *odir);
@@ -226,8 +219,8 @@ int copy_zip_file(FILE *zip, file_entry_t *file, FILE *ozip, CentralDirectoryEnt
 
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
-static void *SzAlloc(ISzAllocPtr p, size_t size) { p = p; return malloc(size); }
-static void SzFree(ISzAllocPtr p, void *address) { p = p; free(address); }
+static void *SzAlloc(void *p, size_t size) { p = p; return malloc(size); }
+static void SzFree(void *p, void *address) { p = p; free(address); }
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
 
@@ -238,9 +231,6 @@ int UpdateCount;
 int Quiet;
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
-
-static const UINT32 centralfile = ZIP_CENTRALFILE;
-static const UINT32 endofdir = ZIP_ENDOFDIR;
 
 static int no_mem;
 
@@ -690,7 +680,7 @@ int count_files(dir_tree_t *trees)
 //
 //==========================================================================
 
-int sort_cmp(const void *a, const void *b)
+int __cdecl sort_cmp(const void *a, const void *b)
 {
 	const file_sorted_t *sort1 = (const file_sorted_t *)a;
 	const file_sorted_t *sort2 = (const file_sorted_t *)b;
@@ -814,7 +804,7 @@ void write_zip(const char *zipname, dir_tree_t *trees, int update)
 		if (i == num_files)
 		{
 			// Write central directory.
-			dirend.DirectoryOffset = LittleLong(ftell(zip));
+			dirend.DirectoryOffset = ftell(zip);
 			for (i = 0; i < num_files; ++i)
 			{
 				write_central_dir(zip, sorted + i);
@@ -824,8 +814,8 @@ void write_zip(const char *zipname, dir_tree_t *trees, int update)
 			dirend.DiskNumber = 0;
 			dirend.FirstDisk = 0;
 			dirend.NumEntriesOnAllDisks = dirend.NumEntries = LittleShort(i);
-			// In this case LittleLong(dirend.DirectoryOffset) is undoing the transformation done above.
-			dirend.DirectorySize = LittleLong(ftell(zip) - LittleLong(dirend.DirectoryOffset));
+			dirend.DirectorySize = LittleLong(ftell(zip) - dirend.DirectoryOffset);
+			dirend.DirectoryOffset = LittleLong(dirend.DirectoryOffset);
 			dirend.ZipCommentLength = 0;
 			if (fwrite(&dirend, sizeof(dirend), 1, zip) != 1)
 			{
@@ -881,8 +871,8 @@ int append_to_zip(FILE *zip_file, file_sorted_t *filep, FILE *ozip, BYTE *odir)
 	LocalFileHeader local;
 	uLong crc;
 	file_entry_t *file;
-	Byte *readbuf;
-	Byte *compbuf[2];
+	char *readbuf;
+	char *compbuf[2];
 	unsigned int comp_len[2];
 	int offset[2];
 	int method[2];
@@ -947,7 +937,7 @@ int append_to_zip(FILE *zip_file, file_sorted_t *filep, FILE *ozip, BYTE *odir)
 	if (odir != NULL && ozip != NULL)
 	{
 		CentralDirectoryEntry *dirent;
-
+		
 		dirent = find_file_in_zip(odir, filep->path_in_zip, len, crc, file->date, file->time);
 		if (dirent != NULL)
 		{
@@ -1266,7 +1256,7 @@ int compress_lzma(Byte *out, unsigned int *outlen, const Byte *in, unsigned int 
 
 int compress_bzip2(Byte *out, unsigned int *outlen, const Byte *in, unsigned int inlen)
 {
-	if (BZ_OK == BZ2_bzBuffToBuffCompress((char *)out, outlen, (char *)in, inlen, 9, 0, 0))
+	if (BZ_OK == BZ2_bzBuffToBuffCompress(out, outlen, (char *)in, inlen, 9, 0, 0))
 	{
 		return 0;
 	}
@@ -1315,8 +1305,7 @@ int compress_ppmd(Byte *out, unsigned int *outlen, const Byte *in, unsigned int 
 		return -1;
 	}
 
-	const short outval = LittleShort((maxorder - 1) + ((sasize - 1) << 4) + (cutoff << 12));
-	memcpy(out, (const Byte *)&outval, sizeof(short));
+	*(short *)out = LittleShort((maxorder - 1) + ((sasize - 1) << 4) + (cutoff << 12));
 	*outlen = *outlen - ppsout.buffersize;
 	return 0;
 }
@@ -1416,7 +1405,7 @@ BYTE *find_central_dir(FILE *fin)
 	if (pos_found == 0 ||
 		fseek(fin, pos_found, SEEK_SET) != 0 ||
 		fread(&eod, sizeof(eod), 1, fin) != 1 ||
-		fseek(fin, LittleLong(eod.DirectoryOffset), SEEK_SET) != 0)
+		fseek(fin, LittleShort(eod.DirectoryOffset), SEEK_SET) != 0)
 	{
 		return NULL;
 	}
@@ -1431,12 +1420,12 @@ BYTE *find_central_dir(FILE *fin)
 		free(dir);
 		return NULL;
 	}
-	if (memcmp(dir, (const BYTE *)&centralfile, sizeof(UINT32)) != 0)
+	if (*(UINT32 *)dir != ZIP_CENTRALFILE)
 	{
 		free(dir);
 		return NULL;
 	}
-	memcpy(dir + LittleLong(eod.DirectorySize), (const BYTE *)&endofdir, sizeof(UINT32));
+	*(UINT32 *)(dir + LittleLong(eod.DirectorySize)) = ZIP_ENDOFDIR;
 	return dir;
 }
 
@@ -1455,7 +1444,7 @@ CentralDirectoryEntry *find_file_in_zip(BYTE *dir, const char *path, unsigned in
 	CentralDirectoryEntry *ent;
 	int flags;
 
-	while (memcmp(dir, (const BYTE *)&centralfile, sizeof(UINT32)) == 0)
+	while (*(UINT32 *)dir == ZIP_CENTRALFILE)
 	{
 		ent = (CentralDirectoryEntry *)dir;
 		if (pathlen == LittleShort(ent->NameLength) &&
@@ -1466,7 +1455,7 @@ CentralDirectoryEntry *find_file_in_zip(BYTE *dir, const char *path, unsigned in
 		}
 		dir += sizeof(*ent) + LittleShort(ent->NameLength) + LittleShort(ent->ExtraLength) + LittleShort(ent->CommentLength);
 	}
-	if (memcmp(dir, (const BYTE *)&centralfile, sizeof(UINT32)) != 0)
+	if (*(UINT32 *)dir != ZIP_CENTRALFILE)
 	{
 		return NULL;
 	}
@@ -1536,7 +1525,7 @@ int copy_zip_file(FILE *zip, file_entry_t *file, FILE *ozip, CentralDirectoryEnt
 		return 0;
 	}
 	// Check to be sure name matches.
-	if (strncmp((char *)buf, (char *)(ent + 1), LittleShort(lfh.NameLength)) != 0)
+	if (strncmp(buf, (char *)(ent + 1), LittleShort(lfh.NameLength)) != 0)
 	{
 		free(buf);
 		return 0;
@@ -1565,7 +1554,7 @@ int copy_zip_file(FILE *zip, file_entry_t *file, FILE *ozip, CentralDirectoryEnt
 //
 //==========================================================================
 
-int main (int argc, char **argv)
+int __cdecl main (int argc, char **argv)
 {
 	dir_tree_t *tree, *trees;
 	file_entry_t *file;

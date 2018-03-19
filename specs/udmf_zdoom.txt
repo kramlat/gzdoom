@@ -27,8 +27,7 @@ II. Implementation Semantics
 II.A : Storage and Retrieval of Data
 ------------------------------------
 
-Any TEXTMAP lump in the described namespaces must be encoded in ISO 8859-1 which
-as of this writing is the only character encoding supported by ZDoom.
+No changes.
 
 -----------------------------------
 II.B : Storage Within Archive Files
@@ -93,34 +92,30 @@ Note: All <bool> fields default to false unless mentioned otherwise.
 
    linedef
    {
-      alpha = <float>;            // Translucency of this line, default is 1.0
-      renderstyle = <string>;     // Render style, can be "translucent" or "add",
-                                  // default is "translucent".
-      playeruseback = <bool> ;    // New SPAC flag, true = player can use from back side.
-      anycross = <bool>;          // New SPAC flag, true = any non-projectile 
-                                  // crossing will trigger this line
-      monsteractivate = <bool>;   // Monsters can trigger this line.
-                                  // For compatibility only because this flag's 
-                                  // semantics can not be fully reproduced with
-                                  // explicit trigger flags.
-      blockplayers = <bool>;      // Line blocks players' movement.
-      blockeverything = <bool>;   // Line blocks everything.
-      firstsideonly = <bool>;     // Line can only be triggered from the front side.
-      zoneboundary = <bool>;      // Line is a boundary for sound reverb zones.
-      clipmidtex = <bool>;        // Line's mid textures are clipped to floor and ceiling.
-      wrapmidtex = <bool>;        // Line's mid textures are wrapped.
-      midtex3d = <bool>;          // Actors can walk on mid texture.
-      midtex3dimpassible = <bool>;// Used in conjuction with midtex3d - causes the mid
-                                  // texture to behave like an impassable line (projectiles
-                                  // pass through it).
-      checkswitchrange = <bool>;  // Switches can only be activated when vertically reachable.
-      blockprojectiles = <bool>;  // Line blocks all projectiles
-      blockuse = <bool>;          // Line blocks all use actions
-      blocksight = <bool>;        // Line blocks monster line of sight
-      blockhitscan = <bool>;      // Line blocks hitscan attacks
-      locknumber = <int>;         // Line special is locked
-      arg0str = <string>;         // Alternate string-based version of arg0
-	  moreids = <string>;         // Additional line IDs, specified as a space separated list of numbers (e.g. "2 666 1003 4505")
+      alpha = <float>;          // Translucency of this line, default is 1.0
+      renderstyle = <string>;   // Render style, can be "translucent" or "add",
+                                // default is "translucent".
+      playeruseback = <bool>;   // New SPAC flag, true = player can use from back side.
+      anycross = <bool>;        // New SPAC flag, true = any non-projectile 
+                                // crossing will trigger this line
+      monsteractivate = <bool>; // Monsters can trigger this line.
+                                // For compatibility only because this flag's 
+                                // semantics can not be fully reproduced with
+                                // explicit trigger flags.
+      blockplayers = <bool>;    // Line blocks players' movement.
+      blockeverything = <bool>; // Line blocks everything.
+      firstsideonly = <bool>;   // Line can only be triggered from the front side.
+      zoneboundary = <bool>;    // Line is a boundary for sound reverb zones.
+      clipmidtex = <bool>;      // Line's mid textures are clipped to floor and ceiling.
+      wrapmidtex = <bool>;      // Line's mid textures are wrapped.
+      midtex3d = <bool>;        // Actors can walk on mid texture.
+      checkswitchrange = <bool>;// Switches can only be activated when vertically reachable.
+      blockprojectiles = <bool>;// Line blocks all projectiles
+      blockuse = <bool>;        // Line blocks all use actions
+      blocksight = <bool>;      // Line blocks monster line of sight
+      blockhitscan = <bool>;    // Line blocks hitscan attacks
+      locknumber = <int>;       // Line special is locked
+      arg0str = <string>;       // Alternate string-based version of arg0
 
       transparent   = <bool>; // true = line is a Strife transparent line (alpha 0.25)
 
@@ -197,51 +192,12 @@ Note: All <bool> fields default to false unless mentioned otherwise.
       desaturation = <float>;         // Color desaturation factor. 0 = none, 1 = full, default = 0.
       silent = <bool>;                // Actors in this sector make no sound,
       nofallingdamage = <bool>;		  // Falling damage is disabled in this sector
-	  noattack = <bool>;              // Blocks monster attacks in this sector.
       dropactors = <bool>;            // Actors drop with instantly moving floors (*)
       norespawn = <bool>;             // Players can not respawn in this sector
       soundsequence = <string>;       // The sound sequence to play when this sector moves. Placing a
                                       // sound sequence thing in the sector will override this property.
       hidden = <bool>;                // if true this sector will not be drawn on the textured automap.
       waterzone = <bool>;             // Sector is under water and swimmable
-      moreids = <string>;             // Additional sector IDs/tags, specified as a space separated list of numbers (e.g. "2 666 1003 4505")
-      damageamount = <int>;           // Amount of damage inflicted by this sector, default = 0. If this is 0, all other damage properties will be ignored.
-                                      // Setting damage through these properties will override any damage set through 'special'.
-                                      // Setting damageamount to a negative value will create a healing sector.
-      damagetype = <string>;          // Damage type for sector damage, Default = "None". (generic damage)
-      damageinterval = <int>;         // Interval in tics between damage application, default = 32.
-      leakiness = <int>;              // Probability of leaking through radiation suit (0 = never, 256 = always), default = 0.
-      damageterraineffect = <bool>;   // Will spawn a terrain splash when damage is inflicted. Default = false.
-      damagehazard = <bool>;          // Changes damage model to Strife's delayed damage for the given sector. Default = false.
-      floorterrain = <string>;        // Sets the terrain for the sector's floor. Default = 'use the flat texture's terrain definition.'
-      ceilingterrain = <string>;      // Sets the terrain for the sector's ceiling. Default = 'use the flat texture's terrain definition.'
-	  floor_reflect = <float>;        // reflectiveness of floor (OpenGL only, not functional on sloped sectors)
-	  ceiling_reflect = <float>;      // reflectiveness of ceiling (OpenGL only, not functional on sloped sectors)
-	  fogdensity = <integer>;         // Sets an explicit fog density for the sector, overriding the default calculation from the light level. Value range is 0-510,
-	                                  // 0 meaning that the default is to be used, 2 equalling the density of a light level of 250, and 255 equalling the density of
-	                                  // a light level of 0.  (OpenGL only)
-	  floorglowcolor = <integer>;     // Sector's floor glow color as RRGGBB value, default = 'use texture's definition'. Set to -1 to disable glowing. (OpenGL 3.x and newer only)
-	  floorglowheight = <float>;      // Height of floor glow. This only has an effect for the sector's own glow color, but not for a texture based glow. (OpenGL 3.x and newer only)
-	  ceilingglowcolor = <integer>;   // Sector's ceiling glow color as RRGGBB value, default = 'use texture's definition'. Set to -1 to disable glowing. (OpenGL 3.x and newer only)
-	  ceilingglowheight = <float>;    // Height of ceiling glow. This only has an effect for the sector's own glow color, but not for a texture based glow. (OpenGL 3.x and newer only)
-	  color_floor = <int>;            // Material color of sector's floor. Default is white (0xffffff)
-	  color_ceiling = <int>;          // Material color of sector's ceiling. Default is white (0xffffff)
-	  color_walltop = <int>;          // Material color of top of sector's sidedefs. In OpenGL 2.x and the software renderer this will define the entire wall's color) Default is white (0xffffff)
-	  color_wallbottom = <int>;       // Material color of bottom of sector's sidedefs (OpenGL 3.x and later only) Default is white (0xffffff)
-	  color_sprites = <int>;          // Material color of sprites in sector. Default is white (0xffffff)
-							  
-
-      portal_ceil_blocksound = <bool> // ceiling portal blocks sound.
-      portal_ceil_disabled = <bool>   // ceiling portal disabled.
-      portal_ceil_nopass = <bool>     // ceiling portal blocks movement if true.
-      portal_ceil_norender = <bool>   // ceiling portal not rendered.
-      portal_ceil_overlaytype = <string> // defines translucency style, can either be "translucent" or "additive". Default is "translucent".
-      portal_floor_blocksound = <bool> // floor portal blocks sound.
-      portal_floor_disabled = <bool>   // floor portal disabled.
-      portal_floor_nopass = <bool>     // ceiling portal blocks movement if true.
-      portal_floor_norender = <bool>   // ceiling portal not rendered.
-      portal_floor_overlaytype = <string> // defines translucency style, can either be "translucent" or "additive". Default is "translucent".
-	  
       
       * Note about dropactors
 
@@ -262,14 +218,13 @@ Note: All <bool> fields default to false unless mentioned otherwise.
 	  gravity = <float>;		// Set per-actor gravity. Positive values are multiplied with the class's property, 
 	                            // negative values are used as their absolute. Default = 1.0.
 								
-	  health = <float>;			// Set per-actor health. Positive values are multiplied with the class's property,
+	  health = <int>;			// Set per-actor health. Positive values are multiplied with the class's property,
 								// negative values are used as their absolute. Default = 1.
 								
 	  renderstyle = <string>;	// Set per-actor render style, overriding the class default. Possible values can be "normal",
-								// "none", "add" or "additive", "subtract" or "subtractive", "stencil", "translucentstencil", 
-								// "addstencil", "shaded", "addshaded", "translucent", "fuzzy", "optfuzzy", "soultrans" and "shadow". 
-								// Default is an empty string for no change.
-	  fillcolor = <integer>;    // Fill color used by the "stencil", "addstencil" and "translucentstencil" rendestyles, as RRGGBB value, default = 0x000000.
+								// "none", "add" or "additive", "subtract" or "subtractive", "stencil", "translucentstencil",
+								// "translucent", "fuzzy", "optfuzzy", "soultrans". Default is an empty string for no change.
+	  fillcolor = <integer>;    // Fill color used by the "stencil" and "translucentstencil" rendestyles, as RRGGBB value, default = 0x000000.
 	  alpha = <float>;          // Translucency of this actor (if applicable to renderstyle), default is 1.0.
 	  score = <int>;			// Score value of this actor, overriding the class default if not null. Default = 0.
       pitch = <integer>; 		// Pitch of thing in degrees. Default = 0 (horizontal).
@@ -277,13 +232,11 @@ Note: All <bool> fields default to false unless mentioned otherwise.
 	  scalex = <float>;         // Vertical scaling on thing. Default = 0 (ignored).
 	  scaley = <float>;         // Horizontal scaling on thing. Default = 0 (ignored).
 	  scale = <float>;        	// Vertical and horizontal scaling on thing. Default = 0 (ignored).
-	  floatbobphase = <int>;	// Sets the thing's floatbobphase. Valid phase values are 0-63. Default = -1 (use actor class default).
 
       * Note about arg0str
 
       For things with ACS specials (80-86 and 226), if arg0str is present and non-null, it
       will be used as the name of the script to execute, and arg0 will be ignored.
-	  On dynamic lights, arg0str can be used to set a color by name, this will supersede all args which are normally used to define a color.
    }
 
 
@@ -413,22 +366,6 @@ Added transparent line property (to be folded back to core UDMF standard), and h
 1.24 14.05.2014
 Added plane equations for sector slopes. (Please read carefully to ensure proper use!)
 Changed language describing the DIALOGUE lump to mention USDF as an option.
-
-1.25 19.04.2015
-Added 'moreids' for linedefs and sectors.
-
-1.26 05.01.2016
-added clarification about character encoding
-added sector damage properties.
-
-1.27 05.01.2017
-floor_reflect and ceiling_reflect.
-
-1.28 28.01.2017
-sector material colors.
-
-1.29 04.02.2018
-arg0str in dynamic lights.
 
 ===============================================================================
 EOF

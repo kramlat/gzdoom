@@ -39,6 +39,30 @@
 class FConfigFile;
 class APlayerPawn;
 
+extern bool CheckCheatmode (bool printmsg = true);
+
+void C_ExecCmdLineParams ();
+
+// Add commands to the console as if they were typed in. Can handle wait
+// and semicolon-separated commands. This function may modify the source
+// string, but the string will be restored to its original state before
+// returning. Therefore, commands passed must not be in read-only memory.
+void AddCommandString (char *text, int keynum=0);
+
+// Process a single console command. Does not handle wait.
+void C_DoCommand (const char *cmd, int keynum=0);
+
+int C_ExecFile (const char *cmd, bool usePullin);
+
+// Write out alias commands to a file for all current aliases.
+void C_ArchiveAliases (FConfigFile *f);
+
+void C_SetAlias (const char *name, const char *cmd);
+void C_ClearAliases ();
+
+// build a single string out of multiple strings
+FString BuildString (int argc, FString *argv);
+
 // Class that can parse command lines
 class FCommandLine
 {
@@ -57,44 +81,6 @@ private:
 	long argsize;
 	bool noescapes;
 };
-
-// Contains the contents of an exec'ed file
-struct FExecList
-{
-	TArray<FString> Commands;
-	TArray<FString> Pullins;
-
-	void AddCommand(const char *cmd, const char *file = NULL);
-	void ExecCommands() const;
-	void AddPullins(TArray<FString> &wads) const;
-};
-
-
-extern bool CheckCheatmode (bool printmsg = true);
-
-FExecList *C_ParseCmdLineParams(FExecList *exec);
-
-// Add commands to the console as if they were typed in. Can handle wait
-// and semicolon-separated commands. This function may modify the source
-// string, but the string will be restored to its original state before
-// returning. Therefore, commands passed must not be in read-only memory.
-void AddCommandString (char *text, int keynum=0);
-
-// Process a single console command. Does not handle wait.
-void C_DoCommand (const char *cmd, int keynum=0);
-
-FExecList *C_ParseExecFile(const char *file, FExecList *source);
-void C_SearchForPullins(FExecList *exec, const char *file, class FCommandLine &args);
-bool C_ExecFile(const char *file);
-
-// Write out alias commands to a file for all current aliases.
-void C_ArchiveAliases (FConfigFile *f);
-
-void C_SetAlias (const char *name, const char *cmd);
-void C_ClearAliases ();
-
-// build a single string out of multiple strings
-FString BuildString (int argc, FString *argv);
 
 typedef void (*CCmdRun) (FCommandLine &argv, APlayerPawn *instigator, int key);
 
@@ -127,22 +113,6 @@ protected:
 	FConsoleCommand Cmd_##n##_Ref (#n, Cmd_##n); \
 	void Cmd_##n (FCommandLine &argv, APlayerPawn *who, int key)
 
-class FUnsafeConsoleCommand : public FConsoleCommand
-{
-public:
-	FUnsafeConsoleCommand (const char *name, CCmdRun RunFunc)
-	: FConsoleCommand (name, RunFunc)
-	{
-	}
-
-	virtual void Run (FCommandLine &args, APlayerPawn *instigator, int key) override;
-};
-
-#define UNSAFE_CCMD(n) \
-	static void Cmd_##n (FCommandLine &, APlayerPawn *, int key); \
-	static FUnsafeConsoleCommand Cmd_##n##_Ref (#n, Cmd_##n); \
-	void Cmd_##n (FCommandLine &argv, APlayerPawn *who, int key)
-
 const int KEY_DBLCLICKED = 0x8000;
 
 class FConsoleAlias : public FConsoleCommand
@@ -163,27 +133,16 @@ protected:
 	bool bKill;
 };
 
-class FUnsafeConsoleAlias : public FConsoleAlias
-{
-public:
-	FUnsafeConsoleAlias (const char *name, const char *command)
-	: FConsoleAlias (name, command, true)
-	{
-	}
-
-	virtual void Run (FCommandLine &args, APlayerPawn *instigator, int key) override;
-};
-
 // Actions
 struct FButtonStatus
 {
 	enum { MAX_KEYS = 6 };	// Maximum number of keys that can press this button
 
-	uint16_t Keys[MAX_KEYS];
-	uint8_t bDown;				// Button is down right now
-	uint8_t bWentDown;			// Button went down this tic
-	uint8_t bWentUp;			// Button went up this tic
-	uint8_t padTo16Bytes;
+	WORD Keys[MAX_KEYS];
+	BYTE bDown;				// Button is down right now
+	BYTE bWentDown;			// Button went down this tic
+	BYTE bWentUp;			// Button went up this tic
+	BYTE padTo16Bytes;
 
 	bool PressKey (int keynum);		// Returns true if this key caused the button to be pressed.
 	bool ReleaseKey (int keynum);	// Returns true if this key is no longer pressed.
@@ -200,7 +159,7 @@ extern FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
 	Button_User1, Button_User2, Button_User3, Button_User4,
 	Button_AM_PanLeft, Button_AM_PanRight, Button_AM_PanDown, Button_AM_PanUp,
 	Button_AM_ZoomIn, Button_AM_ZoomOut;
-extern bool ParsingKeyConf, UnsafeExecutionContext;
+extern bool ParsingKeyConf;
 
 void ResetButtonTriggers ();	// Call ResetTriggers for all buttons
 void ResetButtonStates ();		// Same as above, but also clear bDown
@@ -209,6 +168,6 @@ extern unsigned int MakeKey (const char *s);
 extern unsigned int MakeKey (const char *s, size_t len);
 extern unsigned int SuperFastHash (const char *data, size_t len);
 
-void execLogfile(const char *fn, bool append = false);
+void execLogfile(const char *fn);
 
 #endif //__C_DISPATCH_H__

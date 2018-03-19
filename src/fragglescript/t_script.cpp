@@ -31,6 +31,19 @@
 //
 //---------------------------------------------------------------------------
 //
+// FraggleScript is from SMMU which is under the GPL. Technically, 
+// therefore, combining the FraggleScript code with the non-free 
+// ZDoom code is a violation of the GPL.
+//
+// As this may be a problem for you, I hereby grant an exception to my 
+// copyright on the SMMU source (including FraggleScript). You may use 
+// any code from SMMU in (G)ZDoom, provided that:
+//
+//    * For any binary release of the port, the source code is also made 
+//      available.
+//    * The copyright notice is kept on any file containing my code.
+//
+//
 
 #include "t_script.h"
 #include "p_lnspec.h"
@@ -41,8 +54,7 @@
 #include "i_system.h"
 #include "doomerrors.h"
 #include "doomstat.h"
-#include "serializer.h"
-#include "g_levellocals.h"
+#include "farchive.h"
 
 //==========================================================================
 //
@@ -63,23 +75,23 @@ AActor *trigger_obj;
 //
 //==========================================================================
 
-#define IMPLEMENT_16_POINTERS(v, i) \
-	IMPLEMENT_POINTER(v[i]) \
-	IMPLEMENT_POINTER(v[i+1]) \
-	IMPLEMENT_POINTER(v[i+2]) \
-	IMPLEMENT_POINTER(v[i+3]) \
-	IMPLEMENT_POINTER(v[i+4]) \
-	IMPLEMENT_POINTER(v[i+5]) \
-	IMPLEMENT_POINTER(v[i+6]) \
-	IMPLEMENT_POINTER(v[i+7]) \
-	IMPLEMENT_POINTER(v[i+8]) \
-	IMPLEMENT_POINTER(v[i+9]) \
-	IMPLEMENT_POINTER(v[i+10]) \
-	IMPLEMENT_POINTER(v[i+11]) \
-	IMPLEMENT_POINTER(v[i+12]) \
-	IMPLEMENT_POINTER(v[i+13]) \
-	IMPLEMENT_POINTER(v[i+14]) \
-	IMPLEMENT_POINTER(v[i+15]) \
+#define DECLARE_16_POINTERS(v, i) \
+	DECLARE_POINTER(v[i]) \
+	DECLARE_POINTER(v[i+1]) \
+	DECLARE_POINTER(v[i+2]) \
+	DECLARE_POINTER(v[i+3]) \
+	DECLARE_POINTER(v[i+4]) \
+	DECLARE_POINTER(v[i+5]) \
+	DECLARE_POINTER(v[i+6]) \
+	DECLARE_POINTER(v[i+7]) \
+	DECLARE_POINTER(v[i+8]) \
+	DECLARE_POINTER(v[i+9]) \
+	DECLARE_POINTER(v[i+10]) \
+	DECLARE_POINTER(v[i+11]) \
+	DECLARE_POINTER(v[i+12]) \
+	DECLARE_POINTER(v[i+13]) \
+	DECLARE_POINTER(v[i+14]) \
+	DECLARE_POINTER(v[i+15]) \
 
 //==========================================================================
 //
@@ -87,32 +99,30 @@ AActor *trigger_obj;
 //
 //==========================================================================
 
-IMPLEMENT_CLASS(DFsScript, false, true)
-
-IMPLEMENT_POINTERS_START(DFsScript)
-	IMPLEMENT_POINTER(parent)
-	IMPLEMENT_POINTER(trigger)
-	IMPLEMENT_16_POINTERS(sections, 0)
-	IMPLEMENT_POINTER(sections[16])
-	IMPLEMENT_16_POINTERS(variables, 0)
-	IMPLEMENT_16_POINTERS(children, 0)
-	IMPLEMENT_16_POINTERS(children, 16)
-	IMPLEMENT_16_POINTERS(children, 32)
-	IMPLEMENT_16_POINTERS(children, 48)
-	IMPLEMENT_16_POINTERS(children, 64)
-	IMPLEMENT_16_POINTERS(children, 80)
-	IMPLEMENT_16_POINTERS(children, 96)
-	IMPLEMENT_16_POINTERS(children, 112)
-	IMPLEMENT_16_POINTERS(children, 128)
-	IMPLEMENT_16_POINTERS(children, 144)
-	IMPLEMENT_16_POINTERS(children, 160)
-	IMPLEMENT_16_POINTERS(children, 176)
-	IMPLEMENT_16_POINTERS(children, 192)
-	IMPLEMENT_16_POINTERS(children, 208)
-	IMPLEMENT_16_POINTERS(children, 224)
-	IMPLEMENT_16_POINTERS(children, 240)
-	IMPLEMENT_POINTER(children[256])
-IMPLEMENT_POINTERS_END
+IMPLEMENT_POINTY_CLASS(DFsScript)
+	DECLARE_POINTER(parent)
+	DECLARE_POINTER(trigger)
+	DECLARE_16_POINTERS(sections, 0)
+	DECLARE_POINTER(sections[16])
+	DECLARE_16_POINTERS(variables, 0)
+	DECLARE_16_POINTERS(children, 0)
+	DECLARE_16_POINTERS(children, 16)
+	DECLARE_16_POINTERS(children, 32)
+	DECLARE_16_POINTERS(children, 48)
+	DECLARE_16_POINTERS(children, 64)
+	DECLARE_16_POINTERS(children, 80)
+	DECLARE_16_POINTERS(children, 96)
+	DECLARE_16_POINTERS(children, 112)
+	DECLARE_16_POINTERS(children, 128)
+	DECLARE_16_POINTERS(children, 144)
+	DECLARE_16_POINTERS(children, 160)
+	DECLARE_16_POINTERS(children, 176)
+	DECLARE_16_POINTERS(children, 192)
+	DECLARE_16_POINTERS(children, 208)
+	DECLARE_16_POINTERS(children, 224)
+	DECLARE_16_POINTERS(children, 240)
+	DECLARE_POINTER(children[256])
+END_POINTERS
 
 //==========================================================================
 //
@@ -154,24 +164,11 @@ DFsScript::DFsScript()
 
 //==========================================================================
 //
-// This is here to delete the locally allocated buffer in case this
-// gets forcibly destroyed
-//
-//==========================================================================
-
-DFsScript::~DFsScript()
-{
-	if (data != NULL) delete[] data;
-	data = NULL;
-}
-
-//==========================================================================
-//
 //
 //
 //==========================================================================
 
-void DFsScript::OnDestroy()
+void DFsScript::Destroy()
 {
 	ClearVariables(true);
 	ClearSections();
@@ -181,7 +178,7 @@ void DFsScript::OnDestroy()
 	data = NULL;
 	parent = NULL;
 	trigger = NULL;
-	Super::OnDestroy();
+	Super::Destroy();
 }
 
 //==========================================================================
@@ -190,23 +187,18 @@ void DFsScript::OnDestroy()
 //
 //==========================================================================
 
-void DFsScript::Serialize(FSerializer &arc)
+void DFsScript::Serialize(FArchive &arc)
 {
 	Super::Serialize(arc);
 	// don't save a reference to the global script
-	if (parent == global_script) parent = nullptr;
+	if (parent == global_script) parent = NULL;
 
-	arc("data", data)
-		("scriptnum", scriptnum)
-		("len", len)
-		("parent", parent)
-		("trigger", trigger)
-		("lastiftrue", lastiftrue)
-		.Array("sections", sections, SECTIONSLOTS)
-		.Array("variables", variables, VARIABLESLOTS)
-		.Array("children", children, MAXSCRIPTS);
+	arc << data << scriptnum << len << parent << trigger << lastiftrue;
+	for(int i=0; i< SECTIONSLOTS; i++) arc << sections[i];
+	for(int i=0; i< VARIABLESLOTS; i++) arc << variables[i];
+	for(int i=0; i< MAXSCRIPTS; i++) arc << children[i];
 
-	if (parent == nullptr) parent = global_script;
+	if (parent == NULL) parent = global_script;
 }
 
 //==========================================================================
@@ -239,7 +231,7 @@ void DFsScript::ParseScript(char *position)
 		FParser parse(this);
 		parse.Run(position, data, data + len);
 	}
-	catch (CFraggleScriptError &err)
+	catch (CRecoverableError &err)
 	{
 		Printf ("%s\n", err.GetMessage());
 	}
@@ -257,14 +249,12 @@ void DFsScript::ParseScript(char *position)
 //
 //==========================================================================
 
-IMPLEMENT_CLASS(DRunningScript, false, true)
-
-IMPLEMENT_POINTERS_START(DRunningScript)
-	IMPLEMENT_POINTER(prev)
-	IMPLEMENT_POINTER(next)
-	IMPLEMENT_POINTER(trigger)
-	IMPLEMENT_16_POINTERS(variables, 0)
-IMPLEMENT_POINTERS_END
+IMPLEMENT_POINTY_CLASS(DRunningScript)
+	DECLARE_POINTER(prev)
+	DECLARE_POINTER(next)
+	DECLARE_POINTER(trigger)
+	DECLARE_16_POINTERS(variables, 0)
+END_POINTERS
 
 //==========================================================================
 //
@@ -321,7 +311,7 @@ DRunningScript::DRunningScript(AActor *trigger, DFsScript *owner, int index)
 //
 //==========================================================================
 
-void DRunningScript::OnDestroy()
+void DRunningScript::Destroy()
 {
 	int i;
 	DFsVariable *current, *next;
@@ -339,7 +329,7 @@ void DRunningScript::OnDestroy()
 		}
 		variables[i] = NULL;
     }
-	Super::OnDestroy();
+	Super::Destroy();
 }
 
 //==========================================================================
@@ -348,17 +338,12 @@ void DRunningScript::OnDestroy()
 //
 //==========================================================================
 
-void DRunningScript::Serialize(FSerializer &arc)
+void DRunningScript::Serialize(FArchive &arc)
 {
 	Super::Serialize(arc);
-	arc("script", script)
-		("save_point", save_point)
-		("wait_type", wait_type)
-		("wait_data", wait_data)
-		("prev", prev)
-		("next", next)
-		("trigger", trigger)
-		.Array("variables", variables, VARIABLESLOTS);
+
+	arc << script << save_point << wait_type << wait_data << prev << next << trigger;
+	for(int i=0; i< VARIABLESLOTS; i++) arc << variables[i];
 }
 
 
@@ -367,15 +352,12 @@ void DRunningScript::Serialize(FSerializer &arc)
 // The main thinker
 //
 //==========================================================================
+IMPLEMENT_POINTY_CLASS(DFraggleThinker)
+	DECLARE_POINTER(RunningScripts)
+	DECLARE_POINTER(LevelScript)
+END_POINTERS
 
-IMPLEMENT_CLASS(DFraggleThinker, false, true)
-
-IMPLEMENT_POINTERS_START(DFraggleThinker)
-	IMPLEMENT_POINTER(RunningScripts)
-	IMPLEMENT_POINTER(LevelScript)
-IMPLEMENT_POINTERS_END
-
-TObjPtr<DFraggleThinker*> DFraggleThinker::ActiveThinker;
+TObjPtr<DFraggleThinker> DFraggleThinker::ActiveThinker;
 
 //==========================================================================
 //
@@ -393,8 +375,8 @@ DFraggleThinker::DFraggleThinker()
 	else
 	{
 		ActiveThinker = this;
-		RunningScripts = Create<DRunningScript>();
-		LevelScript = Create<DFsScript>();
+		RunningScripts = new DRunningScript;
+		LevelScript = new DFsScript;
 		LevelScript->parent = global_script;
 		GC::WriteBarrier(this, RunningScripts);
 		GC::WriteBarrier(this, LevelScript);
@@ -408,7 +390,7 @@ DFraggleThinker::DFraggleThinker()
 //
 //==========================================================================
 
-void DFraggleThinker::OnDestroy()
+void DFraggleThinker::Destroy()
 {
 	DRunningScript *p = RunningScripts;
 	while (p)
@@ -425,7 +407,7 @@ void DFraggleThinker::OnDestroy()
 
 	SpawnedThings.Clear();
 	ActiveThinker = NULL;
-	Super::OnDestroy();
+	Super::Destroy();
 }
 
 //==========================================================================
@@ -434,13 +416,10 @@ void DFraggleThinker::OnDestroy()
 //
 //==========================================================================
 
-void DFraggleThinker::Serialize(FSerializer &arc)
+void DFraggleThinker::Serialize(FArchive &arc)
 {
 	Super::Serialize(arc);
-	arc("levelscript", LevelScript)
-		("runningscripts", RunningScripts)
-		("spawnedthings", SpawnedThings)
-		("nocheckposition", nocheckposition);
+	arc << LevelScript << RunningScripts << SpawnedThings << nocheckposition;
 }
 
 //==========================================================================
@@ -473,11 +452,11 @@ bool DFraggleThinker::wait_finished(DRunningScript *script)
 		
     case wt_tagwait:
 		{
-			int secnum;
-			FSectorTagIterator itr(script->wait_data);
-			while ((secnum = itr.Next()) >= 0)
+			int secnum = -1;
+			
+			while ((secnum = P_FindSectorFromTag(script->wait_data, secnum)) >= 0)
 			{
-				sector_t *sec = &level.sectors[secnum];
+				sector_t *sec = &sectors[secnum];
 				if(sec->floordata || sec->ceilingdata || sec->lightingdata)
 					return false;        // not finished
 			}
@@ -642,7 +621,7 @@ void T_PreprocessScripts()
 //
 //==========================================================================
 
-bool T_RunScript(int snum, AActor * t_trigger)
+static bool RunScript(int snum, AActor * t_trigger)
 {
 	DFraggleThinker *th = DFraggleThinker::ActiveThinker;
 	if (th)
@@ -656,7 +635,7 @@ bool T_RunScript(int snum, AActor * t_trigger)
 		DFsScript *script = th->LevelScript->children[snum];
 		if(!script)	return false;
 	
-		DRunningScript *runscr = Create<DRunningScript>(t_trigger, script, 0);
+		DRunningScript *runscr = new DRunningScript(t_trigger, script, 0);
 		// hook into chain at start
 		th->AddRunningScript(runscr);
 		return true;
@@ -670,14 +649,44 @@ bool T_RunScript(int snum, AActor * t_trigger)
 //
 //==========================================================================
 
+static int LS_FS_Execute (line_t *ln, AActor *it, bool backSide,
+	int arg0, int arg1, int arg2, int arg3, int arg4)
+// FS_Execute(script#,firstsideonly,lock,msgtype)
+{
+	if (arg1 && ln && backSide) return false;
+	if (arg2!=0 && !P_CheckKeys(it, arg2, !!arg3)) return false;
+	return RunScript(arg0,it);
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
 void FS_Close()
 {
-	if (global_script != NULL)
-	{
-		GC::DelSoftRoot(global_script);
-		global_script->Destroy();
-		global_script = NULL;
-	}
+	int i;
+	DFsVariable *current, *next;
+
+	// we have to actually delete the global variables if we don't want
+	// to get them reported as memory leaks.
+	for(i=0; i<VARIABLESLOTS; i++)
+    {
+		current = global_script->variables[i];
+		
+		while(current)
+		{
+			next = current->next; // save for after freeing
+			
+			current->ObjectFlags |= OF_YesReallyDelete;
+			delete current;
+			current = next; // go to next in chain
+		}
+    }
+	GC::DelSoftRoot(global_script);
+	global_script->ObjectFlags |= OF_YesReallyDelete;
+	delete global_script;
 }
 
 void T_Init()
@@ -686,9 +695,12 @@ void T_Init()
 
 	if (global_script == NULL)
 	{
-		global_script = Create<DFsScript>();
+		// I'd rather link the special here than make another source file depend on FS!
+		LineSpecials[FS_Execute]=LS_FS_Execute;
+		global_script = new DFsScript;
 		GC::AddSoftRoot(global_script);
 		init_functions();
+		atterm(FS_Close);
 	}
 }
 
@@ -708,6 +720,6 @@ CCMD(fpuke)
 	}
 	else
 	{
-		T_RunScript(atoi(argv[1]), players[consoleplayer].mo);
+		RunScript(atoi(argv[1]), players[consoleplayer].mo);
 	}
 }

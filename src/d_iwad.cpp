@@ -47,12 +47,63 @@
 #include "v_video.h"
 #include "gameconfigfile.h"
 #include "resourcefiles/resourcefile.h"
-#include "version.h"
-#include "doomerrors.h"
-#include "v_text.h"
+
 
 CVAR (Bool, queryiwad, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 CVAR (String, defaultiwad, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
+
+//==========================================================================
+//
+// Clear check list
+//
+//==========================================================================
+
+void FIWadManager::ClearChecks()
+{
+	mLumpsFound.Resize(mIWads.Size());
+	for(unsigned i=0;i<mLumpsFound.Size(); i++)
+	{
+		mLumpsFound[i] = 0;
+	}
+}
+
+//==========================================================================
+//
+// Check one lump
+//
+//==========================================================================
+
+void FIWadManager::CheckLumpName(const char *name)
+{
+	for(unsigned i=0; i< mIWads.Size(); i++)
+	{
+		for(unsigned j=0; j < mIWads[i].Lumps.Size(); j++)
+		{
+			if (!mIWads[i].Lumps[j].CompareNoCase(name))
+			{
+				mLumpsFound[i] |= (1<<j);
+			}
+		}
+	}
+}
+
+//==========================================================================
+//
+// Returns check result
+//
+//==========================================================================
+
+int FIWadManager::GetIWadInfo()
+{
+	for(unsigned i=0; i< mIWads.Size(); i++)
+	{
+		if (mLumpsFound[i] == (1 << mIWads[i].Lumps.Size()) - 1)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
 
 //==========================================================================
 //
@@ -60,25 +111,16 @@ CVAR (String, defaultiwad, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
 //
 //==========================================================================
 
-void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize, FIWADInfo *result)
+void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize)
 {
 	FScanner sc;
-	int numblocks = 0;
 
 	sc.OpenMem("IWADINFO", data, datasize);
 	while (sc.GetString())
 	{
 		if (sc.Compare("IWAD"))
 		{
-			numblocks++;
-			if (result && numblocks > 1)
-			{
-				sc.ScriptMessage("Multiple IWAD records ignored");
-				// Skip the rest.
-				break;
-			}
-				
-			FIWADInfo *iwad = result ? result : &mIWadInfos[mIWadInfos.Reserve(1)];
+			FIWADInfo *iwad = &mIWads[mIWads.Reserve(1)];
 			sc.MustGetStringName("{");
 			while (!sc.CheckString("}"))
 			{
@@ -94,17 +136,6 @@ void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize,
 					sc.MustGetStringName("=");
 					sc.MustGetString();
 					iwad->Autoname = sc.String;
-				}
-				else if (sc.Compare("IWadname"))
-				{
-					sc.MustGetStringName("=");
-					sc.MustGetString();
-					iwad->IWadname = sc.String;
-					if (sc.CheckString(","))
-					{
-						sc.MustGetNumber();
-						iwad->prio = sc.Number;
-					}
 				}
 				else if (sc.Compare("Config"))
 				{
@@ -161,10 +192,10 @@ void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize,
 				{
 					sc.MustGetStringName("=");
 					sc.MustGetString();
-					iwad->FgColor = V_GetColor(NULL, sc);
+					iwad->FgColor = V_GetColor(NULL, sc.String);
 					sc.MustGetStringName(",");
 					sc.MustGetString();
-					iwad->BkColor = V_GetColor(NULL, sc);
+					iwad->BkColor = V_GetColor(NULL, sc.String);
 				}
 				else if (sc.Compare("Load"))
 				{
@@ -182,33 +213,13 @@ void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize,
 					sc.MustGetString();
 					iwad->Required = sc.String;
 				}
-				else if (sc.Compare("StartupType"))
-				{
-					sc.MustGetStringName("=");
-					sc.MustGetString();
-					FString sttype = sc.String;
-					if (!sttype.CompareNoCase("DOOM"))
-						iwad->StartupType = FStartupInfo::DoomStartup;
-					else if (!sttype.CompareNoCase("HERETIC"))
-						iwad->StartupType = FStartupInfo::HereticStartup;
-					else if (!sttype.CompareNoCase("HEXEN"))
-						iwad->StartupType = FStartupInfo::HexenStartup;
-					else if (!sttype.CompareNoCase("STRIFE"))
-						iwad->StartupType = FStartupInfo::StrifeStartup;
-					else iwad->StartupType = FStartupInfo::DefaultStartup;
-				}
 				else
 				{
 					sc.ScriptError("Unknown keyword '%s'", sc.String);
 				}
 			}
-			if (iwad->MapInfo.IsEmpty())
-			{
-				// We must at least load the minimum defaults to allow the engine to run.
-				iwad->MapInfo = "mapinfo/mindefaults.txt";
-			}
 		}
-		else if (result == nullptr && sc.Compare("NAMES"))
+		else if (sc.Compare("NAMES"))
 		{
 			sc.MustGetStringName("{");
 			mIWadNames.Push(FString());
@@ -216,37 +227,35 @@ void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize,
 			{
 				sc.MustGetString();
 				FString wadname = sc.String;
+#if defined(_WIN32) || defined(__APPLE__) // Turns out Mac OS X is case insensitive.
 				mIWadNames.Push(wadname);
+#else
+				// check for lowercase, uppercased first letter and full uppercase on Linux etc.
+				wadname.ToLower();
+				mIWadNames.Push(wadname);
+				wadname.LockBuffer()[0] = toupper(wadname[0]);
+				wadname.UnlockBuffer();
+				mIWadNames.Push(wadname);
+				wadname.ToUpper();
+				mIWadNames.Push(wadname);
+#endif
 			}
-		}
-		else if (result == nullptr && sc.Compare("ORDER"))
-		{
-			sc.MustGetStringName("{");
-			while (!sc.CheckString("}"))
-			{
-				sc.MustGetString();
-				mOrderNames.Push(sc.String);
-			}
-		}
-		else
-		{
-			sc.ScriptError("Unknown keyword '%s'", sc.String);
 		}
 	}
 }
 
 //==========================================================================
 //
-// Look for IWAD definition lump
+// Lool for IWAD definition lump
 //
 //==========================================================================
 
-FIWadManager::FIWadManager(const char *fn)
+void FIWadManager::ParseIWadInfos(const char *fn)
 {
-	FResourceFile *resfile = FResourceFile::OpenResourceFile(fn, true);
+	FResourceFile *resfile = FResourceFile::OpenResourceFile(fn, NULL, true);
 	if (resfile != NULL)
 	{
-		uint32_t cnt = resfile->LumpCount();
+		DWORD cnt = resfile->LumpCount();
 		for(int i=cnt-1; i>=0; i--)
 		{
 			FResourceLump *lmp = resfile->GetLump(i);
@@ -260,7 +269,7 @@ FIWadManager::FIWadManager(const char *fn)
 		}
 		delete resfile;
 	}
-	if (mIWadNames.Size() == 0 || mIWadInfos.Size() == 0)
+	if (mIWadNames.Size() == 0 || mIWads.Size() == 0)
 	{
 		I_FatalError("No IWAD definitions found");
 	}
@@ -276,208 +285,73 @@ FIWadManager::FIWadManager(const char *fn)
 
 int FIWadManager::ScanIWAD (const char *iwad)
 {
-	FResourceFile *iwadfile = FResourceFile::OpenResourceFile(iwad, true);
-
-	mLumpsFound.Resize(mIWadInfos.Size());
-
-	auto CheckLumpName = [=](const char *name)
-	{
-		for (unsigned i = 0; i< mIWadInfos.Size(); i++)
-		{
-			for (unsigned j = 0; j < mIWadInfos[i].Lumps.Size(); j++)
-			{
-				if (!mIWadInfos[i].Lumps[j].CompareNoCase(name))
-				{
-					mLumpsFound[i] |= (1 << j);
-				}
-			}
-		}
-	};
+	FResourceFile *iwadfile = FResourceFile::OpenResourceFile(iwad, NULL, true);
 
 	if (iwadfile != NULL)
 	{
-		memset(&mLumpsFound[0], 0, mLumpsFound.Size() * sizeof(mLumpsFound[0]));
-		for(uint32_t ii = 0; ii < iwadfile->LumpCount(); ii++)
+		ClearChecks();
+		for(DWORD ii = 0; ii < iwadfile->LumpCount(); ii++)
 		{
 			FResourceLump *lump = iwadfile->GetLump(ii);
 
 			CheckLumpName(lump->Name);
-			if (lump->FullName.IsNotEmpty())
+			if (lump->FullName != NULL)
 			{
 				if (strnicmp(lump->FullName, "maps/", 5) == 0)
 				{
-					FString mapname(&lump->FullName[5], strcspn(&lump->FullName[5], "."));
+					FString mapname(lump->FullName+5, strcspn(lump->FullName+5, "."));
 					CheckLumpName(mapname);
 				}
 			}
 		}
 		delete iwadfile;
 	}
-	for (unsigned i = 0; i< mIWadInfos.Size(); i++)
-	{
-		if (mLumpsFound[i] == (1 << mIWadInfos[i].Lumps.Size()) - 1)
-		{
-			DPrintf(DMSG_NOTIFY, "Identified %s as %s\n", iwad, mIWadInfos[i].Name.GetChars());
-			return i;
-		}
-	}
-	return -1;
+	return GetIWadInfo();
 }
 
 //==========================================================================
 //
-// Look for IWAD definition lump
+// CheckIWAD
 //
+// Tries to find an IWAD from a set of known IWAD names, and checks the
+// contents of each one found to determine which game it belongs to.
+// Returns the number of new wads found in this pass (does not count wads
+// found from a previous call).
+// 
 //==========================================================================
 
-int FIWadManager::CheckIWADInfo(const char *fn)
+int FIWadManager::CheckIWAD (const char *doomwaddir, WadStuff *wads)
 {
-	FResourceFile *resfile = FResourceFile::OpenResourceFile(fn, true);
-	if (resfile != NULL)
+	const char *slash;
+	int numfound;
+
+	numfound = 0;
+
+	slash = (doomwaddir[0] && doomwaddir[strlen (doomwaddir)-1] != '/') ? "/" : "";
+
+	// Search for a pre-defined IWAD
+	for (unsigned i=0; i< mIWadNames.Size(); i++)
 	{
-		uint32_t cnt = resfile->LumpCount();
-		for (int i = cnt - 1; i >= 0; i--)
+		if (mIWadNames[i].IsNotEmpty() && wads[i].Path.IsEmpty())
 		{
-			FResourceLump *lmp = resfile->GetLump(i);
-
-			if (lmp->Namespace == ns_global && !stricmp(lmp->Name, "IWADINFO"))
+			FString iwad;
+			
+			iwad.Format ("%s%s%s", doomwaddir, slash, mIWadNames[i].GetChars());
+			FixPathSeperator (iwad);
+			if (FileExists (iwad))
 			{
-				// Found one!
-				try
+				wads[i].Type = ScanIWAD (iwad);
+				if (wads[i].Type != -1)
 				{
-					FIWADInfo result;
-					ParseIWadInfo(resfile->Filename, (const char*)lmp->CacheLump(), lmp->LumpSize, &result);
-					delete resfile;
-					for (auto &wadinf : mIWadInfos)
-					{
-						if (wadinf.Name == result.Name)
-						{
-							return -1;	// do not show the same one twice.
-						}
-					}
-					return mIWadInfos.Push(result);
+					wads[i].Path = iwad;
+					wads[i].Name = mIWads[wads[i].Type].Name;
+					numfound++;
 				}
-				catch (CRecoverableError &err)
-				{
-					delete resfile;
-					Printf(TEXTCOLOR_RED "%s: %s\nFile has been removed from the list of IWADs\n", fn, err.GetMessage());
-					return -1;
-				}
-				break;
-			}
-		}
-		delete resfile;
-		Printf(TEXTCOLOR_RED "%s: Unable to find IWADINFO\nFile has been removed from the list of IWADs\n", fn);
-		return -1;
-	}
-	Printf(TEXTCOLOR_RED "%s: Unable to open as resource file.\nFile has been removed from the list of IWADs\n", fn);
-	return -1;
-}
-
-//==========================================================================
-//
-// CollectSearchPaths
-//
-// collect all paths in a local array for easier management
-//
-//==========================================================================
-
-void FIWadManager::CollectSearchPaths()
-{
-	if (GameConfig->SetSection("IWADSearch.Directories"))
-	{
-		const char *key;
-		const char *value;
-
-		while (GameConfig->NextInSection(key, value))
-		{
-			if (stricmp(key, "Path") == 0)
-			{
-				FString nice = NicePath(value);
-				if (nice.Len() > 0) mSearchPaths.Push(nice);
 			}
 		}
 	}
-	mSearchPaths.Append(I_GetGogPaths());
-	mSearchPaths.Append(I_GetSteamPath());
 
-	// Unify and remove trailing slashes
-	for (auto &str : mSearchPaths)
-	{
-		FixPathSeperator(str);
-		if (str.Back() == '/') str.Truncate(str.Len() - 1);
-	}
-}
-
-//==========================================================================
-//
-// AddIWADCandidates
-//
-// scans the given directory and adds all potential IWAD candidates
-//
-//==========================================================================
-
-void FIWadManager::AddIWADCandidates(const char *dir)
-{
-	void *handle;
-	findstate_t findstate;
-	FStringf slasheddir("%s/", dir);
-	FString findmask = slasheddir + "*.*";
-	if ((handle = I_FindFirst(findmask, &findstate)) != (void *)-1)
-	{
-		do
-		{
-			if (!(I_FindAttr(&findstate) & FA_DIREC))
-			{
-				auto FindName = I_FindName(&findstate);
-				auto p = strrchr(FindName, '.');
-				if (p != nullptr)
-				{
-					// special IWAD extension.
-					if (!stricmp(p, ".iwad") || !stricmp(p, ".ipk3") || !stricmp(p, "ipk7"))
-					{
-						mFoundWads.Push(FFoundWadInfo{ slasheddir + FindName, "", -1 });
-					}
-				}
-				for (auto &name : mIWadNames)
-				{
-					if (!stricmp(name, FindName))
-					{
-						mFoundWads.Push(FFoundWadInfo{ slasheddir + FindName, "", -1 });
-					}
-				}
-			}
-		} while (I_FindNext(handle, &findstate) == 0);
-		I_FindClose(handle);
-	}
-}
-
-//==========================================================================
-//
-// ValidateIWADs
-//
-// validate all found candidates and eliminate the bogus ones.
-//
-//==========================================================================
-
-void FIWadManager::ValidateIWADs()
-{
-	TArray<int> returns;
-	unsigned originalsize = mIWadInfos.Size();
-	for (auto &p : mFoundWads)
-	{
-		int index;
-		auto x = strrchr(p.mFullPath, '.');
-		if (x != nullptr && (!stricmp(x, ".iwad") || !stricmp(x, ".ipk3") || !stricmp(x, "ipk7")))
-		{
-			index = CheckIWADInfo(p.mFullPath);
-		}
-		else
-		{
-			index = ScanIWAD(p.mFullPath);
-		}
-		p.mInfoIndex = index;
-	}
+	return numfound;
 }
 
 //==========================================================================
@@ -501,224 +375,206 @@ void FIWadManager::ValidateIWADs()
 //
 //==========================================================================
 
-static bool havepicked = false;
-
-int FIWadManager::IdentifyVersion (TArray<FString> &wadfiles, const char *iwad, const char *zdoom_wad, const char *optional_wad)
+int FIWadManager::IdentifyVersion (TArray<FString> &wadfiles, const char *iwad, const char *zdoom_wad)
 {
+	TArray<WadStuff> wads;
+	TArray<size_t> foundwads;
 	const char *iwadparm = Args->CheckValue ("-iwad");
+	size_t numwads;
+	int pickwad;
+	size_t i;
+	bool iwadparmfound = false;
 	FString custwad;
 
-	CollectSearchPaths();
+	ParseIWadInfos(zdoom_wad);
+	wads.Resize(mIWadNames.Size());
+	foundwads.Resize(mIWads.Size());
+	memset(&foundwads[0], 0, foundwads.Size() * sizeof(foundwads[0]));
 
-	// Collect all IWADs in the search path
-	for (auto &dir : mSearchPaths)
+	if (iwadparm == NULL && iwad != NULL && *iwad != 0)
 	{
-		AddIWADCandidates(dir);
+		iwadparm = iwad;
 	}
-	unsigned numFoundWads = mFoundWads.Size();
 
 	if (iwadparm)
 	{
-		// Check if the given IWAD has an absolute path, in which case the search path will be ignored.
 		custwad = iwadparm;
-		FixPathSeperator(custwad);
-		DefaultExtension(custwad, ".wad");
-		bool isAbsolute = (custwad[0] == '/');
-#ifdef WINDOWS
-		isAbsolute |= (custwad.Len() >= 2 && custwad[1] == ':');
-#endif
-		if (isAbsolute)
-		{
-			if (FileExists(custwad)) mFoundWads.Push({ custwad, "", -1 });
+		FixPathSeperator (custwad);
+		if (CheckIWAD (custwad, &wads[0]))
+		{ // -iwad parameter was a directory
+			iwadparm = NULL;
 		}
 		else
 		{
-			for (auto &dir : mSearchPaths)
+			DefaultExtension (custwad, ".wad");
+			iwadparm = custwad;
+			mIWadNames[0] = custwad;
+			CheckIWAD ("", &wads[0]);
+		}
+	}
+
+	if (iwadparm == NULL || wads[0].Path.IsEmpty() || mIWads[wads[0].Type].Required.IsNotEmpty())
+	{
+		if (GameConfig->SetSection ("IWADSearch.Directories"))
+		{
+			const char *key;
+			const char *value;
+
+			while (GameConfig->NextInSection (key, value))
 			{
-				FStringf fullpath("%s/%s", dir.GetChars(), custwad.GetChars());
-				if (FileExists(fullpath))
+				if (stricmp (key, "Path") == 0)
 				{
-					mFoundWads.Push({ fullpath, "", -1 });
+					FString nice = NicePath(value);
+					FixPathSeperator(nice);
+					CheckIWAD(nice, &wads[0]);
 				}
 			}
 		}
-	}
-	// -iwad not found or not specified. Revert back to standard behavior.
-	if (mFoundWads.Size() == numFoundWads) iwadparm = nullptr;
-
-	// Now check if what got collected actually is an IWAD.
-	ValidateIWADs();
-
-	// Check for required dependencies.
-	for (unsigned i = 0; i < mFoundWads.Size(); i++)
-	{
-		auto infndx = mFoundWads[i].mInfoIndex;
-		if (infndx >= 0)
+#ifdef _WIN32
+		FString steam_path = I_GetSteamPath();
+		if (steam_path.IsNotEmpty())
 		{
-			auto &wadinfo = mIWadInfos[infndx];
-			if (wadinfo.Required.IsNotEmpty())
+			static const char *const steam_dirs[] =
 			{
-				bool found = false;
-				// needs to be loaded with another IWAD (HexenDK)
-				for (unsigned j = 0; j < mFoundWads.Size(); j++)
+				"doom 2/base",
+				"final doom/base",
+				"heretic shadow of the serpent riders/base",
+				"hexen/base",
+				"hexen deathkings of the dark citadel/base",
+				"ultimate doom/base",
+				"DOOM 3 BFG Edition/base/wads"
+			};
+			steam_path += "/SteamApps/common/";
+			for (i = 0; i < countof(steam_dirs); ++i)
+			{
+				CheckIWAD (steam_path + steam_dirs[i], &wads[0]);
+			}
+		}
+#endif
+	}
+
+	if (iwadparm != NULL && !wads[0].Path.IsEmpty())
+	{
+		iwadparmfound = true;
+	}
+
+	for (i = numwads = 0; i < mIWadNames.Size(); i++)
+	{
+		if (!wads[i].Path.IsEmpty())
+		{
+			if (i != numwads)
+			{
+				wads[numwads] = wads[i];
+			}
+			foundwads[wads[numwads].Type] = numwads + 1;
+			numwads++;
+		}
+	}
+
+	for (unsigned i=0; i<mIWads.Size(); i++)
+	{
+		if (mIWads[i].Required.IsNotEmpty() && foundwads[i])
+		{
+			bool found = false;
+			// needs to be loaded with another IWAD (HexenDK)
+			for (unsigned j=0; j<mIWads.Size(); j++)
+			{
+				if (!mIWads[i].Required.Compare(mIWads[j].Name))
 				{
-					auto inf2ndx = mFoundWads[j].mInfoIndex;
-					if (inf2ndx >= 0)
+					if (foundwads[j])
 					{
-						if (!mIWadInfos[infndx].Required.Compare(mIWadInfos[inf2ndx].Name))
-						{
-							mFoundWads[i].mRequiredPath = mFoundWads[j].mFullPath;
-							break;
-						}
+						found = true;
+						mIWads[i].preload = j;
+					}
+					break;
+				}
+			}
+			// The required WAD is not there so this one can't be used and must be deleted from the list
+			if (!found)
+			{
+				size_t kill = foundwads[i];
+				for (size_t j = kill; j < numwads; ++j)
+				{
+					wads[j - 1] = wads[j];
+				}
+				numwads--;
+				foundwads[i] = 0;
+				for (unsigned j = 0; j < foundwads.Size(); ++j)
+				{
+					if (foundwads[j] > kill)
+					{
+						foundwads[j]--;
 					}
 				}
-				// The required dependency was not found. Skip this IWAD.
-				if (mFoundWads[i].mRequiredPath.IsEmpty()) mFoundWads[i].mInfoIndex = -1;
+
 			}
-		}
-	}
-	TArray<FFoundWadInfo> picks;
-	if (numFoundWads < mFoundWads.Size())
-	{
-		// We have a -iwad parameter. Pick the first usable IWAD we found through that.
-		for (unsigned i = numFoundWads; i < mFoundWads.Size(); i++)
-		{
-			if (mFoundWads[i].mInfoIndex >= 0)
-			{
-				picks.Push(mFoundWads[i]);
-				break;
-			}
-		}
-	}
-	else if (iwad != nullptr && *iwad != 0)
-	{
-		int pickedprio = -1;
-		// scan the list of found IWADs for a matching one for the current PWAD.
-		for (auto &found : mFoundWads)
-		{
-			if (found.mInfoIndex >= 0 && mIWadInfos[found.mInfoIndex].IWadname.CompareNoCase(iwad) == 0 && mIWadInfos[found.mInfoIndex].prio > pickedprio)
-			{
-				picks.Clear();
-				picks.Push(found);
-				pickedprio = mIWadInfos[found.mInfoIndex].prio;
-			}
-		}
-	}
-	if (picks.Size() == 0)
-	{
-		// Now sort what we found and discard all duplicates.
-		for (unsigned i = 0; i < mOrderNames.Size(); i++)
-		{
-			bool picked = false;
-			for (int j = 0; j < (int)mFoundWads.Size(); j++)
-			{
-				if (mFoundWads[j].mInfoIndex >= 0)
-				{
-					if (mIWadInfos[mFoundWads[j].mInfoIndex].Name.Compare(mOrderNames[i]) == 0)
-					{
-						if (!picked)
-						{
-							picked = true;
-							picks.Push(mFoundWads[j]);
-						}
-						mFoundWads.Delete(j--);
-					}
-				}
-			}
-		}
-		// What's left is IWADs with their own IWADINFO. Copy those in order of discovery.
-		for (auto &entry : mFoundWads)
-		{
-			if (entry.mInfoIndex >= 0) picks.Push(entry);
 		}
 	}
 
-	// If we still haven't found a suitable IWAD let's error out.
-	if (picks.Size() == 0)
+	if (numwads == 0)
 	{
 		I_FatalError ("Cannot find a game IWAD (doom.wad, doom2.wad, heretic.wad, etc.).\n"
-					  "Did you install " GAMENAME " properly? You can do either of the following:\n"
+					  "Did you install ZDoom properly? You can do either of the following:\n"
 					  "\n"
 #if defined(_WIN32)
-					  "1. Place one or more of these wads in the same directory as " GAMENAME ".\n"
-					  "2. Edit your " GAMENAMELOWERCASE "-username.ini and add the directories of your iwads\n"
+					  "1. Place one or more of these wads in the same directory as ZDoom.\n"
+					  "2. Edit your zdoom-username.ini and add the directories of your iwads\n"
 					  "to the list beneath [IWADSearch.Directories]");
 #elif defined(__APPLE__)
-					  "1. Place one or more of these wads in ~/Library/Application Support/" GAMENAMELOWERCASE "/\n"
-					  "2. Edit your ~/Library/Preferences/" GAMENAMELOWERCASE ".ini and add the directories\n"
+					  "1. Place one or more of these wads in ~/Library/Application Support/zdoom/\n"
+					  "2. Edit your ~/Library/Preferences/zdoom.ini and add the directories\n"
 					  "of your iwads to the list beneath [IWADSearch.Directories]");
 #else
-					  "1. Place one or more of these wads in ~/.config/" GAMENAMELOWERCASE "/.\n"
-					  "2. Edit your ~/.config/" GAMENAMELOWERCASE "/" GAMENAMELOWERCASE ".ini and add the directories of your\n"
+					  "1. Place one or more of these wads in ~/.config/zdoom/.\n"
+					  "2. Edit your ~/.config/zdoom/zdoom.ini and add the directories of your\n"
 					  "iwads to the list beneath [IWADSearch.Directories]");
 #endif
 	}
-	int pick = 0;
 
-	// We got more than one so present the IWAD selection box.
-	if (picks.Size() > 1)
+	pickwad = 0;
+
+	if (!iwadparmfound && numwads > 1)
 	{
+		int defiwad = 0;
+
 		// Locate the user's prefered IWAD, if it was found.
 		if (defaultiwad[0] != '\0')
 		{
-			for (unsigned i = 0; i < picks.Size(); ++i)
+			for (i = 0; i < numwads; ++i)
 			{
-				FString &basename = mIWadInfos[picks[i].mInfoIndex].Name;
-				if (stricmp(basename, defaultiwad) == 0)
+				FString basename = ExtractFileBase (wads[i].Path);
+				if (stricmp (basename, defaultiwad) == 0)
 				{
-					pick = i;
+					defiwad = (int)i;
 					break;
 				}
 			}
 		}
-		if (picks.Size() > 1)
+		pickwad = I_PickIWad (&wads[0], (int)numwads, queryiwad, defiwad);
+		if (pickwad >= 0)
 		{
-			if (!havepicked)
-			{
-				TArray<WadStuff> wads;
-				for (auto & found : picks)
-				{
-					WadStuff stuff;
-					stuff.Name = mIWadInfos[found.mInfoIndex].Name;
-					stuff.Path = ExtractFileBase(found.mFullPath);
-					wads.Push(stuff);
-				}
-				pick = I_PickIWad(&wads[0], (int)wads.Size(), queryiwad, pick);
-				if (pick >= 0)
-				{
-					// The newly selected IWAD becomes the new default
-					defaultiwad = mIWadInfos[picks[pick].mInfoIndex].Name;
-				}
-				else
-				{
-					exit(0);
-				}
-				havepicked = true;
-			}
+			// The newly selected IWAD becomes the new default
+			FString basename = ExtractFileBase (wads[pickwad].Path);
+			defaultiwad = basename;
 		}
 	}
+
+	if (pickwad < 0)
+		exit (0);
 
 	// zdoom.pk3 must always be the first file loaded and the IWAD second.
 	wadfiles.Clear();
 	D_AddFile (wadfiles, zdoom_wad);
 
-	// [SP] Load non-free assets if available. This must be done before the IWAD.
-	if (D_AddFile(wadfiles, optional_wad))
-		Wads.SetIwadNum(2);
-	else
-		Wads.SetIwadNum(1);
-
-	if (picks[pick].mRequiredPath.IsNotEmpty())
+	if (mIWads[wads[pickwad].Type].preload >= 0)
 	{
-		D_AddFile (wadfiles, picks[pick].mRequiredPath);
+		D_AddFile (wadfiles, wads[foundwads[mIWads[wads[pickwad].Type].preload]-1].Path);
 	}
-	D_AddFile (wadfiles, picks[pick].mFullPath);
+	D_AddFile (wadfiles, wads[pickwad].Path);
 
-	auto info = mIWadInfos[picks[pick].mInfoIndex];
-	// Load additional resources from the same directory as the IWAD itself.
-	for (unsigned i=0; i < info.Load.Size(); i++)
+	for (unsigned i=0; i < mIWads[wads[pickwad].Type].Load.Size(); i++)
 	{
-		long lastslash = picks[pick].mFullPath.LastIndexOf ('/');
+		long lastslash = wads[pickwad].Path.LastIndexOf ('/');
 		FString path;
 
 		if (lastslash == -1)
@@ -727,13 +583,13 @@ int FIWadManager::IdentifyVersion (TArray<FString> &wadfiles, const char *iwad, 
 		}
 		else
 		{
-			path = FString (picks[pick].mFullPath.GetChars(), lastslash + 1);
+			path = FString (wads[pickwad].Path.GetChars(), lastslash + 1);
 		}
-		path += info.Load[i];
+		path += mIWads[wads[pickwad].Type].Load[i];
 		D_AddFile (wadfiles, path);
 
 	}
-	return picks[pick].mInfoIndex;
+	return wads[pickwad].Type;
 }
 
 
@@ -743,18 +599,17 @@ int FIWadManager::IdentifyVersion (TArray<FString> &wadfiles, const char *iwad, 
 //
 //==========================================================================
 
-const FIWADInfo *FIWadManager::FindIWAD(TArray<FString> &wadfiles, const char *iwad, const char *basewad, const char *optionalwad)
+const FIWADInfo *FIWadManager::FindIWAD(TArray<FString> &wadfiles, const char *iwad, const char *basewad)
 {
-	int iwadType = IdentifyVersion(wadfiles, iwad, basewad, optionalwad);
+	int iwadType = IdentifyVersion(wadfiles, iwad, basewad);
 	//gameiwad = iwadType;
-	const FIWADInfo *iwad_info = &mIWadInfos[iwadType];
+	const FIWADInfo *iwad_info = &mIWads[iwadType];
 	if (DoomStartupInfo.Name.IsEmpty()) DoomStartupInfo.Name = iwad_info->Name;
 	if (DoomStartupInfo.BkColor == 0 && DoomStartupInfo.FgColor == 0)
 	{
 		DoomStartupInfo.BkColor = iwad_info->BkColor;
 		DoomStartupInfo.FgColor = iwad_info->FgColor;
 	}
-	if (DoomStartupInfo.Type == 0) DoomStartupInfo.Type = iwad_info->StartupType;
 	I_SetIWADInfo();
 	return iwad_info;
 }

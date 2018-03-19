@@ -1,25 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1994-1996 Raven Software
-// Copyright 1998-1998 Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //		Refresh/rendering module, shared data struct definitions.
@@ -32,8 +25,7 @@
 
 #include "doomdef.h"
 #include "templates.h"
-#include "m_bbox.h"
-#include "dobjgc.h"
+#include "memarena.h"
 
 // Some more or less basic data types
 // we depend on.
@@ -42,21 +34,18 @@
 // We rely on the thinker data struct
 // to handle sound origins in sectors.
 // SECTORS do store MObjs anyway.
+#include "actor.h"
 struct FLightNode;
 struct FGLSection;
-class FSerializer;
-struct FPortal;
-struct FSectorPortal;
-struct FLinePortal;
 struct seg_t;
-struct sector_t;
-class AActor;
 
-#define MAXWIDTH 12000
-#define MAXHEIGHT 5000
+#include "dthinker.h"
 
-const uint16_t NO_INDEX = 0xffffu;
-const uint32_t NO_SIDE = 0xffffffffu;
+#define MAXWIDTH 5760
+#define MAXHEIGHT 3600
+
+const WORD NO_INDEX = 0xffffu;
+const DWORD NO_SIDE = 0xffffffffu;
 
 // Silhouette, needed for clipping Segs (mainly)
 // and sprites representing things.
@@ -68,7 +57,8 @@ enum
 	SIL_BOTH
 };
 
-struct FDisplacement;
+extern size_t MaxDrawSegs;
+
 
 //
 // INTERNAL MAP TYPES
@@ -87,59 +77,14 @@ enum
 };
 struct vertexdata_t
 {
-	double zCeiling, zFloor;
-	uint32_t flags;
+	fixed_t zCeiling, zFloor;
+	DWORD flags;
 };
-
 struct vertex_t
 {
-	DVector2 p;
+	fixed_t x, y;
 
-	void set(fixed_t x, fixed_t y)
-	{
-		p.X = x / 65536.;
-		p.Y = y / 65536.;
-	}
-
-	void set(double x, double y)
-	{
-		p.X = x;
-		p.Y = y;
-	}
-
-	void set(const DVector2 &pos)
-	{
-		p = pos;
-	}
-
-	double fX() const
-	{
-		return p.X;
-	}
-
-	double fY() const
-	{
-		return p.Y;
-	}
-
-	fixed_t fixX() const
-	{
-		return FLOAT2FIXED(p.X);
-	}
-
-	fixed_t fixY() const
-	{
-		return FLOAT2FIXED(p.Y);
-	}
-
-	DVector2 fPos() const
-	{
-		return p;
-	}
-
-	int Index() const;
-
-
+	float fx, fy;		// Floating point coordinates of this vertex (excluding polyoblect translation!)
 	angle_t viewangle;	// precalculated angle for clipping
 	int angletime;		// recalculation time for view angle
 	bool dirty;			// something has changed and needs to be recalculated
@@ -150,7 +95,8 @@ struct vertex_t
 
 	vertex_t()
 	{
-		p = { 0,0 };
+		x = y = 0;
+		fx = fy = 0;
 		angletime = 0;
 		viewangle = 0;
 		dirty = true;
@@ -159,25 +105,19 @@ struct vertex_t
 		heightlist = NULL;
 	}
 
-	~vertex_t()
-	{
-		if (sectors != nullptr) delete[] sectors;
-		if (heightlist != nullptr) delete[] heightlist;
-	}
-
 	bool operator== (const vertex_t &other)
 	{
-		return p == other.p;
+		return x == other.x && y == other.y;
 	}
 
 	bool operator!= (const vertex_t &other)
 	{
-		return p != other.p;
+		return x != other.x || y != other.y;
 	}
 
 	void clear()
 	{
-		p.Zero();
+		x = y = 0;
 	}
 
 	angle_t GetClipAngle();
@@ -191,6 +131,7 @@ class FScanner;
 class FBitmap;
 struct FCopyInfo;
 class DInterpolation;
+class FArchive;
 
 enum
 {
@@ -241,8 +182,8 @@ struct FUDMFKey
 	FUDMFKey& operator =(const FString &val)
 	{
 		Type = UDMF_String;
-		IntVal = (int)strtoll(val.GetChars(), NULL, 0);
-		FloatVal = strtod(val.GetChars(), NULL);
+		IntVal = strtol(val, NULL, 0);
+		FloatVal = strtod(val, NULL);
 		StringVal = val;
 		return *this;
 	}
@@ -251,7 +192,6 @@ struct FUDMFKey
 
 class FUDMFKeys : public TArray<FUDMFKey>
 {
-	bool mSorted = false;
 public:
 	void Sort();
 	FUDMFKey *Find(FName key);
@@ -263,6 +203,7 @@ public:
 //
 class DSectorEffect;
 struct sector_t;
+struct line_t;
 struct FRemapTable;
 
 enum
@@ -280,174 +221,141 @@ enum
 	SECSPAC_HitFakeFloor= 1024,	// Trigger when player hits fake floor
 };
 
+class ASectorAction : public AActor
+{
+	DECLARE_CLASS (ASectorAction, AActor)
+public:
+	void Destroy ();
+	void BeginPlay ();
+	void Activate (AActor *source);
+	void Deactivate (AActor *source);
+	bool TriggerAction(AActor *triggerer, int activationType);
+protected:
+	virtual bool DoTriggerAction(AActor *triggerer, int activationType);
+	bool CheckTrigger(AActor *triggerer) const;
+};
+
+class ASkyViewpoint;
+
 struct secplane_t
 {
 	// the plane is defined as a*x + b*y + c*z + d = 0
 	// ic is 1/c, for faster Z calculations
 
-//private:
-	DVector3 normal;
-	double  D, negiC;	// negative iC because that also saves a negation in all methods using this.
-public:
-	friend FSerializer &Serialize(FSerializer &arc, const char *key, secplane_t &p, secplane_t *def);
-
-	void set(double aa, double bb, double cc, double dd)
-	{
-		normal.X = aa;
-		normal.Y = bb;
-		normal.Z = cc;
-		D = dd;
-		negiC = -1 / cc;
-	}
-
-	void setD(double dd)
-	{
-		D = dd;
-	}
-
-	double fC() const
-	{
-		return normal.Z;
-	}
-	double fD() const
-	{
-		return D;
-	}
-	
-	bool isSlope() const
-	{
-		return !normal.XY().isZero();
-	}
-
-	DVector3 Normal() const
-	{
-		return normal;
-	}
+	fixed_t a, b, c, d, ic;
 
 	// Returns < 0 : behind; == 0 : on; > 0 : in front
-	int PointOnSide(const DVector3 &pos) const
+	int PointOnSide (fixed_t x, fixed_t y, fixed_t z) const
 	{
-		double v = (normal | pos) + D;
-		return v < -EQUAL_EPSILON ? -1 : v > EQUAL_EPSILON ? 1 : 0;
+		return TMulScale16(a,x, b,y, c,z) + d;
 	}
 
 	// Returns the value of z at (0,0) This is used by the 3D floor code which does not handle slopes
-	double Zat0() const
+	fixed_t Zat0 () const
 	{
-		return negiC*D;
+		return ic < 0 ? d : -d;
 	}
 
 	// Returns the value of z at (x,y)
-	fixed_t ZatPoint(fixed_t x, fixed_t y) const = delete;	// it is not allowed to call this.
+	fixed_t ZatPoint (fixed_t x, fixed_t y) const
+	{
+		return FixedMul (ic, -d - DMulScale16 (a, x, b, y));
+	}
 
 	// Returns the value of z at (x,y) as a double
 	double ZatPoint (double x, double y) const
 	{
-		return (D + normal.X*x + normal.Y*y) * negiC;
+		return (d + a*x + b*y) * ic / (-65536.0 * 65536.0);
 	}
 
-	double ZatPoint(const DVector2 &pos) const
+	// Returns the value of z at vertex v
+	fixed_t ZatPoint (const vertex_t *v) const
 	{
-		return (D + normal.X*pos.X + normal.Y*pos.Y) * negiC;
+		return FixedMul (ic, -d - DMulScale16 (a, v->x, b, v->y));
 	}
 
-	double ZatPoint(const FVector2 &pos) const
+	// Returns the value of z at (x,y) if d is equal to dist
+	fixed_t ZatPointDist (fixed_t x, fixed_t y, fixed_t dist) const
 	{
-		return (D + normal.X*pos.X + normal.Y*pos.Y) * negiC;
-	}
-
-	double ZatPoint(const vertex_t *v) const
-	{
-		return (D + normal.X*v->fX() + normal.Y*v->fY()) * negiC;
+		return FixedMul (ic, -dist - DMulScale16 (a, x, b, y));
 	}
 
 	// Returns the value of z at vertex v if d is equal to dist
-	double ZatPointDist(const vertex_t *v, double dist)
+	fixed_t ZatPointDist (const vertex_t *v, fixed_t dist)
 	{
-		return (dist + normal.X*v->fX() + normal.Y*v->fY()) * negiC;
+		return FixedMul (ic, -dist - DMulScale16 (a, v->x, b, v->y));
 	}
+
 	// Flips the plane's vertical orientiation, so that if it pointed up,
 	// it will point down, and vice versa.
 	void FlipVert ()
 	{
-		normal = -normal;
-		D = -D;
-		negiC = -negiC;
+		a = -a;
+		b = -b;
+		c = -c;
+		d = -d;
+		ic = -ic;
 	}
 
 	// Returns true if 2 planes are the same
 	bool operator== (const secplane_t &other) const
 	{
-		return normal == other.normal && D == other.D;
+		return a == other.a && b == other.b && c == other.c && d == other.d;
 	}
 
 	// Returns true if 2 planes are different
 	bool operator!= (const secplane_t &other) const
 	{
-		return normal != other.normal || D != other.D;
+		return a != other.a || b != other.b || c != other.c || d != other.d;
 	}
 
 	// Moves a plane up/down by hdiff units
-	void ChangeHeight(double hdiff)
+	void ChangeHeight (fixed_t hdiff)
 	{
-		D = D - hdiff * normal.Z;
+		d = d - FixedMul (hdiff, c);
 	}
 
 	// Moves a plane up/down by hdiff units
-	double GetChangedHeight(double hdiff) const
+	fixed_t GetChangedHeight (fixed_t hdiff)
 	{
-		return D - hdiff * normal.Z;
+		return d - FixedMul (hdiff, c);
 	}
 
 	// Returns how much this plane's height would change if d were set to oldd
-	double HeightDiff(double oldd) const
+	fixed_t HeightDiff (fixed_t oldd) const
 	{
-		return (D - oldd) * negiC;
+		return FixedMul (oldd - d, ic);
 	}
 
 	// Returns how much this plane's height would change if d were set to oldd
-	double HeightDiff(double oldd, double newd) const
+	fixed_t HeightDiff (fixed_t oldd, fixed_t newd) const
 	{
-		return (newd - oldd) * negiC;
+		return FixedMul (oldd - newd, ic);
 	}
 
-	double PointToDist(const DVector2 &xy, double z) const
+	fixed_t PointToDist (fixed_t x, fixed_t y, fixed_t z) const
 	{
-		return -(normal.X * xy.X + normal.Y * xy.Y + normal.Z * z);
+		return -TMulScale16 (a, x, y, b, z, c);
 	}
 
-	double PointToDist(const vertex_t *v, double z) const
+	fixed_t PointToDist (const vertex_t *v, fixed_t z) const
 	{
-		return -(normal.X * v->fX() + normal.Y * v->fY() + normal.Z * z);
-	}
-
-	void SetAtHeight(double height, int ceiling)
-	{
-		normal.X = normal.Y = 0;
-		if (ceiling)
-		{
-			normal.Z = -1;
-			negiC = 1;
-			D = height;
-		}
-		else
-		{
-			normal.Z = 1;
-			negiC = -1;
-			D = -height;
-		}
+		return -TMulScale16 (a, v->x, b, v->y, z, c);
 	}
 
 	bool CopyPlaneIfValid (secplane_t *dest, const secplane_t *opp) const;
-	inline double ZatPoint(const AActor *ac) const;
 
 };
+
+FArchive &operator<< (FArchive &arc, secplane_t &plane);
+
 
 #include "p_3dfloors.h"
 struct subsector_t;
 struct sector_t;
 struct side_t;
 extern bool gl_plane_reflection_i;
+struct FPortal;
 
 // Ceiling/floor flags
 enum
@@ -455,14 +363,6 @@ enum
 	PLANEF_ABSLIGHTING	= 1,	// floor/ceiling light is absolute, not relative
 	PLANEF_BLOCKED		= 2,	// can not be moved anymore.
 	PLANEF_ADDITIVE		= 4,	// rendered additive
-
-	// linked portal stuff
-	PLANEF_NORENDER		= 8,
-	PLANEF_NOPASS		= 16,
-	PLANEF_BLOCKSOUND	= 32,
-	PLANEF_DISABLED		= 64,
-	PLANEF_OBSTRUCTED	= 128,	// if the portal plane is beyond the sector's floor or ceiling.
-	PLANEF_LINKED		= 256	// plane is flagged as a linked portal
 };
 
 // Internal sector flags
@@ -485,21 +385,6 @@ enum
 	SECF_NOFALLINGDAMAGE= 2,	// No falling damage in this sector
 	SECF_FLOORDROP		= 4,	// all actors standing on this floor will remain on it when it lowers very fast.
 	SECF_NORESPAWN		= 8,	// players can not respawn in this sector
-	SECF_FRICTION		= 16,	// sector has friction enabled
-	SECF_PUSH			= 32,	// pushers enabled
-	SECF_SILENTMOVE		= 64,	// Sector movement makes mo sound (Eternity got this so this may be useful for an extended cross-port standard.) 
-	SECF_DMGTERRAINFX	= 128,	// spawns terrain splash when inflicting damage
-	SECF_ENDGODMODE		= 256,	// getting damaged by this sector ends god mode
-	SECF_ENDLEVEL		= 512,	// ends level when health goes below 10
-	SECF_HAZARD			= 1024,	// Change to Strife's delayed damage handling.
-	SECF_NOATTACK		= 2048,	// monsters cannot start attacks in this sector.
-
-	SECF_WASSECRET		= 1 << 30,	// a secret that was discovered
-	SECF_SECRET			= 1 << 31,	// a secret sector
-
-	SECF_DAMAGEFLAGS = SECF_ENDGODMODE|SECF_ENDLEVEL|SECF_DMGTERRAINFX|SECF_HAZARD,
-	SECF_NOMODIFY = SECF_SECRET|SECF_WASSECRET,	// not modifiable by Sector_ChangeFlags
-	SECF_SPECIALFLAGS = SECF_DAMAGEFLAGS|SECF_FRICTION|SECF_PUSH,	// these flags originate from 'special and must be transferrable by floor thinkers
 };
 
 enum
@@ -555,122 +440,60 @@ struct extsector_t
 	} XFloor;
 
 	TArray<vertex_t *> vertices;
+	
+	void Serialize(FArchive &arc);
 };
 
 struct FTransform
 {
 	// killough 3/7/98: floor and ceiling texture offsets
-	double xOffs, yOffs, baseyOffs;
+	fixed_t xoffs, yoffs;
 
 	// [RH] floor and ceiling texture scales
-	double xScale, yScale;
+	fixed_t xscale, yscale;
 
 	// [RH] floor and ceiling texture rotation
-	DAngle Angle, baseAngle;
+	angle_t angle;
 
-	finline bool operator == (const FTransform &other) const
-	{
-		return xOffs == other.xOffs && yOffs + baseyOffs == other.yOffs + other.baseyOffs &&
-			xScale == other.xScale && yScale == other.yScale && Angle + baseAngle == other.Angle + other.baseAngle;
-	}
-	finline bool operator != (const FTransform &other) const
-	{
-		return !(*this == other);
-	}
-
+	// base values
+	fixed_t base_angle, base_yoffs;
 };
-
-struct secspecial_t
-{
-	FNameNoInit damagetype;		// [RH] Means-of-death for applied damage
-	int damageamount;			// [RH] Damage to do while standing on floor
-	short special;
-	short damageinterval;	// Interval for damage application
-	short leakydamage;		// chance of leaking through radiation suit
-	int Flags;
-
-	secspecial_t()
-	{
-		Clear();
-	}
-
-	void Clear()
-	{
-		memset(this, 0, sizeof(*this));
-	}
-};
-
-FSerializer &Serialize(FSerializer &arc, const char *key, secspecial_t &spec, secspecial_t *def);
-
-enum class EMoveResult { ok, crushed, pastdest };
 
 struct sector_t
 {
 	// Member functions
-
-private:
-	bool MoveAttached(int crush, double move, int floorOrCeiling, bool resetfailed, bool instant = false);
-public:
-	EMoveResult MoveFloor(double speed, double dest, int crush, int direction, bool hexencrush, bool instant = false);
-	EMoveResult MoveCeiling(double speed, double dest, int crush, int direction, bool hexencrush);
-
-	inline EMoveResult MoveFloor(double speed, double dest, int direction)
-	{
-		return MoveFloor(speed, dest, -1, direction, false);
-	}
-
-	inline EMoveResult MoveCeiling(double speed, double dest, int direction)
-	{
-		return MoveCeiling(speed, dest, -1, direction, false);
-	}
-
 	bool IsLinked(sector_t *other, bool ceiling) const;
-	double FindLowestFloorSurrounding(vertex_t **v) const;
-	double FindHighestFloorSurrounding(vertex_t **v) const;
-	double FindNextHighestFloor(vertex_t **v) const;
-	double FindNextLowestFloor(vertex_t **v) const;
-	double FindLowestCeilingSurrounding(vertex_t **v) const;			// jff 2/04/98
-	double FindHighestCeilingSurrounding(vertex_t **v) const;			// jff 2/04/98
-	double FindNextLowestCeiling(vertex_t **v) const;					// jff 2/04/98
-	double FindNextHighestCeiling(vertex_t **v) const;					// jff 2/04/98
-	double FindShortestTextureAround() const;							// jff 2/04/98
-	double FindShortestUpperAround() const;								// jff 2/04/98
-	sector_t *FindModelFloorSector(double floordestheight) const;		// jff 2/04/98
-	sector_t *FindModelCeilingSector(double floordestheight) const;		// jff 2/04/98
+	fixed_t FindLowestFloorSurrounding (vertex_t **v) const;
+	fixed_t FindHighestFloorSurrounding (vertex_t **v) const;
+	fixed_t FindNextHighestFloor (vertex_t **v) const;
+	fixed_t FindNextLowestFloor (vertex_t **v) const;
+	fixed_t FindLowestCeilingSurrounding (vertex_t **v) const;			// jff 2/04/98
+	fixed_t FindHighestCeilingSurrounding (vertex_t **v) const;			// jff 2/04/98
+	fixed_t FindNextLowestCeiling (vertex_t **v) const;					// jff 2/04/98
+	fixed_t FindNextHighestCeiling (vertex_t **v) const;				// jff 2/04/98
+	fixed_t FindShortestTextureAround () const;							// jff 2/04/98
+	fixed_t FindShortestUpperAround () const;							// jff 2/04/98
+	sector_t *FindModelFloorSector (fixed_t floordestheight) const;		// jff 2/04/98
+	sector_t *FindModelCeilingSector (fixed_t floordestheight) const;	// jff 2/04/98
 	int FindMinSurroundingLight (int max) const;
 	sector_t *NextSpecialSector (int type, sector_t *prev) const;		// [RH]
-	double FindLowestCeilingPoint(vertex_t **v) const;
-	double FindHighestFloorPoint(vertex_t **v) const;
-	void RemoveForceField();
-	int Index() const;
-
+	fixed_t FindLowestCeilingPoint (vertex_t **v) const;
+	fixed_t FindHighestFloorPoint (vertex_t **v) const;
 	void AdjustFloorClip () const;
 	void SetColor(int r, int g, int b, int desat);
 	void SetFade(int r, int g, int b);
-	void SetFogDensity(int dens);
-	void SetSpecialColor(int num, int r, int g, int b);
-	void SetSpecialColor(int num, PalEntry rgb);
-	void ClosestPoint(const DVector2 &pos, DVector2 &out) const;
+	void ClosestPoint(fixed_t x, fixed_t y, fixed_t &ox, fixed_t &oy) const;
 	int GetFloorLight () const;
 	int GetCeilingLight () const;
 	sector_t *GetHeightSec() const;
-	double GetFriction(int plane = sector_t::floor, double *movefac = NULL) const;
-	bool TriggerSectorActions(AActor *thing, int activation);
 
 	DInterpolation *SetInterpolation(int position, bool attach);
-
-	FSectorPortal *ValidatePortal(int which);
-	void CheckPortalPlane(int plane);
-
+	void StopInterpolation(int position);
 
 	enum
 	{
 		floor,
-		ceiling,
-		// only used for specialcolors array
-		walltop,
-		wallbottom,
-		sprites
+		ceiling
 	};
 
 	struct splane
@@ -678,115 +501,107 @@ public:
 		FTransform xform;
 		int Flags;
 		int Light;
-		double alpha;
-		double TexZ;
-		PalEntry GlowColor;
-		float GlowHeight;
+		fixed_t alpha;
 		FTextureID Texture;
+		fixed_t TexZ;
 	};
 
 
 	splane planes[2];
 
-	void SetXOffset(int pos, double o)
+	void SetXOffset(int pos, fixed_t o)
 	{
-		planes[pos].xform.xOffs = o;
+		planes[pos].xform.xoffs = o;
 	}
 
-	void AddXOffset(int pos, double o)
+	void AddXOffset(int pos, fixed_t o)
 	{
-		planes[pos].xform.xOffs += o;
+		planes[pos].xform.xoffs += o;
 	}
 
-	double GetXOffset(int pos) const
+	fixed_t GetXOffset(int pos) const
 	{
-		return planes[pos].xform.xOffs;
+		return planes[pos].xform.xoffs;
 	}
 
-	void SetYOffset(int pos, double o)
+	void SetYOffset(int pos, fixed_t o)
 	{
-		planes[pos].xform.yOffs = o;
+		planes[pos].xform.yoffs = o;
 	}
 
-	void AddYOffset(int pos, double o)
+	void AddYOffset(int pos, fixed_t o)
 	{
-		planes[pos].xform.yOffs += o;
+		planes[pos].xform.yoffs += o;
 	}
 
-	double GetYOffset(int pos, bool addbase = true) const
-	{
-		if (!addbase)
-		{
-			return planes[pos].xform.yOffs;
-		}
-		else
-		{
-			return planes[pos].xform.yOffs + planes[pos].xform.baseyOffs;
-		}
-	}
-
-	void SetXScale(int pos, double o)
-	{
-		planes[pos].xform.xScale = o;
-	}
-
-	double GetXScale(int pos) const
-	{
-		return planes[pos].xform.xScale;
-	}
-
-	void SetYScale(int pos, double o)
-	{
-		planes[pos].xform.yScale = o;
-	}
-
-	double GetYScale(int pos) const
-	{
-		return planes[pos].xform.yScale;
-	}
-
-	void SetAngle(int pos, DAngle o)
-	{
-		planes[pos].xform.Angle = o;
-	}
-
-	DAngle GetAngle(int pos, bool addbase = true) const
+	fixed_t GetYOffset(int pos, bool addbase = true) const
 	{
 		if (!addbase)
 		{
-			return planes[pos].xform.Angle;
+			return planes[pos].xform.yoffs;
 		}
 		else
 		{
-			return planes[pos].xform.Angle + planes[pos].xform.baseAngle;
+			return planes[pos].xform.yoffs + planes[pos].xform.base_yoffs;
 		}
 	}
 
-	void SetBase(int pos, double y, DAngle o)
+	void SetXScale(int pos, fixed_t o)
 	{
-		planes[pos].xform.baseyOffs = y;
-		planes[pos].xform.baseAngle = o;
+		planes[pos].xform.xscale = o;
 	}
 
-	void SetAlpha(int pos, double o)
+	fixed_t GetXScale(int pos) const
+	{
+		return planes[pos].xform.xscale;
+	}
+
+	void SetYScale(int pos, fixed_t o)
+	{
+		planes[pos].xform.yscale = o;
+	}
+
+	fixed_t GetYScale(int pos) const
+	{
+		return planes[pos].xform.yscale;
+	}
+
+	void SetAngle(int pos, angle_t o)
+	{
+		planes[pos].xform.angle = o;
+	}
+
+	angle_t GetAngle(int pos, bool addbase = true) const
+	{
+		if (!addbase)
+		{
+			return planes[pos].xform.angle;
+		}
+		else
+		{
+			return planes[pos].xform.angle + planes[pos].xform.base_angle;
+		}
+	}
+
+	void SetBase(int pos, fixed_t y, angle_t o)
+	{
+		planes[pos].xform.base_yoffs = y;
+		planes[pos].xform.base_angle = o;
+	}
+
+	void SetAlpha(int pos, fixed_t o)
 	{
 		planes[pos].alpha = o;
 	}
 
-	double GetAlpha(int pos) const
+	fixed_t GetAlpha(int pos) const
 	{
 		return planes[pos].alpha;
 	}
 
-	int GetFlags(int pos) const
+	int GetFlags(int pos) const 
 	{
 		return planes[pos].Flags;
-	}
-
-	// like the previous one but masks out all flags which are not relevant for rendering.
-	int GetVisFlags(int pos) const
-	{
-		return planes[pos].Flags & ~(PLANEF_BLOCKED | PLANEF_NOPASS | PLANEF_BLOCKSOUND | PLANEF_LINKED);
 	}
 
 	void ChangeFlags(int pos, int And, int Or)
@@ -805,26 +620,6 @@ public:
 		planes[pos].Light = level;
 	}
 
-	double GetGlowHeight(int pos)
-	{
-		return planes[pos].GlowHeight;
-	}
-
-	PalEntry GetGlowColor(int pos)
-	{
-		return planes[pos].GlowColor;
-	}
-
-	void SetGlowHeight(int pos, float height)
-	{
-		planes[pos].GlowHeight = height;
-	}
-
-	void SetGlowColor(int pos, PalEntry color)
-	{
-		planes[pos].GlowColor = color;
-	}
-
 	FTextureID GetTexture(int pos) const
 	{
 		return planes[pos].Texture;
@@ -837,20 +632,33 @@ public:
 		if (floorclip && pos == floor && tex != old) AdjustFloorClip();
 	}
 
-	double GetPlaneTexZ(int pos) const
+	fixed_t GetPlaneTexZ(int pos) const
 	{
 		return planes[pos].TexZ;
 	}
 
-	void SetPlaneTexZ(int pos, double val, bool dirtify = false)	// This mainly gets used by init code. The only place where it must set the vertex to dirty is the interpolation code.
+	void SetVerticesDirty()
+	{
+		for (unsigned i = 0; i < e->vertices.Size(); i++) e->vertices[i]->dirty = true;
+	}
+
+	void SetAllVerticesDirty()
+	{
+		SetVerticesDirty();
+		for (unsigned i = 0; i < e->FakeFloor.Sectors.Size(); i++) e->FakeFloor.Sectors[i]->SetVerticesDirty();
+		for (unsigned i = 0; i < e->XFloor.attached.Size(); i++) e->XFloor.attached[i]->SetVerticesDirty();
+	}
+
+	void SetPlaneTexZ(int pos, fixed_t val, bool dirtify = false)	// This mainly gets used by init code. The only place where it must set the vertex to dirty is the interpolation code.
 	{
 		planes[pos].TexZ = val;
 		if (dirtify) SetAllVerticesDirty();
 	}
 
-	void ChangePlaneTexZ(int pos, double val)
+	void ChangePlaneTexZ(int pos, fixed_t val)
 	{
 		planes[pos].TexZ += val;
+		SetAllVerticesDirty();
 	}
 
 	static inline short ClampLight(int level)
@@ -878,139 +686,45 @@ public:
 		return pos == floor? floorplane:ceilingplane;
 	}
 
-	bool isSecret() const
-	{
-		return !!(Flags & SECF_SECRET);
-	}
-
-	bool wasSecret() const
-	{
-		return !!(Flags & SECF_WASSECRET);
-	}
-
-	void ClearSecret()
-	{
-		Flags &= ~SECF_SECRET;
-	}
-
-	void ClearSpecial()
-	{
-		// clears all variables that originate from 'special'. Used for sector type transferring thinkers
-		special = 0;
-		damageamount = 0;
-		damageinterval = 0;
-		damagetype = NAME_None;
-		leakydamage = 0;
-		Flags &= ~SECF_SPECIALFLAGS;
-	}
-
-	inline bool PortalBlocksView(int plane);
-	inline bool PortalBlocksSight(int plane);
-	inline bool PortalBlocksMovement(int plane);
-	inline bool PortalBlocksSound(int plane);
-	inline bool PortalIsLinked(int plane);
-
-	void ClearPortal(int plane)
-	{
-		Portals[plane] = 0;
-		portals[plane] = nullptr;
-	}
-
-	FSectorPortal *GetPortal(int plane);
-	double GetPortalPlaneZ(int plane);
-	DVector2 GetPortalDisplacement(int plane);
-	int GetPortalType(int plane);
-	int GetOppositePortalGroup(int plane);
-
-	void SetVerticesDirty()
-	{
-		for (unsigned i = 0; i < e->vertices.Size(); i++) e->vertices[i]->dirty = true;
-	}
-
-	void SetAllVerticesDirty()
-	{
-		SetVerticesDirty();
-		for (unsigned i = 0; i < e->FakeFloor.Sectors.Size(); i++) e->FakeFloor.Sectors[i]->SetVerticesDirty();
-		for (unsigned i = 0; i < e->XFloor.attached.Size(); i++) e->XFloor.attached[i]->SetVerticesDirty();
-	}
-
-	int GetTerrain(int pos) const;
-
-	void TransferSpecial(sector_t *model);
-	void GetSpecial(secspecial_t *spec);
-	void SetSpecial(const secspecial_t *spec);
 	bool PlaneMoving(int pos);
 
-	// Portal-aware height calculation
-	double HighestCeilingAt(const DVector2 &a, sector_t **resultsec = NULL);
-	double LowestFloorAt(const DVector2 &a, sector_t **resultsec = NULL);
-
-	inline double HighestCeilingAt(AActor *a, sector_t **resultsec = NULL);
-	inline double LowestFloorAt(AActor *a, sector_t **resultsec = NULL);
-
-	bool isClosed() const
-	{
-		return floorplane.Normal() == -ceilingplane.Normal() && floorplane.D == -ceilingplane.D;
-	}
-
-	double NextHighestCeilingAt(double x, double y, double bottomz, double topz, int flags = 0, sector_t **resultsec = NULL, F3DFloor **resultffloor = NULL);
-	double NextLowestFloorAt(double x, double y, double z, int flags = 0, double steph = 0, sector_t **resultsec = NULL, F3DFloor **resultffloor = NULL);
 
 	// Member variables
-	double		CenterFloor() const { return floorplane.ZatPoint(centerspot); }
-	double		CenterCeiling() const { return ceilingplane.ZatPoint(centerspot); }
+	fixed_t		CenterFloor () const { return floorplane.ZatPoint (soundorg[0], soundorg[1]); }
+	fixed_t		CenterCeiling () const { return ceilingplane.ZatPoint (soundorg[0], soundorg[1]); }
 
 	// [RH] store floor and ceiling planes instead of heights
 	secplane_t	floorplane, ceilingplane;
 
 	// [RH] give floor and ceiling even more properties
-	PalEntry SpecialColors[5];
-	FColormap Colormap;
-
-private:
-	FDynamicColormap *_ColorMap;	// [RH] Per-sector colormap
-
-public:
-	// just a helper for refactoring 
-	FDynamicColormap *GetColorMap()
-	{
-		return _ColorMap;
-	}
-
-	void CopyColors(sector_t *other)
-	{
-		memcpy(SpecialColors, other->SpecialColors, sizeof(SpecialColors));
-		Colormap = other->Colormap;
-
-		_ColorMap = other->_ColorMap;
-	}
+	FDynamicColormap *ColorMap;	// [RH] Per-sector colormap
 
 
-
-	TObjPtr<AActor*> SoundTarget;
+	TObjPtr<AActor> SoundTarget;
 
 	short		special;
+	short		tag;
 	short		lightlevel;
 	short		seqType;		// this sector's sound sequence
+
+	int			nexttag,firsttag;	// killough 1/30/98: improves searches for tags.
 
 	int			sky;
 	FNameNoInit	SeqName;		// Sound sequence name. Setting seqType non-negative will override this.
 
-	DVector2	centerspot;		// origin for any sounds played by the sector
+	fixed_t		soundorg[2];	// origin for any sounds played by the sector
 	int 		validcount;		// if == validcount, already checked
 	AActor* 	thinglist;		// list of mobjs in sector
 
 	// killough 8/28/98: friction is a sector property, not an mobj property.
 	// these fields used to be in AActor, but presented performance problems
 	// when processed as mobj properties. Fix is to make them sector properties.
-	double		friction, movefactor;
-
-	int			terrainnum[2];
+	fixed_t		friction, movefactor;
 
 	// thinker_t for reversable actions
-	TObjPtr<DSectorEffect*> floordata;			// jff 2/22/98 make thinkers on
-	TObjPtr<DSectorEffect*> ceilingdata;			// floors, ceilings, lighting,
-	TObjPtr<DSectorEffect*> lightingdata;		// independent of one another
+	TObjPtr<DSectorEffect> floordata;			// jff 2/22/98 make thinkers on
+	TObjPtr<DSectorEffect> ceilingdata;			// floors, ceilings, lighting,
+	TObjPtr<DSectorEffect> lightingdata;		// independent of one another
 
 	enum
 	{
@@ -1019,50 +733,47 @@ public:
 		CeilingScroll,
 		FloorScroll
 	};
-	TObjPtr<DInterpolation*> interpolations[4];
+	TObjPtr<DInterpolation> interpolations[4];
 
-	int prevsec;		// -1 or number of sector for previous step
-	int nextsec;		// -1 or number of next step sector
-	uint8_t 		soundtraversed;	// 0 = untraversed, 1,2 = sndlines -1
+	BYTE 		soundtraversed;	// 0 = untraversed, 1,2 = sndlines -1
 	// jff 2/26/98 lockout machinery for stairbuilding
-	int8_t stairlock;	// -2 on first locked -1 after thinker done 0 normally
+	SBYTE stairlock;	// -2 on first locked -1 after thinker done 0 normally
+	SWORD prevsec;		// -1 or number of sector for previous step
+	SWORD nextsec;		// -1 or number of next step sector
 
-	TStaticPointedArray<line_t *> Lines;
+	short linecount;
+	struct line_t **lines;		// [linecount] size
 
 	// killough 3/7/98: support flat heights drawn at another sector's heights
 	sector_t *heightsec;		// other sector, or NULL if no other sector
-	FLightNode *				lighthead;
 
-	uint32_t bottommap, midmap, topmap;	// killough 4/4/98: dynamic colormaps
+	DWORD bottommap, midmap, topmap;	// killough 4/4/98: dynamic colormaps
 										// [RH] these can also be blend values if
 										//		the alpha mask is non-zero
 
 	// list of mobjs that are at least partially in the sector
 	// thinglist is a subset of touching_thinglist
 	struct msecnode_t *touching_thinglist;				// phares 3/14/98
-	struct msecnode_t *sectorportal_thinglist;				// for cross-portal rendering.
-	struct msecnode_t *touching_renderthings; // this is used to allow wide things to be rendered not only from their main sector.
 
-	double gravity;			// [RH] Sector gravity (1.0 is normal)
-	FNameNoInit damagetype;		// [RH] Means-of-death for applied damage
-	int damageamount;			// [RH] Damage to do while standing on floor
-	short damageinterval;	// Interval for damage application
-	short leakydamage;		// chance of leaking through radiation suit
+	float gravity;		// [RH] Sector gravity (1.0 is normal)
+	short damage;		// [RH] Damage to do while standing on floor
+	short mod;			// [RH] Means-of-death for applied damage
 
-	uint16_t ZoneNumber;	// [RH] Zone this sector belongs to
-	uint16_t MoreFlags;		// [RH] Internal sector flags
-	uint32_t Flags;		// Sector flags
+	WORD ZoneNumber;	// [RH] Zone this sector belongs to
+	WORD MoreFlags;		// [RH] Internal sector flags
+	DWORD Flags;		// Sector flags
 
 	// [RH] Action specials for sectors. Like Skull Tag, but more
 	// flexible in a Bloody way. SecActTarget forms a list of actors
 	// joined by their tracer fields. When a potential sector action
 	// occurs, SecActTarget's TriggerAction method is called.
-	TObjPtr<AActor*> SecActTarget;
+	TObjPtr<ASectorAction> SecActTarget;
 
-	// [RH] The portal or skybox to render for this sector.
-	unsigned Portals[2];
-	int PortalGroup;
+	// [RH] The sky box to render for this sector. NULL means use a
+	// regular sky.
+	TObjPtr<ASkyViewpoint> FloorSkyBox, CeilingSkyBox;
 
+	short						secretsector;		//jff 2/16/98 remembers if sector WAS secret (automap)
 	int							sectornum;			// for comparing sector copies
 
 	extsector_t	*				e;		// This stores data that requires construction/destruction. Such data must not be copied by R_FakeFlat.
@@ -1071,10 +782,11 @@ public:
 	float						reflect[2];
 
 	bool						transdoor;			// For transparent door hacks
+	fixed_t						transdoorheight;	// for transparent door hacks
 	int							subsectorcount;		// list of subsectors
-	double						transdoorheight;	// for transparent door hacks
 	subsector_t **				subsectors;
 	FPortal *					portals[2];			// floor and ceiling portals
+	FLightNode *				lighthead;
 
 	enum
 	{
@@ -1083,12 +795,11 @@ public:
 	};
 
 	int				vboindex[4];	// VBO indices of the 4 planes this sector uses during rendering
-	double			vboheight[2];	// Last calculated height for the 2 planes of this actual sector
+	fixed_t			vboheight[2];	// Last calculated height for the 2 planes of this actual sector
 	int				vbocount[2];	// Total count of vertices belonging to this sector's planes
 
 	float GetReflect(int pos) { return gl_plane_reflection_i? reflect[pos] : 0; }
 	bool VBOHeightcheck(int pos) const { return vboheight[pos] == GetPlaneTexZ(pos); }
-	FPortal *GetGLPortal(int plane) { return portals[plane]; }
 
 	enum
 	{
@@ -1097,6 +808,9 @@ public:
 	};
 
 };
+
+FArchive &operator<< (FArchive &arc, sector_t::splane &p);
+
 
 struct ReverbContainer;
 struct zone_t
@@ -1133,37 +847,29 @@ struct side_t
 	};
 	struct part
 	{
-		double xOffset;
-		double yOffset;
-		double xScale;
-		double yScale;
-		TObjPtr<DInterpolation*> interpolation;
+		fixed_t xoffset;
+		fixed_t yoffset;
+		fixed_t xscale;
+		fixed_t yscale;
 		FTextureID texture;
-
-		void InitFrom(const part &other)
-		{
-			if (texture.isNull()) texture = other.texture;
-			if (0.0 == xOffset) xOffset = other.xOffset;
-			if (0.0 == yOffset) yOffset = other.yOffset;
-			if (1.0 == xScale && 0.0 != other.xScale) xScale = other.xScale;
-			if (1.0 == yScale && 0.0 != other.yScale) yScale = other.yScale;
-		}
+		TObjPtr<DInterpolation> interpolation;
+		//int Light;
 	};
 
 	sector_t*	sector;			// Sector the SideDef is facing.
 	DBaseDecal*	AttachedDecals;	// [RH] Decals bound to the wall
 	part		textures[3];
 	line_t		*linedef;
-	uint32_t	LeftSide, RightSide;	// [RH] Group walls into loops
-	uint16_t	TexelLength;
-	int16_t		Light;
-	uint8_t		Flags;
-	int			UDMFIndex;		// needed to access custom UDMF fields which are stored in loading order.
-	FLightNode * lighthead;		// all dynamic lights that may affect this wall
+	//DWORD		linenum;
+	DWORD		LeftSide, RightSide;	// [RH] Group walls into loops
+	WORD		TexelLength;
+	SWORD		Light;
+	BYTE		Flags;
+	int			Index;		// needed to access custom UDMF fields which are stored in loading order.
 
-	int GetLightLevel (bool foggy, int baselight, bool is3dlight=false, int *pfakecontrast_usedbygzdoom=NULL) const;
+	int GetLightLevel (bool foggy, int baselight, bool noabsolute=false, int *pfakecontrast_usedbygzdoom=NULL) const;
 
-	void SetLight(int16_t l)
+	void SetLight(SWORD l)
 	{
 		Light = l;
 	}
@@ -1177,88 +883,77 @@ struct side_t
 		textures[which].texture = tex;
 	}
 
-	void SetTextureXOffset(int which, double offset)
+	void SetTextureXOffset(int which, fixed_t offset)
 	{
-		textures[which].xOffset = offset;;
+		textures[which].xoffset = offset;
 	}
-	
-	void SetTextureXOffset(double offset)
+	void SetTextureXOffset(fixed_t offset)
 	{
-		textures[top].xOffset =
-		textures[mid].xOffset =
-		textures[bottom].xOffset = offset;
+		textures[top].xoffset =
+		textures[mid].xoffset =
+		textures[bottom].xoffset = offset;
 	}
-
-	double GetTextureXOffset(int which) const
+	fixed_t GetTextureXOffset(int which) const
 	{
-		return textures[which].xOffset;
+		return textures[which].xoffset;
 	}
-
-	void AddTextureXOffset(int which, double delta)
+	void AddTextureXOffset(int which, fixed_t delta)
 	{
-		textures[which].xOffset += delta;
+		textures[which].xoffset += delta;
 	}
 
-	void SetTextureYOffset(int which, double offset)
+	void SetTextureYOffset(int which, fixed_t offset)
 	{
-		textures[which].yOffset = offset;
+		textures[which].yoffset = offset;
+	}
+	void SetTextureYOffset(fixed_t offset)
+	{
+		textures[top].yoffset =
+		textures[mid].yoffset =
+		textures[bottom].yoffset = offset;
+	}
+	fixed_t GetTextureYOffset(int which) const
+	{
+		return textures[which].yoffset;
+	}
+	void AddTextureYOffset(int which, fixed_t delta)
+	{
+		textures[which].yoffset += delta;
 	}
 
-	void SetTextureYOffset(double offset)
+	void SetTextureXScale(int which, fixed_t scale)
 	{
-		textures[top].yOffset =
-		textures[mid].yOffset =
-		textures[bottom].yOffset = offset;
+		textures[which].xscale = scale == 0 ? FRACUNIT : scale;
+	}
+	void SetTextureXScale(fixed_t scale)
+	{
+		textures[top].xscale = textures[mid].xscale = textures[bottom].xscale = scale == 0 ? FRACUNIT : scale;
+	}
+	fixed_t GetTextureXScale(int which) const
+	{
+		return textures[which].xscale;
+	}
+	void MultiplyTextureXScale(int which, fixed_t delta)
+	{
+		textures[which].xscale = FixedMul(textures[which].xscale, delta);
 	}
 
-	double GetTextureYOffset(int which) const
-	{
-		return textures[which].yOffset;
-	}
 
-	void AddTextureYOffset(int which, double delta)
+	void SetTextureYScale(int which, fixed_t scale)
 	{
-		textures[which].yOffset += delta;
+		textures[which].yscale = scale == 0 ? FRACUNIT : scale;
 	}
-
-	void SetTextureXScale(int which, double scale)
+	void SetTextureYScale(fixed_t scale)
 	{
-		textures[which].xScale = scale == 0 ? 1. : scale;
+		textures[top].yscale = textures[mid].yscale = textures[bottom].yscale = scale == 0 ? FRACUNIT : scale;
 	}
-
-	void SetTextureXScale(double scale)
+	fixed_t GetTextureYScale(int which) const
 	{
-		textures[top].xScale = textures[mid].xScale = textures[bottom].xScale = scale == 0 ? 1. : scale;
+		return textures[which].yscale;
 	}
-
-	double GetTextureXScale(int which) const
+	void MultiplyTextureYScale(int which, fixed_t delta)
 	{
-		return textures[which].xScale;
-	}
-
-	void MultiplyTextureXScale(int which, double delta)
-	{
-		textures[which].xScale *= delta;
-	}
-
-	void SetTextureYScale(int which, double scale)
-	{
-		textures[which].yScale = scale == 0 ? 1. : scale;
-	}
-
-	void SetTextureYScale(double scale)
-	{
-		textures[top].yScale = textures[mid].yScale = textures[bottom].yScale = scale == 0 ? 1. : scale;
-	}
-
-	double GetTextureYScale(int which) const
-	{
-		return textures[which].yScale;
-	}
-
-	void MultiplyTextureYScale(int which, double delta)
-	{
-		textures[which].yScale *= delta;
+		textures[which].yscale = FixedMul(textures[which].yscale, delta);
 	}
 
 	DInterpolation *SetInterpolation(int position);
@@ -1267,67 +962,34 @@ struct side_t
 	vertex_t *V1() const;
 	vertex_t *V2() const;
 
-	int Index() const;
-
 	//For GL
+	FLightNode * lighthead;				// all blended lights that may affect this wall
 
 	seg_t **segs;	// all segs belonging to this sidedef in ascending order. Used for precise rendering
 	int numsegs;
 
 };
 
+FArchive &operator<< (FArchive &arc, side_t::part &p);
+
 struct line_t
 {
 	vertex_t	*v1, *v2;	// vertices, from v1 to v2
-	DVector2	delta;		// precalculated v2 - v1 for side checking
-	uint32_t	flags;
-	uint32_t	activation;	// activation type
+	fixed_t 	dx, dy;		// precalculated v2 - v1 for side checking
+	DWORD		flags;
+	DWORD		activation;	// activation type
 	int			special;
+	fixed_t		Alpha;		// <--- translucency (0=invisibile, FRACUNIT=opaque)
+	int			id;			// <--- same as tag or set with Line_SetIdentification
 	int			args[5];	// <--- hexen-style arguments (expanded to ZDoom's full width)
-	double		alpha;		// <--- translucency (0=invisibile, FRACUNIT=opaque)
+	int			firstid, nextid;
 	side_t		*sidedef[2];
-	double		bbox[4];	// bounding box, for the extent of the LineDef.
+	//DWORD		sidenum[2];	// sidenum[1] will be NO_SIDE if one sided
+	fixed_t		bbox[4];	// bounding box, for the extent of the LineDef.
 	sector_t	*frontsector, *backsector;
 	int 		validcount;	// if == validcount, already checked
 	int			locknumber;	// [Dusk] lock number for special
-	unsigned	portalindex;
-	unsigned	portaltransferred;
-
-	DVector2 Delta() const
-	{
-		return delta;
-	}
-
-	void setDelta(double x, double y)
-	{
-		delta = { x, y };
-	}
-
-	void setAlpha(double a)
-	{
-		alpha = a;
-	}
-
-	FSectorPortal *GetTransferredPortal();
-
-	inline FLinePortal *getPortal() const;
-	inline bool isLinePortal() const;
-	inline bool isVisualPortal() const;
-	inline line_t *getPortalDestination() const;
-	inline int getPortalAlignment() const;
-
-	int Index() const;
 };
-
-inline vertex_t *side_t::V1() const
-{
-	return this == linedef->sidedef[0] ? linedef->v1 : linedef->v2;
-}
-
-inline vertex_t *side_t::V2() const
-{
-	return this == linedef->sidedef[0] ? linedef->v2 : linedef->v1;
-}
 
 // phares 3/14/98
 //
@@ -1356,18 +1018,6 @@ struct msecnode_t
 	bool visited;	// killough 4/4/98, 4/7/98: used in search algorithms
 };
 
-// use the same memory layout as msecnode_t so both can be used from the same freelist.
-struct portnode_t
-{
-	FLinePortal			*m_sector;	// a portal containing this object (no, this isn't a sector, but if we want to use templates it needs the same variable names as msecnode_t.)
-	AActor				*m_thing;	// this object
-	struct portnode_t	*m_tprev;	// prev msecnode_t for this thing
-	struct portnode_t	*m_tnext;	// next msecnode_t for this thing
-	struct portnode_t	*m_sprev;	// prev msecnode_t for this portal
-	struct portnode_t	*m_snext;	// next msecnode_t for this portal
-	bool visited;
-};
-
 struct FPolyNode;
 struct FMiniBSP;
 
@@ -1390,11 +1040,15 @@ struct seg_t
 	subsector_t*	Subsector;
 
 	float			sidefrac;		// relative position of seg's ending vertex on owning sidedef
-
-	int Index() const;
 };
 
-//extern seg_t *segs;
+struct glsegextra_t
+{
+	DWORD		 PartnerSeg;
+	subsector_t *Subsector;
+};
+
+extern seg_t *segs;
 
 
 //
@@ -1413,7 +1067,7 @@ enum
 
 struct FPortalCoverage
 {
-	uint32_t *		subsectors;
+	DWORD *		subsectors;
 	int			sscount;
 };
 
@@ -1424,11 +1078,10 @@ struct subsector_t
 	FMiniBSP	*BSP;
 	seg_t		*firstline;
 	sector_t	*render_sector;
-	uint32_t	numlines;
+	DWORD		numlines;
 	int			flags;
 
 	void BuildPolyBSP();
-	int Index() const;
 	// subsector related GL data
 	FLightNode *	lighthead;	// Light nodes (blended and additive)
 	int				validcount;
@@ -1451,19 +1104,13 @@ struct node_t
 	fixed_t		y;
 	fixed_t		dx;
 	fixed_t		dy;
-	union
-	{
-		float	bbox[2][4];		// Bounding box for each child.
-		fixed_t	nb_bbox[2][4];	// Used by nodebuilder.
-	};
+	fixed_t		bbox[2][4];		// Bounding box for each child.
 	float		len;
 	union
 	{
 		void	*children[2];	// If bit 0 is set, it's a subsector.
 		int		intchildren[2];	// Used by nodebuilder.
 	};
-
-	int Index() const;
 };
 
 
@@ -1479,46 +1126,21 @@ struct FMiniBSP
 	TArray<vertex_t> Verts;
 };
 
+
+
 //
 // OTHER TYPES
 //
 
-typedef uint8_t lighttable_t;	// This could be wider for >8 bit display.
+typedef BYTE lighttable_t;	// This could be wider for >8 bit display.
 
-//----------------------------------------------------------------------------------
-//
-// The playsim can use different nodes than the renderer so this is
-// not the same as R_PointInSubsector
-//
-//----------------------------------------------------------------------------------
-subsector_t *P_PointInSubsector(double x, double y);
-
-inline sector_t *P_PointInSector(const DVector2 &pos)
+// This encapsulates the fields of vissprite_t that can be altered by AlterWeaponSprite
+struct visstyle_t
 {
-	return P_PointInSubsector(pos.X, pos.Y)->sector;
-}
+	lighttable_t	*colormap;
+	fixed_t			alpha;
+	FRenderStyle	RenderStyle;
+};
 
-inline sector_t *P_PointInSector(double X, double Y)
-{
-	return P_PointInSubsector(X, Y)->sector;
-}
-
-inline bool FBoundingBox::inRange(const line_t *ld) const
-{
-	return Left() < ld->bbox[BOXRIGHT] &&
-		Right() > ld->bbox[BOXLEFT] &&
-		Top() > ld->bbox[BOXBOTTOM] &&
-		Bottom() < ld->bbox[BOXTOP];
-}
-
-
-inline void FColormap::CopyFrom3DLight(lightlist_t *light)
-{
-	CopyLight(light->extra_colormap);
-	if (light->caster && (light->caster->flags&FF_FADEWALLS) && light->extra_colormap.FadeColor != 0)
-	{
-		CopyFog(light->extra_colormap);
-	}
-}
 
 #endif

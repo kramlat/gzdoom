@@ -1,23 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //		Networking stuff.
@@ -30,7 +25,7 @@
 
 #include "doomtype.h"
 #include "doomdef.h"
-#include "d_protocol.h"
+#include "d_ticcmd.h"
 
 
 //
@@ -64,31 +59,32 @@
 //
 struct doomcom_t
 {
-	uint32_t	id;				// should be DOOMCOM_ID
-	int16_t	intnum;			// DOOM executes an int to execute commands
+	DWORD	id;				// should be DOOMCOM_ID
+	SWORD	intnum;			// DOOM executes an int to execute commands
 
 // communication between DOOM and the driver
-	int16_t	command;		// CMD_SEND or CMD_GET
-	int16_t	remotenode;		// dest for send, set by get (-1 = no packet).
-	int16_t	datalength;		// bytes in doomdata to be sent
+	SWORD	command;		// CMD_SEND or CMD_GET
+	SWORD	remotenode;		// dest for send, set by get (-1 = no packet).
+	SWORD	datalength;		// bytes in doomdata to be sent
 
 // info common to all nodes
-	int16_t	numnodes;		// console is always node 0.
-	int16_t	ticdup;			// 1 = no duplication, 2-5 = dup for slow nets
+	SWORD	numnodes;		// console is always node 0.
+	SWORD	ticdup;			// 1 = no duplication, 2-5 = dup for slow nets
+	SWORD	extratics;		// 1 = send a backup tic in every packet
 #ifdef DJGPP
-	int16_t	pad[5];			// keep things aligned for DOS drivers
+	SWORD	pad[5];			// keep things aligned for DOS drivers
 #endif
 
 // info specific to this node
-	int16_t	consoleplayer;
-	int16_t	numplayers;
+	SWORD	consoleplayer;
+	SWORD	numplayers;
 #ifdef DJGPP
-	int16_t	angleoffset;	// does not work, but needed to preserve
-	int16_t	drone;			// alignment for DOS drivers
+	SWORD	angleoffset;	// does not work, but needed to preserve
+	SWORD	drone;			// alignment for DOS drivers
 #endif
 
 // packet data to be sent
-	uint8_t	data[MAX_MSGLEN];
+	BYTE	data[MAX_MSGLEN];
 	
 };
 
@@ -99,11 +95,11 @@ public:
 	FDynamicBuffer ();
 	~FDynamicBuffer ();
 
-	void SetData (const uint8_t *data, int len);
-	uint8_t *GetData (int *len = NULL);
+	void SetData (const BYTE *data, int len);
+	BYTE *GetData (int *len = NULL);
 
 private:
-	uint8_t *m_Data;
+	BYTE *m_Data;
 	int m_Len, m_BufferLen;
 };
 
@@ -120,19 +116,19 @@ void D_QuitNetGame (void);
 void TryRunTics (void);
 
 //Use for checking to see if the netgame has stalled
-void Net_CheckLastReceived(int);
+void Net_CheckLastRecieved(int);
 
 // [RH] Functions for making and using special "ticcmds"
 void Net_NewMakeTic ();
-void Net_WriteByte (uint8_t);
+void Net_WriteByte (BYTE);
 void Net_WriteWord (short);
 void Net_WriteLong (int);
 void Net_WriteFloat (float);
 void Net_WriteString (const char *);
-void Net_WriteBytes (const uint8_t *, int len);
+void Net_WriteBytes (const BYTE *, int len);
 
-void Net_DoCommand (int type, uint8_t **stream, int player);
-void Net_SkipCommand (int type, uint8_t **stream);
+void Net_DoCommand (int type, BYTE **stream, int player);
+void Net_SkipCommand (int type, BYTE **stream);
 
 void Net_ClearBuffers ();
 
@@ -147,8 +143,6 @@ extern	struct ticcmd_t	localcmds[LOCALCMDTICS];
 
 extern	int 			maketic;
 extern	int 			nettics[MAXNETNODES];
-extern	int				netdelay[MAXNETNODES][BACKUPTICS];
-extern	int 			nodeforplayer[MAXPLAYERS];
 
 extern	ticcmd_t		netcmds[MAXPLAYERS][BACKUPTICS];
 extern	int 			ticdup;

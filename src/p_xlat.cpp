@@ -44,8 +44,6 @@
 #include "w_wad.h"
 #include "sc_man.h"
 #include "cmdlib.h"
-#include "g_levellocals.h"
-#include "actorinlines.h"
 #include "xlat/xlat.h"
 
 // define names for the TriggerType field of the general linedefs
@@ -62,15 +60,15 @@ typedef enum
 	PushMany,
 } triggertype_e;
 
-void P_TranslateLineDef (line_t *ld, maplinedef_t *mld, int lineindexforid)
+void P_TranslateLineDef (line_t *ld, maplinedef_t *mld)
 {
-	uint32_t special = mld->special;
-	short tag = mld->tag;
-	uint32_t flags =mld->flags;
+	unsigned short special = (unsigned short) LittleShort(mld->special);
+	short tag = LittleShort(mld->tag);
+	DWORD flags = LittleShort(mld->flags);
 	INTBOOL passthrough = 0;
 
-	uint32_t flags1 = flags;
-	uint32_t newflags = 0;
+	DWORD flags1 = flags;
+	DWORD newflags = 0;
 
 	for(int i=0;i<16;i++)
 	{
@@ -89,10 +87,10 @@ void P_TranslateLineDef (line_t *ld, maplinedef_t *mld, int lineindexforid)
 				passthrough = true;
 				break;
 			case -2:
-				ld->alpha = 0.75;
+				ld->Alpha = FRACUNIT*3/4;
 				break;
 			case -3:
-				ld->alpha = 0.25;
+				ld->Alpha = FRACUNIT / 4;
 				break;
 			default:
 				newflags |= LineFlagTranslations[i].newvalue;
@@ -102,14 +100,11 @@ void P_TranslateLineDef (line_t *ld, maplinedef_t *mld, int lineindexforid)
 	}
 	flags = newflags;
 
-	if (lineindexforid >= 0)
-	{
-		// For purposes of maintaining BOOM compatibility, each
-		// line also needs to have its ID set to the same as its tag.
-		// An external conversion program would need to do this more
-		// intelligently.
-		tagManager.AddLineID(lineindexforid, tag);
-	}
+	// For purposes of maintaining BOOM compatibility, each
+	// line also needs to have its ID set to the same as its tag.
+	// An external conversion program would need to do this more
+	// intelligently.
+	ld->id = tag;
 
 	// 0 specials are never translated.
 	if (special == 0)
@@ -224,7 +219,7 @@ void P_TranslateLineDef (line_t *ld, maplinedef_t *mld, int lineindexforid)
 				FBoomArg *arg = &b->Args[j];
 				int *destp;
 				int flagtemp;
-				uint8_t val = 0;	// quiet, GCC
+				BYTE val = 0;	// quiet, GCC
 				bool found;
 
 				if (arg->ArgNum < 4)
@@ -309,7 +304,7 @@ void P_TranslateTeleportThings ()
 
 	while ( (dest = iterator.Next()) )
 	{
-		if (!tagManager.SectorHasTags(dest->Sector))
+		if (dest->Sector->tag == 0)
 		{
 			dest->tid = 1;
 			dest->AddToHash ();
@@ -319,27 +314,27 @@ void P_TranslateTeleportThings ()
 
 	if (foundSomething)
 	{
-		for (auto &line : level.lines)
+		for (int i = 0; i < numlines; ++i)
 		{
-			if (line.special == Teleport)
+			if (lines[i].special == Teleport)
 			{
-				if (line.args[1] == 0)
+				if (lines[i].args[1] == 0)
 				{
-					line.args[0] = 1;
+					lines[i].args[0] = 1;
 				}
 			}
-			else if (line.special == Teleport_NoFog)
+			else if (lines[i].special == Teleport_NoFog)
 			{
-				if (line.args[2] == 0)
+				if (lines[i].args[2] == 0)
 				{
-					line.args[0] = 1;
+					lines[i].args[0] = 1;
 				}
 			}
-			else if (line.special == Teleport_ZombieChanger)
+			else if (lines[i].special == Teleport_ZombieChanger)
 			{
-				if (line.args[1] == 0)
+				if (lines[i].args[1] == 0)
 				{
-					line.args[0] = 1;
+					lines[i].args[0] = 1;
 				}
 			}
 		}

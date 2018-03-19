@@ -380,6 +380,7 @@ map MAP32 lookup "HUSTR_32"
 cluster 5
 {
 	flat = "$BGFLAT06"
+	music = "$MUSIC_READ_M"
 	exittext = lookup, "C1TEXT"
 
 }
@@ -389,6 +390,7 @@ cluster 5
 cluster 6
 {
 	flat = "$BGFLAT11"
+	music = "$MUSIC_READ_M"
 	exittext = lookup, "C2TEXT"
 
 }
@@ -398,6 +400,7 @@ cluster 6
 cluster 7
 {
 	flat = "$BGFLAT20"
+	music = "$MUSIC_READ_M"
 	exittext = lookup, "C3TEXT"
 }
 
@@ -406,6 +409,7 @@ cluster 7
 cluster 8
 {
 	flat = "$BGFLAT30"
+	music = "$MUSIC_READ_M"
 	exittext = lookup, "C4TEXT"
 }
 
@@ -414,6 +418,7 @@ cluster 8
 cluster 9
 {
 	flat = "$BGFLAT15"
+	music = "$MUSIC_READ_M"
 	entertext = lookup, "C5TEXT"
 }
 
@@ -422,6 +427,7 @@ cluster 9
 cluster 10
 {
 	flat = "$BGFLAT31"
+	music = "$MUSIC_READ_M"
 	entertext = lookup, "C6TEXT"
 }
 
@@ -530,7 +536,8 @@ map LEVEL09 lookup "NHUSTR_9"
 
 cluster 11
 {
-	flat = "SLIME16"
+	flat = "RROCK19"
+	music = "$MUSIC_READ_M"
 	exittext = lookup, "NERVETEXT"
 }
 

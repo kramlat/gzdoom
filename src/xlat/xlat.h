@@ -66,19 +66,19 @@ struct FBoomArg
 {
 	bool bOrExisting;
 	bool bUseConstant;
-	uint8_t ListSize;
-	uint8_t ArgNum;
-	uint8_t ConstantValue;
-	uint16_t AndValue;
-	uint16_t ResultFilter[15];
-	uint8_t ResultValue[15];
+	BYTE ListSize;
+	BYTE ArgNum;
+	BYTE ConstantValue;
+	WORD AndValue;
+	WORD ResultFilter[15];
+	BYTE ResultValue[15];
 };
 
 struct FBoomTranslator
 {
-	uint16_t FirstLinetype;
-	uint16_t LastLinetype;
-	uint8_t NewSpecial;
+	WORD FirstLinetype;
+	WORD LastLinetype;
+	BYTE NewSpecial;
 	TArray<FBoomArg> Args;
 } ;
 

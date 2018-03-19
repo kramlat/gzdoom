@@ -50,7 +50,7 @@ FColorMatcher::FColorMatcher ()
 	Pal = NULL;
 }
 
-FColorMatcher::FColorMatcher (const uint32_t *palette)
+FColorMatcher::FColorMatcher (const DWORD *palette)
 {
 	SetPalette (palette);
 }
@@ -66,15 +66,15 @@ FColorMatcher &FColorMatcher::operator= (const FColorMatcher &other)
 	return *this;
 }
 
-void FColorMatcher::SetPalette (const uint32_t *palette)
+void FColorMatcher::SetPalette (const DWORD *palette)
 {
 	Pal = (const PalEntry *)palette;
 }
 
-uint8_t FColorMatcher::Pick (int r, int g, int b)
+BYTE FColorMatcher::Pick (int r, int g, int b)
 {
 	if (Pal == NULL)
 		return 1;
 
-	return (uint8_t)BestColor ((uint32_t *)Pal, r, g, b);
+	return (BYTE)BestColor ((uint32 *)Pal, r, g, b);
 }

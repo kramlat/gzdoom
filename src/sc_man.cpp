@@ -1,60 +1,14 @@
-/* For code that originates from ZDoom the following applies:
-**
-**---------------------------------------------------------------------------
-** Copyright 2005-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
 
-// This file contains some code by Raven Software, licensed under:
-
-//-----------------------------------------------------------------------------
-//
-// Copyright 1994-1996 Raven Software
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
-//
-
-
-
+//**************************************************************************
+//**
+//** sc_man.c : Heretic 2 : Raven Software, Corp.
+//**
+//** $RCSfile: sc_man.c,v $
+//** $Revision: 1.3 $
+//** $Date: 96/01/06 03:23:43 $
+//** $Author: bgokey $
+//**
+//**************************************************************************
 
 // HEADER FILES ------------------------------------------------------------
 
@@ -87,31 +41,6 @@
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
 // CODE --------------------------------------------------------------------
-
-void VersionInfo::operator=(const char *string)
-{
-	char *endp;
-	major = (int16_t)clamp<unsigned long long>(strtoull(string, &endp, 10), 0, USHRT_MAX);
-	if (*endp == '.')
-	{
-		minor = (int16_t)clamp<unsigned long long>(strtoull(endp + 1, &endp, 10), 0, USHRT_MAX);
-		if (*endp == '.')
-		{
-			revision = (int16_t)clamp<unsigned long long>(strtoull(endp + 1, &endp, 10), 0, USHRT_MAX);
-			if (*endp != 0) major = USHRT_MAX;
-		}
-		else if (*endp == 0)
-		{
-			revision = 0;
-		}
-		else major = USHRT_MAX;
-	}
-	else if (*endp == 0)
-	{
-		minor = revision = 0;
-	}
-	else major = USHRT_MAX;
-}
 
 //==========================================================================
 //
@@ -190,8 +119,6 @@ FScanner &FScanner::operator=(const FScanner &other)
 	LastGotLine = other.LastGotLine;
 	CMode = other.CMode;
 	Escape = other.Escape;
-	StateMode = other.StateMode;
-	StateOptions = other.StateOptions;
 
 	// Copy public members
 	if (other.String == other.StringBuffer)
@@ -244,25 +171,18 @@ void FScanner::Open (const char *name)
 //
 //==========================================================================
 
-bool FScanner::OpenFile (const char *name)
+void FScanner::OpenFile (const char *name)
 {
-	Close ();
+	BYTE *filebuf;
+	int filesize;
 
-	FileReader fr;
-	if (!fr.OpenFile(name)) return false;
-	auto filesize = fr.GetLength();
-	auto filebuf = new uint8_t[filesize];
-	if (fr.Read(filebuf, filesize) != filesize)
-	{
-		delete[] filebuf;
-		return false;
-	}
+	Close ();
+	filesize = M_ReadFile (name, &filebuf);
 	ScriptBuffer = FString((const char *)filebuf, filesize);
 	delete[] filebuf;
 	ScriptName = name;	// This is used for error messages so the full file name is preferable
 	LumpNum = -1;
 	PrepareScript ();
-	return true;
 }
 
 //==========================================================================
@@ -276,21 +196,8 @@ bool FScanner::OpenFile (const char *name)
 
 void FScanner::OpenMem (const char *name, const char *buffer, int size)
 {
-	OpenString(name, FString(buffer, size));
-}
-
-//==========================================================================
-//
-// FScanner :: OpenString
-//
-// Like OpenMem, but takes a string directly.
-//
-//==========================================================================
-
-void FScanner::OpenString (const char *name, FString buffer)
-{
 	Close ();
-	ScriptBuffer = buffer;
+	ScriptBuffer = FString(buffer, size);
 	ScriptName = name;
 	LumpNum = -1;
 	PrepareScript ();
@@ -328,11 +235,11 @@ void FScanner::PrepareScript ()
 {
 	// The scanner requires the file to end with a '\n', so add one if
 	// it doesn't already.
-	if (ScriptBuffer.Len() == 0 || ScriptBuffer.Back() != '\n')
+	if (ScriptBuffer.Len() == 0 || ScriptBuffer[ScriptBuffer.Len() - 1] != '\n')
 	{
 		// If the last character in the buffer is a null character, change
 		// it to a newline. Otherwise, append a newline to the end.
-		if (ScriptBuffer.Len() > 0 && ScriptBuffer.Back() == '\0')
+		if (ScriptBuffer.Len() > 0 && ScriptBuffer[ScriptBuffer.Len() - 1] == '\0')
 		{
 			ScriptBuffer.LockBuffer()[ScriptBuffer.Len() - 1] = '\n';
 			ScriptBuffer.UnlockBuffer();
@@ -355,8 +262,6 @@ void FScanner::PrepareScript ()
 	LastGotLine = 1;
 	CMode = false;
 	Escape = true;
-	StateMode = 0;
-	StateOptions = false;
 	StringBuffer[0] = '\0';
 	BigStringBuffer = "";
 }
@@ -470,38 +375,6 @@ void FScanner::SetCMode (bool cmode)
 void FScanner::SetEscape (bool esc)
 {
 	Escape = esc;
-}
-
-//==========================================================================
-//
-// FScanner :: SetStateMode
-//
-// Enters state mode. This mode is very permissive for identifiers, which
-// it returns as TOK_NonWhitespace. The only character sequences that are
-// not returned as such are these:
-//
-//   * stop
-//   * wait
-//   * fail
-//   * loop
-//   * goto - Automatically exits state mode after it's seen.
-//   * :
-//   * ;
-//   * } - Automatically exits state mode after it's seen.
-//
-// Quoted strings are returned as TOK_NonWhitespace, minus the quotes. Once
-// two consecutive sequences of TOK_NonWhitespace have been encountered
-// (which would be the state's sprite and frame specifiers), nearly normal
-// processing resumes, with the exception that various identifiers
-// used for state options will be returned as tokens and not identifiers.
-// This ends once a ';' or '{' character is encountered.
-//
-//==========================================================================
-
-void FScanner::SetStateMode(bool stately)
-{
-	StateMode = stately ? 2 : 0;
-	StateOptions = stately;
 }
 
 //==========================================================================
@@ -627,19 +500,8 @@ bool FScanner::GetToken ()
 		else if (TokenType == TK_IntConst)
 		{
 			char *stopper;
-			// Check for unsigned
-			if (String[StringLen - 1] == 'u' || String[StringLen - 1] == 'U' ||
-				String[StringLen - 2] == 'u' || String[StringLen - 2] == 'U')
-			{
-				TokenType = TK_UIntConst;
-				Number = (int)strtoull(String, &stopper, 0);
-				Float = (unsigned)Number;
-			}
-			else
-			{
-				Number = (int)strtoll(String, &stopper, 0);
-				Float = Number;
-			}
+			Number = strtol(String, &stopper, 0);
+			Float = Number;
 		}
 		else if (TokenType == TK_FloatConst)
 		{
@@ -738,7 +600,7 @@ bool FScanner::GetNumber ()
 		}
 		else
 		{
-			Number = (int)strtoll (String, &stopper, 0);
+			Number = strtol (String, &stopper, 0);
 			if (*stopper != 0)
 			{
 				ScriptError ("SC_GetNumber: Bad numeric constant \"%s\".", String);
@@ -793,7 +655,7 @@ bool FScanner::CheckNumber ()
 		}
 		else
 		{
-			Number = (int)strtoll (String, &stopper, 0);
+			Number = strtol (String, &stopper, 0);
 			if (*stopper != 0)
 			{
 				UnGet();
@@ -940,7 +802,7 @@ int FScanner::MustMatchString (const char * const *strings, size_t stride)
 	i = MatchString (strings, stride);
 	if (i == -1)
 	{
-		ScriptError ("Unknown keyword '%s'", String);
+		ScriptError (NULL);
 	}
 	return i;
 }
@@ -954,76 +816,6 @@ int FScanner::MustMatchString (const char * const *strings, size_t stride)
 bool FScanner::Compare (const char *text)
 {
 	return (stricmp (text, String) == 0);
-}
-
-
-//==========================================================================
-//
-// Convenience helpers that parse an entire number including a leading minus or plus sign
-//
-//==========================================================================
-
-bool FScanner::ScanValue(bool allowfloat)
-{
-	bool neg = false;
-	if (!GetToken()) 
-	{
-		return false;
-	}
-	if (TokenType == '-' || TokenType == '+')
-	{
-		neg = TokenType == '-';
-		if (!GetToken())
-		{
-			return false;
-		}
-	}
-	if (TokenType != TK_IntConst && (TokenType != TK_FloatConst || !allowfloat)) 
-	{
-		return false;
-	}
-	if (neg)
-	{
-		Number = -Number;
-		Float = -Float;
-	}
-	return true;
-}
-
-bool FScanner::CheckValue(bool allowfloat) 
-{ 
-	auto savedstate = SavePos();
-	bool res = ScanValue(allowfloat);
-	if (!res) RestorePos(savedstate);
-	return res;
-}
-
-void FScanner::MustGetValue(bool allowfloat)
-{
-	if (!ScanValue(allowfloat)) ScriptError(allowfloat ? "Numeric constant expected" : "Integer constant expected");
-}
-
-bool FScanner::CheckBoolToken()
-{
-	if (CheckToken(TK_True))
-	{
-		Number = 1;
-		Float = 1;
-		return true;
-	}
-	if (CheckToken(TK_False))
-	{
-		Number = 0;
-		Float = 0;
-		return true;
-	}
-	return false;
-}
-
-void FScanner::MustGetBoolToken()
-{
-	if (!CheckBoolToken())
-		ScriptError("Expected true or false");
 }
 
 //==========================================================================
@@ -1073,7 +865,7 @@ FString FScanner::TokenName (int token, const char *string)
 
 //==========================================================================
 //
-// FScanner::GetMessageLine
+// FScanner::ScriptError
 //
 //==========================================================================
 
@@ -1088,7 +880,7 @@ int FScanner::GetMessageLine()
 //
 //==========================================================================
 
-void FScanner::ScriptError (const char *message, ...)
+void STACK_ARGS FScanner::ScriptError (const char *message, ...)
 {
 	FString composed;
 
@@ -1114,7 +906,7 @@ void FScanner::ScriptError (const char *message, ...)
 //
 //==========================================================================
 
-void FScanner::ScriptMessage (const char *message, ...)
+void STACK_ARGS FScanner::ScriptMessage (const char *message, ...)
 {
 	FString composed;
 
@@ -1154,9 +946,6 @@ void FScanner::CheckOpen()
 //
 //==========================================================================
 int FScriptPosition::ErrorCounter;
-int FScriptPosition::WarnCounter;
-bool FScriptPosition::StrictErrors;	// makes all OPTERROR messages real errors.
-bool FScriptPosition::errorout;		// call I_Error instead of printing the error itself.
 
 FScriptPosition::FScriptPosition(const FScriptPosition &other)
 {
@@ -1189,22 +978,11 @@ FScriptPosition &FScriptPosition::operator=(const FScriptPosition &other)
 //
 //==========================================================================
 
-CVAR(Bool, strictdecorate, false, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
-
-void FScriptPosition::Message (int severity, const char *message, ...) const
+void STACK_ARGS FScriptPosition::Message (int severity, const char *message, ...) const
 {
 	FString composed;
 
-	if (severity == MSG_DEBUGLOG && developer < DMSG_NOTIFY) return;
-	if (severity == MSG_DEBUGERROR && developer < DMSG_ERROR) return;
-	if (severity == MSG_DEBUGWARN && developer < DMSG_WARNING) return;
-	if (severity == MSG_DEBUGMSG && developer < DMSG_NOTIFY) return;
-	if (severity == MSG_OPTERROR)
-	{
-		severity = StrictErrors || strictdecorate ? MSG_ERROR : MSG_WARNING;
-	}
-	// This is mainly for catching the error with an exception handler.
-	if (severity == MSG_ERROR && errorout) severity = MSG_FATAL;
+	if ((severity == MSG_DEBUG || severity == MSG_DEBUGLOG) && !developer) return;
 
 	if (message == NULL)
 	{
@@ -1227,11 +1005,8 @@ void FScriptPosition::Message (int severity, const char *message, ...) const
 		return;
 
 	case MSG_WARNING:
-	case MSG_DEBUGWARN:
-	case MSG_DEBUGERROR:	// This is intentionally not being printed as an 'error', the difference to MSG_DEBUGWARN is only the severity level at which it gets triggered.
-		WarnCounter++;
 		type = "warning";
-		color = TEXTCOLOR_ORANGE;
+		color = TEXTCOLOR_YELLOW;
 		break;
 
 	case MSG_ERROR:
@@ -1241,7 +1016,7 @@ void FScriptPosition::Message (int severity, const char *message, ...) const
 		break;
 
 	case MSG_MESSAGE:
-	case MSG_DEBUGMSG:
+	case MSG_DEBUG:
 		type = "message";
 		color = TEXTCOLOR_GREEN;
 		break;

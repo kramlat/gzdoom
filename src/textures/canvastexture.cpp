@@ -53,6 +53,7 @@ FCanvasTexture::FCanvasTexture (const char *name, int width, int height)
 	DummySpans[1].TopOffset = 0;
 	DummySpans[1].Length = 0;
 	UseType = TEX_Wall;
+	Canvas = NULL;
 	bNeedsUpdate = true;
 	bDidUpdate = false;
 	bHasCanvas = true;
@@ -65,12 +66,12 @@ FCanvasTexture::~FCanvasTexture ()
 	Unload ();
 }
 
-const uint8_t *FCanvasTexture::GetColumn(FRenderStyle style, unsigned int column, const Span **spans_out)
+const BYTE *FCanvasTexture::GetColumn (unsigned int column, const Span **spans_out)
 {
 	bNeedsUpdate = true;
 	if (Canvas == NULL)
 	{
-		MakeTexture (style);
+		MakeTexture ();
 	}
 	if ((unsigned)column >= (unsigned)Width)
 	{
@@ -90,100 +91,54 @@ const uint8_t *FCanvasTexture::GetColumn(FRenderStyle style, unsigned int column
 	return Pixels + column*Height;
 }
 
-const uint8_t *FCanvasTexture::GetPixels (FRenderStyle style)
+const BYTE *FCanvasTexture::GetPixels ()
 {
 	bNeedsUpdate = true;
 	if (Canvas == NULL)
 	{
-		MakeTexture (style);
+		MakeTexture ();
 	}
 	return Pixels;
 }
 
-const uint32_t *FCanvasTexture::GetPixelsBgra()
+void FCanvasTexture::MakeTexture ()
 {
-	bNeedsUpdate = true;
-	if (CanvasBgra == NULL)
-	{
-		MakeTextureBgra();
-	}
-	return PixelsBgra;
-}
-
-void FCanvasTexture::MakeTexture (FRenderStyle)	// This ignores the render style because making it work as alpha texture is impractical.
-{
-	Canvas = new DSimpleCanvas (Width, Height, false);
+	Canvas = new DSimpleCanvas (Width, Height);
 	Canvas->Lock ();
-
+	GC::AddSoftRoot(Canvas);
 	if (Width != Height || Width != Canvas->GetPitch())
 	{
-		Pixels = new uint8_t[Width*Height];
+		Pixels = new BYTE[Width*Height];
 		bPixelsAllocated = true;
 	}
 	else
 	{
-		Pixels = (uint8_t*)Canvas->GetBuffer();
+		Pixels = Canvas->GetBuffer();
 		bPixelsAllocated = false;
 	}
-
 	// Draw a special "unrendered" initial texture into the buffer.
 	memset (Pixels, 0, Width*Height/2);
 	memset (Pixels+Width*Height/2, 255, Width*Height/2);
-}
-
-void FCanvasTexture::MakeTextureBgra()
-{
-	CanvasBgra = new DSimpleCanvas(Width, Height, true);
-	CanvasBgra->Lock();
-
-	if (Width != Height || Width != CanvasBgra->GetPitch())
-	{
-		PixelsBgra = new uint32_t[Width*Height];
-		bPixelsAllocatedBgra = true;
-	}
-	else
-	{
-		PixelsBgra = (uint32_t*)CanvasBgra->GetBuffer();
-		bPixelsAllocatedBgra = false;
-	}
-
-	// Draw a special "unrendered" initial texture into the buffer.
-	memset(PixelsBgra, 0, Width*Height / 2 * 4);
-	memset(PixelsBgra + Width*Height / 2, 255, Width*Height / 2 * 4);
 }
 
 void FCanvasTexture::Unload ()
 {
 	if (bPixelsAllocated)
 	{
-		if (Pixels != NULL) delete[] Pixels;
+		if (Pixels != NULL) delete [] Pixels;
 		bPixelsAllocated = false;
 		Pixels = NULL;
 	}
 
-	if (bPixelsAllocatedBgra)
-	{
-		if (PixelsBgra != NULL) delete[] PixelsBgra;
-		bPixelsAllocatedBgra = false;
-		PixelsBgra = NULL;
-	}
-
 	if (Canvas != NULL)
 	{
-		delete Canvas;
-		Canvas = nullptr;
+		GC::DelSoftRoot(Canvas);
+		Canvas->Destroy();
+		Canvas = NULL;
 	}
-
-	if (CanvasBgra != NULL)
-	{
-		delete CanvasBgra;
-		CanvasBgra = nullptr;
-	}
-
-	FTexture::Unload();
 }
 
-bool FCanvasTexture::CheckModified (FRenderStyle)
+bool FCanvasTexture::CheckModified ()
 {
 	if (bDidUpdate)
 	{

@@ -35,7 +35,6 @@
 #include <string.h>
 #include "name.h"
 #include "c_dispatch.h"
-#include "c_console.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -183,7 +182,6 @@ void FName::NameManager::InitBuckets ()
 	// Register built-in names. 'None' must be name 0.
 	for (size_t i = 0; i < countof(PredefinedNames); ++i)
 	{
-		assert((0 == FindName(PredefinedNames[i], true)) && "Predefined name already inserted");
 		FindName (PredefinedNames[i], false);
 	}
 }
@@ -268,8 +266,6 @@ FName::NameManager::NameBlock *FName::NameManager::AddBlock (size_t len)
 FName::NameManager::~NameManager()
 {
 	NameBlock *block, *next;
-
-	C_ClearTabCommands();
 
 	for (block = Blocks; block != NULL; block = next)
 	{

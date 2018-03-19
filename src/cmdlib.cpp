@@ -1,25 +1,3 @@
-//-----------------------------------------------------------------------------
-//
-// Copyright 1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
-//
-
 // cmdlib.c (mostly borrowed from the Q2 source)
 
 #ifdef _WIN32
@@ -37,7 +15,6 @@
 #include "cmdlib.h"
 #include "i_system.h"
 #include "v_text.h"
-#include "sc_man.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -117,6 +94,23 @@ char *copystring (const char *s)
 	return b;
 }
 
+//============================================================================
+//
+// ncopystring
+//
+// If the string has no content, returns NULL. Otherwise, returns a copy.
+//
+//============================================================================
+
+char *ncopystring (const char *string)
+{
+	if (string == NULL || string[0] == 0)
+	{
+		return NULL;
+	}
+	return copystring (string);
+}
+
 //==========================================================================
 //
 // ReplaceString
@@ -147,6 +141,26 @@ void ReplaceString (char **ptr, const char *str)
 
 //==========================================================================
 //
+// Q_filelength
+//
+//==========================================================================
+
+int Q_filelength (FILE *f)
+{
+	int		pos;
+	int		end;
+
+	pos = ftell (f);
+	fseek (f, 0, SEEK_END);
+	end = ftell (f);
+	fseek (f, pos, SEEK_SET);
+
+	return end;
+}
+
+
+//==========================================================================
+//
 // FileExists
 //
 // Returns true if the given path exists and is a readable file.
@@ -155,24 +169,13 @@ void ReplaceString (char **ptr, const char *str)
 
 bool FileExists (const char *filename)
 {
-	bool isdir;
-	bool res = DirEntryExists(filename, &isdir);
-	return res && !isdir;
-}
+	struct stat buff;
 
-//==========================================================================
-//
-// DirExists
-//
-// Returns true if the given path exists and is a directory.
-//
-//==========================================================================
+	// [RH] Empty filenames are never there
+	if (filename == NULL || *filename == 0)
+		return false;
 
-bool DirExists(const char *filename)
-{
-	bool isdir;
-	bool res = DirEntryExists(filename, &isdir);
-	return res && isdir;
+	return stat(filename, &buff) == 0 && !(buff.st_mode & S_IFDIR);
 }
 
 //==========================================================================
@@ -183,16 +186,13 @@ bool DirExists(const char *filename)
 //
 //==========================================================================
 
-bool DirEntryExists(const char *pathname, bool *isdir)
+bool DirEntryExists(const char *pathname)
 {
-	if (isdir) *isdir = false;
 	if (pathname == NULL || *pathname == 0)
 		return false;
 
 	struct stat info;
-	bool res = stat(pathname, &info) == 0;
-	if (isdir) *isdir = !!(info.st_mode & S_IFDIR);
-	return res;
+	return stat(pathname, &info) == 0;
 }
 
 //==========================================================================
@@ -324,7 +324,7 @@ FString ExtractFileBase (const char *path, bool include_extension)
 //
 //==========================================================================
 
-int ParseHex (const char *hex, FScriptPosition *sc)
+int ParseHex (const char *hex)
 {
 	const char *str;
 	int num;
@@ -342,14 +342,28 @@ int ParseHex (const char *hex, FScriptPosition *sc)
 		else if (*str >= 'A' && *str <= 'F')
 			num += 10 + *str-'A';
 		else {
-			if (!sc) Printf ("Bad hex number: %s\n",hex);
-			else sc->Message(MSG_WARNING, "Bad hex number: %s", hex);
+			Printf ("Bad hex number: %s\n",hex);
 			return 0;
 		}
 		str++;
 	}
 
 	return num;
+}
+
+//==========================================================================
+//
+// ParseNum
+//
+//==========================================================================
+
+int ParseNum (const char *str)
+{
+	if (str[0] == '$')
+		return ParseHex (str+1);
+	if (str[0] == '0' && str[1] == 'x')
+		return ParseHex (str+2);
+	return atol (str);
 }
 
 //==========================================================================
@@ -428,7 +442,7 @@ bool CheckWildcards (const char *pattern, const char *text)
 void FormatGUID (char *buffer, size_t buffsize, const GUID &guid)
 {
 	mysnprintf (buffer, buffsize, "{%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
-		(uint32_t)guid.Data1, guid.Data2, guid.Data3,
+		(uint32)guid.Data1, guid.Data2, guid.Data3,
 		guid.Data4[0], guid.Data4[1],
 		guid.Data4[2], guid.Data4[3],
 		guid.Data4[4], guid.Data4[5],
@@ -471,45 +485,16 @@ const char *myasctime ()
 void DoCreatePath(const char *fn)
 {
 	char drive[_MAX_DRIVE];
-	char dir[_MAX_DIR];
-	_splitpath_s(fn, drive, sizeof drive, dir, sizeof dir, nullptr, 0, nullptr, 0);
-
-	if ('\0' == *dir)
-	{
-		// Root/current/parent directory always exists
-		return;
-	}
-
 	char path[PATH_MAX];
-	_makepath_s(path, sizeof path, drive, dir, nullptr, nullptr);
+	char p[PATH_MAX];
+	int i;
 
-	if ('\0' == *path)
-	{
-		// No need to process empty relative path
-		return;
-	}
-
-	// Remove trailing path separator(s)
-	for (size_t i = strlen(path); 0 != i; --i)
-	{
-		char& lastchar = path[i - 1];
-
-		if ('/' == lastchar || '\\' == lastchar)
-		{
-			lastchar = '\0';
-		}
-		else
-		{
-			break;
-		}
-	}
-
-	// Create all directories for given path
-	if ('\0' != *path)
-	{
-		DoCreatePath(path);
-		_mkdir(path);
-	}
+	_splitpath(fn,drive,path,NULL,NULL);
+	_makepath(p,drive,path,NULL,NULL);
+	i=(int)strlen(p);
+	if (p[i-1]=='/' || p[i-1]=='\\') p[i-1]=0;
+	if (*path) DoCreatePath(p);
+	_mkdir(p);
 }
 
 void CreatePath(const char *fn)
@@ -544,13 +529,18 @@ void CreatePath(const char *fn)
 		{
 			*p = '\0';
 		}
-		if (!DirEntryExists(copy) && mkdir(copy, 0755) == -1)
+		struct stat info;
+		if (stat(copy, &info) == 0)
 		{
-			// failed
+			if (info.st_mode & S_IFDIR)
+				goto exists;
+		}
+		if (mkdir(copy, 0755) == -1)
+		{ // failed
 			free(copy);
 			return;
 		}
-		if (p != NULL)
+exists:	if (p != NULL)
 		{
 			*p = '/';
 		}
@@ -636,17 +626,14 @@ int strbin (char *str)
 				case '5':
 				case '6':
 				case '7':
-					c = *p - '0';
-					for (i = 0; i < 2; i++)
-					{
-						p++;
+					c = 0;
+					for (i = 0; i < 3; i++) {
+						c <<= 3;
 						if (*p >= '0' && *p <= '7')
-							c = (c << 3) + *p - '0';
+							c += *p-'0';
 						else
-						{
-							p--;
 							break;
-						}
+						p++;
 					}
 					*str++ = c;
 					break;
@@ -739,17 +726,14 @@ FString strbin1 (const char *start)
 				case '5':
 				case '6':
 				case '7':
-					c = *p - '0';
-					for (i = 0; i < 2; i++)
-					{
-						p++;
+					c = 0;
+					for (i = 0; i < 3; i++) {
+						c <<= 3;
 						if (*p >= '0' && *p <= '7')
-							c = (c << 3) + *p - '0';
+							c += *p-'0';
 						else
-						{
-							p--;
 							break;
-						}
+						p++;
 					}
 					result << c;
 					break;
@@ -999,7 +983,10 @@ void ScanDirectory(TArray<FFileList> &list, const char *dirpath)
 		FFileList *fl = &list[list.Reserve(1)];
 		fl->Filename << dirpath << file->d_name;
 
-		fl->isDirectory = DirExists(fl->Filename);
+		struct stat fileStat;
+		stat(fl->Filename, &fileStat);
+		fl->isDirectory = S_ISDIR(fileStat.st_mode);
+
 		if(fl->isDirectory)
 		{
 			FString newdir = fl->Filename;
@@ -1061,20 +1048,3 @@ void ScanDirectory(TArray<FFileList> &list, const char *dirpath)
 	delete[] argv[0];
 }
 #endif
-
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-bool IsAbsPath(const char *name)
-{
-    if (IsSeperator(name[0])) return true;
-#ifdef _WIN32
-    /* [A-Za-z]: (for Windows) */
-    if (isalpha(name[0]) && name[1] == ':')    return true;
-#endif /* _WIN32 */
-    return 0;
-}

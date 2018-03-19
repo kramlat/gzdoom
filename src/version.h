@@ -34,10 +34,6 @@
 #ifndef __VERSION_H__
 #define __VERSION_H__
 
-#ifdef _WIN32
-#include "gitinfo.h"
-#endif // _WIN32
-
 const char *GetGitDescription();
 const char *GetGitHash();
 const char *GetGitTime();
@@ -45,70 +41,66 @@ const char *GetVersionString();
 
 /** Lots of different version numbers **/
 
-#ifdef GIT_DESCRIPTION
-#define VERSIONSTR GIT_DESCRIPTION
-#else
-#define VERSIONSTR "3.3pre"
-#endif
+#define VERSIONSTR "2.1pre"
 
 // The version as seen in the Windows resource
-#define RC_FILEVERSION 3,2,9999,0
-#define RC_PRODUCTVERSION 3,2,9999,0
-#define RC_PRODUCTVERSION2 VERSIONSTR
-// These are for content versioning. The current state is '3.3'.
-#define VER_MAJOR 3
-#define VER_MINOR 3
-#define VER_REVISION 0
+#define RC_FILEVERSION 2,0,9999,0
+#define RC_PRODUCTVERSION 2,0,9999,0
+#define RC_PRODUCTVERSION2 "2.1pre"
 
 // Version identifier for network games.
 // Bump it every time you do a release unless you're certain you
 // didn't change anything that will affect sync.
-#define NETGAMEVERSION 235
+#define NETGAMEVERSION 230
 
 // Version stored in the ini's [LastRun] section.
 // Bump it if you made some configuration change that you want to
 // be able to migrate in FGameConfigFile::DoGlobalSetup().
-#define LASTRUNVERSION "215"
+#define LASTRUNVERSION "210"
 
 // Protocol version used in demos.
 // Bump it if you change existing DEM_ commands or add new ones.
 // Otherwise, it should be safe to leave it alone.
-#define DEMOGAMEVERSION 0x221
+#define DEMOGAMEVERSION 0x21B
 
 // Minimum demo version we can play.
 // Bump it whenever you change or remove existing DEM_ commands.
-#define MINDEMOVERSION 0x21F
+#define MINDEMOVERSION 0x21B
 
 // SAVEVER is the version of the information stored in level snapshots.
 // Note that SAVEVER is not directly comparable to VERSION.
 // SAVESIG should match SAVEVER.
 
-// extension for savegames
-#define SAVEGAME_EXT "zds"
-
 // MINSAVEVER is the minimum level snapshot version that can be loaded.
-#define MINSAVEVER	4551
+#define MINSAVEVER	3100
 
 // Use 4500 as the base git save version, since it's higher than the
 // SVN revision ever got.
-#define SAVEVER 4552
+#define SAVEVER 4512
+
+#define SAVEVERSTRINGIFY2(x) #x
+#define SAVEVERSTRINGIFY(x) SAVEVERSTRINGIFY2(x)
+#define SAVESIG "ZDOOMSAVE" SAVEVERSTRINGIFY(SAVEVER)
+
+#define DYNLIGHT
 
 // This is so that derivates can use the same savegame versions without worrying about engine compatibility
 #define GAMESIG "GZDOOM"
 #define BASEWAD "gzdoom.pk3"
-#define OPTIONALWAD "zd_extra.pk3"
 
 // More stuff that needs to be different for derivatives.
 #define GAMENAME "GZDoom"
-#define GAMENAMELOWERCASE "gzdoom"
-#define FORUM_URL "http://forum.zdoom.org/"
-#define BUGS_FORUM_URL	"http://forum.zdoom.org/viewforum.php?f=2"
+#define FORUM_URL "http://forum.drdteam.org"
+#define BUGS_FORUM_URL	"http://forum.drdteam.org/viewforum.php?f=24"
 
 #if defined(__APPLE__) || defined(_WIN32)
 #define GAME_DIR GAMENAME
 #else
-#define GAME_DIR ".config/" GAMENAMELOWERCASE
+#define GAME_DIR ".config/gzdoom"
 #endif
 
+
+// The maximum length of one save game description for the menus.
+#define SAVESTRINGSIZE		24
 
 #endif //__VERSION_H__

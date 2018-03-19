@@ -1,44 +1,7 @@
-/*
-** textures.h
-**
-**---------------------------------------------------------------------------
-** Copyright 2005-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
-
 #ifndef __TEXTURES_H
 #define __TEXTURES_H
 
 #include "doomtype.h"
-#include "vectors.h"
-#include "r_data/renderstyle.h"
-#include <vector>
 
 struct FloatRect
 {
@@ -65,6 +28,8 @@ class FBitmap;
 struct FRemapTable;
 struct FCopyInfo;
 class FScanner;
+struct PClass;
+class FArchive;
 
 // Texture IDs
 class FTextureManager;
@@ -72,11 +37,43 @@ class FTerrainTypeArray;
 class FGLTexture;
 class FMaterial;
 
+class FTextureID
+{
+	friend class FTextureManager;
+	friend FArchive &operator<< (FArchive &arc, FTextureID &tex);
+	friend FTextureID GetHUDIcon(const PClass *cls);
+	friend void R_InitSpriteDefs ();
+
+public:
+	FTextureID() throw() {}
+	bool isNull() const { return texnum == 0; }
+	bool isValid() const { return texnum > 0; }
+	bool Exists() const { return texnum >= 0; }
+	void SetInvalid() { texnum = -1; }
+	void SetNull() { texnum = 0; }
+	bool operator ==(const FTextureID &other) const { return texnum == other.texnum; }
+	bool operator !=(const FTextureID &other) const { return texnum != other.texnum; }
+	FTextureID operator +(int offset) throw();
+	int GetIndex() const { return texnum; }	// Use this only if you absolutely need the index!
+
+	// The switch list needs these to sort the switches by texture index
+	int operator -(FTextureID other) const { return texnum - other.texnum; }
+	bool operator < (FTextureID other) const { return texnum < other.texnum; }
+	bool operator > (FTextureID other) const { return texnum > other.texnum; }
+	
+protected:
+	FTextureID(int num) { texnum = num; }
+private:
+	int texnum;
+};
+
 class FNullTextureID : public FTextureID
 {
 public:
 	FNullTextureID() : FTextureID(0) {}
 };
+
+FArchive &operator<< (FArchive &arc, FTextureID &tex);
 
 //
 // Animating textures and planes
@@ -87,15 +84,14 @@ public:
 struct FAnimDef
 {
 	FTextureID 	BasePic;
-	uint16_t	NumFrames;
-	uint16_t	CurFrame;
-	uint8_t	AnimType;
-	bool	bDiscrete;			// taken out of AnimType to have better control
-	uint64_t	SwitchTime;			// Time to advance to next frame
+	WORD	NumFrames;
+	WORD	CurFrame;
+	BYTE	AnimType;
+	DWORD	SwitchTime;			// Time to advance to next frame
 	struct FAnimFrame
 	{
-		uint32_t	SpeedMin;		// Speeds are in ms, not tics
-		uint32_t	SpeedRange;
+		DWORD	SpeedMin;		// Speeds are in ms, not tics
+		DWORD	SpeedRange;
 		FTextureID	FramePic;
 	} Frames[1];
 	enum
@@ -104,23 +100,23 @@ struct FAnimDef
 		ANIM_Backward,
 		ANIM_OscillateUp,
 		ANIM_OscillateDown,
-		ANIM_Random
+		ANIM_DiscreteFrames
 	};
 
-	void SetSwitchTime (uint64_t mstime);
+	void SetSwitchTime (DWORD mstime);
 };
 
 struct FSwitchDef
 {
 	FTextureID PreTexture;		// texture to switch from
 	FSwitchDef *PairDef;		// switch def to use to return to PreTexture
-	uint16_t NumFrames;		// # of animation frames
+	WORD NumFrames;		// # of animation frames
 	bool QuestPanel;	// Special texture for Strife mission
 	int Sound;			// sound to play at start of animation. Changed to int to avoiud having to include s_sound here.
 	struct frame		// Array of times followed by array of textures
 	{					//   actual length of each array is <NumFrames>
-		uint16_t TimeMin;
-		uint16_t TimeRnd;
+		WORD TimeMin;
+		WORD TimeRnd;
 		FTextureID Texture;
 	} frames[1];
 };
@@ -140,13 +136,15 @@ struct FDoorAnimation
 // textures from the TEXTURE1/2 lists of patches.
 struct patch_t
 { 
-	int16_t			width;			// bounding box size 
-	int16_t			height; 
-	int16_t			leftoffset; 	// pixels to the left of origin 
-	int16_t			topoffset;		// pixels below the origin 
-	uint32_t 			columnofs[];	// only [width] used
+	SWORD			width;			// bounding box size 
+	SWORD			height; 
+	SWORD			leftoffset; 	// pixels to the left of origin 
+	SWORD			topoffset;		// pixels below the origin 
+	DWORD 			columnofs[];	// only [width] used
 	// the [0] is &columnofs[width] 
 };
+
+class FileReader;
 
 // All FTextures present their data to the world in 8-bit format, but if
 // the source data is something else, this is it.
@@ -172,33 +170,34 @@ public:
 	static FTexture *CreateTexture(int lumpnum, int usetype);
 	virtual ~FTexture ();
 
-	int16_t LeftOffset, TopOffset;
+	SWORD LeftOffset, TopOffset;
 
-	uint8_t WidthBits, HeightBits;
+	BYTE WidthBits, HeightBits;
 
-	DVector2 Scale;
+	fixed_t		xScale;
+	fixed_t		yScale;
 
 	int SourceLump;
 	FTextureID id;
 
 	FString Name;
-	uint8_t UseType;	// This texture's primary purpose
+	BYTE UseType;	// This texture's primary purpose
 
-	uint8_t bNoDecals:1;		// Decals should not stick to texture
-	uint8_t bNoRemap0:1;		// Do not remap color 0 (used by front layer of parallax skies)
-	uint8_t bWorldPanning:1;	// Texture is panned in world units rather than texels
-	uint8_t bMasked:1;			// Texture (might) have holes
-	uint8_t bAlphaTexture:1;	// Texture is an alpha channel without color information
-	uint8_t bHasCanvas:1;		// Texture is based off FCanvasTexture
-	uint8_t bWarped:2;			// This is a warped texture. Used to avoid multiple warps on one texture
-	uint8_t bComplex:1;		// Will be used to mark extended MultipatchTextures that have to be
+	BYTE bNoDecals:1;		// Decals should not stick to texture
+	BYTE bNoRemap0:1;		// Do not remap color 0 (used by front layer of parallax skies)
+	BYTE bWorldPanning:1;	// Texture is panned in world units rather than texels
+	BYTE bMasked:1;			// Texture (might) have holes
+	BYTE bAlphaTexture:1;	// Texture is an alpha channel without color information
+	BYTE bHasCanvas:1;		// Texture is based off FCanvasTexture
+	BYTE bWarped:2;			// This is a warped texture. Used to avoid multiple warps on one texture
+	BYTE bComplex:1;		// Will be used to mark extended MultipatchTextures that have to be
 							// fully composited before subjected to any kind of postprocessing instead of
 							// doing it per patch.
-	uint8_t bMultiPatch:1;		// This is a multipatch texture (we really could use real type info for textures...)
-	uint8_t bKeepAround:1;		// This texture was used as part of a multi-patch texture. Do not free it.
+	BYTE bMultiPatch:1;		// This is a multipatch texture (we really could use real type info for textures...)
+	BYTE bKeepAround:1;		// This texture was used as part of a multi-patch texture. Do not free it.
 
-	uint16_t Rotations;
-	int16_t SkyOffset;
+	WORD Rotations;
+	SWORD SkyOffset;
 
 	enum // UseTypes
 	{
@@ -207,6 +206,7 @@ public:
 		TEX_Flat,
 		TEX_Sprite,
 		TEX_WallPatch,
+		TEX_Build,
 		TEX_SkinSprite,
 		TEX_Decal,
 		TEX_MiscPatch,
@@ -220,35 +220,24 @@ public:
 
 	struct Span
 	{
-		uint16_t TopOffset;
-		uint16_t Length;	// A length of 0 terminates this column
+		WORD TopOffset;
+		WORD Length;	// A length of 0 terminates this column
 	};
 
 	// Returns a single column of the texture
-	virtual const uint8_t *GetColumn(unsigned int column, const Span **spans_out) = delete;
-	virtual const uint8_t *GetColumn(FRenderStyle style, unsigned int column, const Span **spans_out) = 0;
-
-	// Returns a single column of the texture, in BGRA8 format
-	virtual const uint32_t *GetColumnBgra(unsigned int column, const Span **spans_out);
+	virtual const BYTE *GetColumn (unsigned int column, const Span **spans_out) = 0;
 
 	// Returns the whole texture, stored in column-major order
-	virtual const uint8_t *GetPixels() = delete;
-	virtual const uint8_t *GetPixels(FRenderStyle style) = 0;
-
-	// Returns the whole texture, stored in column-major order, in BGRA8 format
-	virtual const uint32_t *GetPixelsBgra();
-
-	// Returns true if GetPixelsBgra includes mipmaps
-	virtual bool Mipmapped() { return true; }
-
+	virtual const BYTE *GetPixels () = 0;
+	
 	virtual int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate=0, FCopyInfo *inf = NULL);
-	int CopyTrueColorTranslated(FBitmap *bmp, int x, int y, int rotate, PalEntry *remap, FCopyInfo *inf = NULL);
+	int CopyTrueColorTranslated(FBitmap *bmp, int x, int y, int rotate, FRemapTable *remap, FCopyInfo *inf = NULL);
 	virtual bool UseBasePalette();
 	virtual int GetSourceLump() { return SourceLump; }
 	virtual FTexture *GetRedirect(bool wantwarped);
 	virtual FTexture *GetRawTexture();		// for FMultiPatchTexture to override
 
-	virtual void Unload ();
+	virtual void Unload () = 0;
 
 	// Returns the native pixel format for this image
 	virtual FTextureFormat GetFormat();
@@ -260,31 +249,34 @@ public:
 	void KillNative();
 
 	// Fill the native texture buffer with pixel data for this image
-	virtual void FillBuffer(uint8_t *buff, int pitch, int height, FTextureFormat fmt);
+	virtual void FillBuffer(BYTE *buff, int pitch, int height, FTextureFormat fmt);
 
 	int GetWidth () { return Width; }
 	int GetHeight () { return Height; }
 
-	int GetScaledWidth () { int foo = int((Width * 2) / Scale.X); return (foo >> 1) + (foo & 1); }
-	int GetScaledHeight () { int foo = int((Height * 2) / Scale.Y); return (foo >> 1) + (foo & 1); }
-	double GetScaledWidthDouble () { return Width / Scale.X; }
-	double GetScaledHeightDouble () { return Height / Scale.Y; }
-	double GetScaleY() const { return Scale.Y; }
+	int GetScaledWidth () { int foo = (Width << 17) / xScale; return (foo >> 1) + (foo & 1); }
+	int GetScaledHeight () { int foo = (Height << 17) / yScale; return (foo >> 1) + (foo & 1); }
+	double GetScaledWidthDouble () { return (Width * 65536.) / xScale; }
+	double GetScaledHeightDouble () { return (Height * 65536.) / yScale; }
 
-	int GetScaledLeftOffset () { int foo = int((LeftOffset * 2) / Scale.X); return (foo >> 1) + (foo & 1); }
-	int GetScaledTopOffset () { int foo = int((TopOffset * 2) / Scale.Y); return (foo >> 1) + (foo & 1); }
-	double GetScaledLeftOffsetDouble() { return LeftOffset / Scale.X; }
-	double GetScaledTopOffsetDouble() { return TopOffset / Scale.Y; }
-	virtual void ResolvePatches() {}
+	int GetScaledLeftOffset () { int foo = (LeftOffset << 17) / xScale; return (foo >> 1) + (foo & 1); }
+	int GetScaledTopOffset () { int foo = (TopOffset << 17) / yScale; return (foo >> 1) + (foo & 1); }
+	double GetScaledLeftOffsetDouble() { return (LeftOffset * 65536.) / xScale; }
+	double GetScaledTopOffsetDouble() { return (TopOffset * 65536.) / yScale; }
 
 	virtual void SetFrontSkyLayer();
 
-	void CopyToBlock (uint8_t *dest, int dwidth, int dheight, int x, int y, int rotate, const uint8_t *translation, FRenderStyle style);
+	void CopyToBlock (BYTE *dest, int dwidth, int dheight, int x, int y, const BYTE *translation=NULL)
+	{
+		CopyToBlock(dest, dwidth, dheight, x, y, 0, translation);
+	}
+
+	void CopyToBlock (BYTE *dest, int dwidth, int dheight, int x, int y, int rotate, const BYTE *translation=NULL);
 
 	// Returns true if the next call to GetPixels() will return an image different from the
 	// last call to GetPixels(). This should be considered valid only if a call to CheckModified()
 	// is immediately followed by a call to GetPixels().
-	virtual bool CheckModified (FRenderStyle style);
+	virtual bool CheckModified ();
 
 	static void InitGrayMap();
 
@@ -296,22 +288,23 @@ public:
 		LeftOffset = BaseTexture->LeftOffset;
 		WidthBits = BaseTexture->WidthBits;
 		HeightBits = BaseTexture->HeightBits;
-		Scale = BaseTexture->Scale;
+		xScale = BaseTexture->xScale;
+		yScale = BaseTexture->yScale;
 		WidthMask = (1 << WidthBits) - 1;
 	}
 
 	void SetScaledSize(int fitwidth, int fitheight);
-	PalEntry GetSkyCapColor(bool bottom);
-	static PalEntry averageColor(const uint32_t *data, int size, int maxout);
+
+	virtual void HackHack (int newheight);	// called by FMultipatchTexture to discover corrupt patches.
 
 protected:
-	uint16_t Width, Height, WidthMask;
-	static uint8_t GrayMap[256];
+	WORD Width, Height, WidthMask;
+	static BYTE GrayMap[256];
 	FNativeTexture *Native;
 
 	FTexture (const char *name = NULL, int lumpnum = -1);
 
-	Span **CreateSpans (const uint8_t *pixels) const;
+	Span **CreateSpans (const BYTE *pixels) const;
 	void FreeSpans (Span **spans) const;
 	void CalcBitSize ();
 	void CopyInfo(FTexture *other)
@@ -321,37 +314,16 @@ protected:
 		Rotations = other->Rotations;
 		gl_info = other->gl_info;
 		gl_info.Brightmap = NULL;
-		gl_info.Normal = NULL;
-		gl_info.Specular = NULL;
-		gl_info.Metallic = NULL;
-		gl_info.Roughness = NULL;
-		gl_info.AmbientOcclusion = NULL;
 		gl_info.areas = NULL;
 	}
 
-	std::vector<uint32_t> PixelsBgra;
-
-	void GenerateBgraFromBitmap(const FBitmap &bitmap);
-	void CreatePixelsBgraWithMipmaps();
-	void GenerateBgraMipmaps();
-	void GenerateBgraMipmapsFast();
-	int MipmapLevels() const;
-
-private:
-	bool bSWSkyColorDone = false;
-	PalEntry FloorSkyColor;
-	PalEntry CeilingSkyColor;
-
 public:
-	static void FlipSquareBlock (uint8_t *block, int x, int y);
-	static void FlipSquareBlockBgra (uint32_t *block, int x, int y);
-	static void FlipSquareBlockRemap (uint8_t *block, int x, int y, const uint8_t *remap);
-	static void FlipNonSquareBlock (uint8_t *blockto, const uint8_t *blockfrom, int x, int y, int srcpitch);
-	static void FlipNonSquareBlockBgra (uint32_t *blockto, const uint32_t *blockfrom, int x, int y, int srcpitch);
-	static void FlipNonSquareBlockRemap (uint8_t *blockto, const uint8_t *blockfrom, int x, int y, int srcpitch, const uint8_t *remap);
+	static void FlipSquareBlock (BYTE *block, int x, int y);
+	static void FlipSquareBlockRemap (BYTE *block, int x, int y, const BYTE *remap);
+	static void FlipNonSquareBlock (BYTE *blockto, const BYTE *blockfrom, int x, int y, int srcpitch);
+	static void FlipNonSquareBlockRemap (BYTE *blockto, const BYTE *blockfrom, int x, int y, int srcpitch, const BYTE *remap);
 
 	friend class D3DTex;
-	friend class OpenGLSWFrameBuffer;
 
 public:
 
@@ -360,36 +332,35 @@ public:
 		FMaterial *Material[2];
 		FGLTexture *SystemTexture[2];
 		FTexture *Brightmap;
-		FTexture *Normal;						// Normal map texture
-		FTexture *Specular;						// Specular light texture for the diffuse+normal+specular light model
-		FTexture *Metallic;						// Metalness texture for the physically based rendering (PBR) light model
-		FTexture *Roughness;					// Roughness texture for PBR
-		FTexture *AmbientOcclusion;				// Ambient occlusion texture for PBR
-		float Glossiness;
-		float SpecularLevel;
 		PalEntry GlowColor;
+		PalEntry FloorSkyColor;
+		PalEntry CeilingSkyColor;
 		int GlowHeight;
 		FloatRect *areas;
 		int areacount;
 		int shaderindex;
+		unsigned int precacheTime;
 		float shaderspeed;
 		int mIsTransparent:2;
 		bool bGlowing:1;						// Texture glows
-		bool bAutoGlowing : 1;					// Glow info is determined from texture image.
 		bool bFullbright:1;						// always draw fullbright
 		bool bSkybox:1;							// This is a skybox
+		bool bSkyColorDone:1;					// Fill color for sky
 		char bBrightmapChecked:1;				// Set to 1 if brightmap has been checked
-		bool bDisableFullbright:1;				// This texture will not be displayed as fullbright sprite
+		bool bBrightmap:1;						// This is a brightmap
+		bool bBrightmapDisablesFullbright:1;	// This disables fullbright display
 		bool bNoFilter:1;
 		bool bNoCompress:1;
-		bool bNoExpand:1;
 
 		MiscGLInfo() throw ();
 		~MiscGLInfo();
 	};
 	MiscGLInfo gl_info;
 
+	virtual void PrecacheGL(int cache);
+	virtual void UncacheGL();
 	void GetGlowColor(float *data);
+	PalEntry GetSkyCapColor(bool bottom);
 	bool isGlowing() { return gl_info.bGlowing; }
 	bool isFullbright() { return gl_info.bFullbright; }
 	void CreateDefaultBrightmap();
@@ -397,14 +368,11 @@ public:
 	static bool SmoothEdges(unsigned char * buffer,int w, int h);
 	void CheckTrans(unsigned char * buffer, int size, int trans);
 	bool ProcessData(unsigned char * buffer, int w, int h, bool ispatch);
-	int CheckRealHeight();
 };
 
-class FxAddSub;
 // Texture manager
 class FTextureManager
 {
-	friend class FxAddSub;	// needs access to do a bounds check on the texture ID.
 public:
 	FTextureManager ();
 	~FTextureManager ();
@@ -464,19 +432,9 @@ public:
 		TEXMAN_DontCreate = 32
 	};
 
-	enum
-	{
-		HIT_Wall = 1,
-		HIT_Flat = 2,
-		HIT_Sky = 4,
-		HIT_Sprite = 8,
-
-		HIT_Columnmode = HIT_Wall|HIT_Sky|HIT_Sprite
-	};
-
 	FTextureID CheckForTexture (const char *name, int usetype, BITFIELD flags=TEXMAN_TryAny);
 	FTextureID GetTexture (const char *name, int usetype, BITFIELD flags=0);
-	int ListTextures (const char *name, TArray<FTextureID> &list, bool listall = false);
+	int ListTextures (const char *name, TArray<FTextureID> &list);
 
 	void AddTexturesLump (const void *lumpdata, int lumpsize, int deflumpnum, int patcheslump, int firstdup=0, bool texture1=false);
 	void AddTexturesLumps (int lump1, int lump2, int patcheslump);
@@ -509,12 +467,18 @@ public:
 	void UnloadAll ();
 
 	int NumTextures () const { return (int)Textures.Size(); }
+	void PrecacheLevel (void);
 
-	void UpdateAnimations (uint64_t mstime);
+	void WriteTexture (FArchive &arc, int picnum);
+	int ReadTexture (FArchive &arc);
+
+	void UpdateAnimations (DWORD mstime);
 	int GuesstimateNumTextures ();
 
 	FSwitchDef *FindSwitch (FTextureID texture);
 	FDoorAnimation *FindAnimatedDoor (FTextureID picnum);
+
+	unsigned int precacheTime;
 
 private:
 
@@ -523,24 +487,25 @@ private:
 	int CountLumpTextures (int lumpnum);
 
 	// Build tiles
-	void AddTiles (const FString &pathprefix, const void *, int translation);
-	//int CountBuildTiles ();
+	void AddTiles (void *tiles);
+	int CountTiles (void *tiles);
+	int CountBuildTiles ();
 	void InitBuildTiles ();
 
 	// Animation stuff
-	FAnimDef *AddAnim (FAnimDef *anim);
+	void AddAnim (FAnimDef *anim);
 	void FixAnimations ();
 	void InitAnimated ();
 	void InitAnimDefs ();
-	FAnimDef *AddSimpleAnim (FTextureID picnum, int animcount, uint32_t speedmin, uint32_t speedrange=0);
-	FAnimDef *AddComplexAnim (FTextureID picnum, const TArray<FAnimDef::FAnimFrame> &frames);
+	void AddSimpleAnim (FTextureID picnum, int animcount, int animtype, DWORD speedmin, DWORD speedrange=0);
+	void AddComplexAnim (FTextureID picnum, const TArray<FAnimDef::FAnimFrame> &frames);
 	void ParseAnim (FScanner &sc, int usetype);
-	FAnimDef *ParseRangeAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing);
+	void ParseRangeAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing);
 	void ParsePicAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing, TArray<FAnimDef::FAnimFrame> &frames);
 	void ParseWarp(FScanner &sc);
 	void ParseCameraTexture(FScanner &sc);
 	FTextureID ParseFramenum (FScanner &sc, FTextureID basepicnum, int usetype, bool allowMissing);
-	void ParseTime (FScanner &sc, uint32_t &min, uint32_t &max);
+	void ParseTime (FScanner &sc, DWORD &min, DWORD &max);
 	FTexture *Texture(FTextureID id) { return Textures[id.GetIndex()].Texture; }
 	void SetTranslation (FTextureID fromtexnum, FTextureID totexnum);
 	void ParseAnimatedDoor(FScanner &sc);
@@ -566,38 +531,11 @@ private:
 	FTextureID DefaultTexture;
 	TArray<int> FirstTextureForFile;
 	TMap<int,int> PalettedVersions;		// maps from normal -> paletted version
-	TArray<TArray<uint8_t> > BuildTileData;
 
 	TArray<FAnimDef *> mAnimations;
 	TArray<FSwitchDef *> mSwitchDefs;
 	TArray<FDoorAnimation> mAnimatedDoors;
-
-public:
-	short sintable[2048];	// for texture warping
-	enum
-	{
-		SINMASK = 2047
-	};
-};
-
-// base class for everything that can be used as a world texture. 
-// This intermediate class encapsulates the buffers for the software renderer.
-class FWorldTexture : public FTexture
-{
-protected:
-	uint8_t *Pixeldata[2] = { nullptr, nullptr };
-	Span **Spandata[2] = { nullptr, nullptr };
-	uint8_t PixelsAreStatic = 0;	// can be set by subclasses which provide static pixel buffers.
-
-	FWorldTexture(const char *name = nullptr, int lumpnum = -1);
-	~FWorldTexture();
-
-	const uint8_t *GetColumn(FRenderStyle style, unsigned int column, const Span **spans_out) override;
-	const uint8_t *GetPixels(FRenderStyle style) override;
-	void Unload() override;
-	virtual void MakeTexture() = delete;
-	virtual uint8_t *MakeTexture(FRenderStyle style) = 0;
-	void FreeAllSpans();
+	TArray<BYTE *> BuildTileFiles;
 };
 
 // A texture that doesn't really exist
@@ -605,43 +543,54 @@ class FDummyTexture : public FTexture
 {
 public:
 	FDummyTexture ();
-	const uint8_t *GetColumn(FRenderStyle style, unsigned int column, const Span **spans_out) override;
-	const uint8_t *GetPixels(FRenderStyle style) override;
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload ();
 	void SetSize (int width, int height);
 };
 
 // A texture that returns a wiggly version of another texture.
-class FWarpTexture : public FWorldTexture
+class FWarpTexture : public FTexture
 {
 public:
-	FWarpTexture (FTexture *source, int warptype);
+	FWarpTexture (FTexture *source);
 	~FWarpTexture ();
-	void Unload() override;
 
-	virtual int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate=0, FCopyInfo *inf = NULL) override;
-	const uint32_t *GetPixelsBgra() override;
-	bool CheckModified (FRenderStyle) override;
+	virtual int CopyTrueColorPixels(FBitmap *bmp, int x, int y, int rotate=0, FCopyInfo *inf = NULL);
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
+	void Unload ();
+	bool CheckModified ();
 
 	float GetSpeed() const { return Speed; }
 	int GetSourceLump() { return SourcePic->GetSourceLump(); }
 	void SetSpeed(float fac) { Speed = fac; }
 	FTexture *GetRedirect(bool wantwarped);
 
-	uint64_t GenTime[2] = { 0, 0 };
-	uint64_t GenTimeBgra = 0;
-	float Speed = 1.f;
-	int WidthOffsetMultiplier, HeightOffsetMultiplier;  // [mxd]
+	DWORD GenTime;
 protected:
 	FTexture *SourcePic;
+	BYTE *Pixels;
+	Span **Spans;
+	float Speed;
 
-	uint8_t *MakeTexture (FRenderStyle style) override;
-	int NextPo2 (int v); // [mxd]
-	void SetupMultipliers (int width, int height); // [mxd]
+	virtual void MakeTexture (DWORD time);
+};
+
+// [GRB] Eternity-like warping
+class FWarp2Texture : public FWarpTexture
+{
+public:
+	FWarp2Texture (FTexture *source);
+
+protected:
+	void MakeTexture (DWORD time);
 };
 
 // A texture that can be drawn to.
 class DSimpleCanvas;
 class AActor;
+class FArchive;
 
 class FCanvasTexture : public FTexture
 {
@@ -649,30 +598,23 @@ public:
 	FCanvasTexture (const char *name, int width, int height);
 	~FCanvasTexture ();
 
-	const uint8_t *GetColumn(FRenderStyle style, unsigned int column, const Span **spans_out);
-	const uint8_t *GetPixels (FRenderStyle style);
-	const uint32_t *GetPixelsBgra() override;
+	const BYTE *GetColumn (unsigned int column, const Span **spans_out);
+	const BYTE *GetPixels ();
 	void Unload ();
-	bool CheckModified (FRenderStyle) override;
+	bool CheckModified ();
 	void NeedUpdate() { bNeedsUpdate=true; }
 	void SetUpdated() { bNeedsUpdate = false; bDidUpdate = true; bFirstUpdate = false; }
 	DSimpleCanvas *GetCanvas() { return Canvas; }
-	DSimpleCanvas *GetCanvasBgra() { return CanvasBgra; }
-	bool Mipmapped() override { return false; }
-	void MakeTexture (FRenderStyle style);
-	void MakeTextureBgra ();
+	void MakeTexture ();
 
 protected:
 
-	DSimpleCanvas *Canvas = nullptr;
-	DSimpleCanvas *CanvasBgra = nullptr;
-	uint8_t *Pixels = nullptr;
-	uint32_t *PixelsBgra = nullptr;
+	DSimpleCanvas *Canvas;
+	BYTE *Pixels;
 	Span DummySpans[2];
-	bool bNeedsUpdate = true;
-	bool bDidUpdate = false;
-	bool bPixelsAllocated = false;
-	bool bPixelsAllocatedBgra = false;
+	bool bNeedsUpdate;
+	bool bDidUpdate;
+	bool bPixelsAllocated;
 public:
 	bool bFirstUpdate;
 

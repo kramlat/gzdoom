@@ -1,30 +1,43 @@
-// 
-//---------------------------------------------------------------------------
-//
-// Copyright(C) 2005-2016 Christoph Oelckers
-// All rights reserved.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//--------------------------------------------------------------------------
-//
 /*
 ** gl_setup.cpp
 ** Initializes the data structures required by the GL renderer to handle
 ** a level
 **
-**/
+**---------------------------------------------------------------------------
+** Copyright 2005 Christoph Oelckers
+** All rights reserved.
+**
+** Redistribution and use in source and binary forms, with or without
+** modification, are permitted provided that the following conditions
+** are met:
+**
+** 1. Redistributions of source code must retain the above copyright
+**    notice, this list of conditions and the following disclaimer.
+** 2. Redistributions in binary form must reproduce the above copyright
+**    notice, this list of conditions and the following disclaimer in the
+**    documentation and/or other materials provided with the distribution.
+** 3. The name of the author may not be used to endorse or promote products
+**    derived from this software without specific prior written permission.
+** 4. When not used as part of GZDoom or a GZDoom derivative, this code will be
+**    covered by the terms of the GNU Lesser General Public License as published
+**    by the Free Software Foundation; either version 2.1 of the License, or (at
+**    your option) any later version.
+** 5. Full disclosure of the entire project's source code, except for third
+**    party libraries is mandatory. (NOTE: This clause is non-negotiable!)
+**
+** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+**---------------------------------------------------------------------------
+**
+*/
 
 #include "doomtype.h"
 #include "colormatcher.h"
@@ -38,7 +51,6 @@
 #include "gi.h"
 #include "g_level.h"
 #include "a_sharedglobal.h"
-#include "g_levellocals.h"
 
 #include "gl/renderer/gl_renderer.h"
 #include "gl/data/gl_data.h"
@@ -52,13 +64,15 @@
 
 struct FPortalID
 {
-	DVector2 mDisplacement;
+	fixed_t mXDisplacement;
+	fixed_t mYDisplacement;
 
 	// for the hash code
-	operator intptr_t() const { return (FLOAT2FIXED(mDisplacement.X) >> 8) + (FLOAT2FIXED(mDisplacement.Y) << 8); }
+	operator intptr_t() const { return (mXDisplacement >> 8) + (mYDisplacement << 8); }
 	bool operator != (const FPortalID &other) const
 	{
-		return mDisplacement != other.mDisplacement;
+		return mXDisplacement != other.mXDisplacement ||
+				mYDisplacement != other.mYDisplacement;
 	}
 };
 
@@ -72,9 +86,7 @@ typedef TArray<FPortalSector> FPortalSectors;
 
 typedef TMap<FPortalID, FPortalSectors> FPortalMap;
 
-TArray<FPortal *> glSectorPortals;
-TArray<FGLLinePortal*> linePortalToGL;
-TArray<FGLLinePortal> glLinePortals;
+TArray<FPortal *> portals;
 
 //==========================================================================
 //
@@ -82,7 +94,7 @@ TArray<FGLLinePortal> glLinePortals;
 //
 //==========================================================================
 
-GLSectorStackPortal *FPortal::GetRenderState()
+GLSectorStackPortal *FPortal::GetGLPortal()
 {
 	if (glportal == NULL) glportal = new GLSectorStackPortal(this);
 	return glportal;
@@ -90,8 +102,7 @@ GLSectorStackPortal *FPortal::GetRenderState()
 
 //==========================================================================
 //
-// this is left as fixed_t because the nodes also are, it makes no sense
-// to convert this without converting the nodes as well.
+//
 //
 //==========================================================================
 
@@ -113,6 +124,7 @@ struct FCoverageLine
 struct FCoverageBuilder
 {
 	subsector_t *target;
+	FPortal *portal;
 	TArray<int> collect;
 	FCoverageVertex center;
 
@@ -122,9 +134,10 @@ struct FCoverageBuilder
 	//
 	//==========================================================================
 
-	FCoverageBuilder(subsector_t *sub)
+	FCoverageBuilder(subsector_t *sub, FPortal *port)
 	{
 		target = sub;
+		portal = port;
 	}
 
 	//==========================================================================
@@ -173,7 +186,7 @@ struct FCoverageBuilder
 
 	double PartitionDistance(FCoverageVertex *vt, node_t *node)
 	{	
-		return fabs(double(-node->dy) * (vt->x - node->x) + double(node->dx) * (vt->y - node->y)) / (node->len * 65536.);
+		return fabs(double(-node->dy) * (vt->x - node->x) + double(node->dx) * (vt->y - node->y)) / node->len;
 	}
 
 	//==========================================================================
@@ -296,8 +309,8 @@ struct FCoverageBuilder
 		else
 		{
 			// we reached a subsector so we can link the node with this subsector
-			subsector_t *sub = (subsector_t *)((uint8_t *)node - 1);
-			collect.Push(int(sub->Index()));
+			subsector_t *sub = (subsector_t *)((BYTE *)node - 1);
+			collect.Push(int(sub-subsectors));
 		}
 	}
 };
@@ -308,7 +321,7 @@ struct FCoverageBuilder
 //
 //==========================================================================
 
-void gl_BuildPortalCoverage(FPortalCoverage *coverage, subsector_t *subsector, const DVector2 &displacement)
+void gl_BuildPortalCoverage(FPortalCoverage *coverage, subsector_t *subsector, FPortal *portal)
 {
 	TArray<FCoverageVertex> shape;
 	double centerx=0, centery=0;
@@ -316,18 +329,18 @@ void gl_BuildPortalCoverage(FPortalCoverage *coverage, subsector_t *subsector, c
 	shape.Resize(subsector->numlines);
 	for(unsigned i=0; i<subsector->numlines; i++)
 	{
-		centerx += (shape[i].x = FLOAT2FIXED(subsector->firstline[i].v1->fX() + displacement.X));
-		centery += (shape[i].y = FLOAT2FIXED(subsector->firstline[i].v1->fY() + displacement.Y));
+		centerx += (shape[i].x = subsector->firstline[i].v1->x + portal->xDisplacement);
+		centery += (shape[i].y = subsector->firstline[i].v1->y + portal->yDisplacement);
 	}
 
-	FCoverageBuilder build(subsector);
+	FCoverageBuilder build(subsector, portal);
 	build.center.x = xs_CRoundToInt(centerx / subsector->numlines);
 	build.center.y = xs_CRoundToInt(centery / subsector->numlines);
 
-	build.CollectNode(level.HeadNode(), shape);
-	coverage->subsectors = new uint32_t[build.collect.Size()]; 
+	build.CollectNode(nodes + numnodes - 1, shape);
+	coverage->subsectors = new DWORD[build.collect.Size()]; 
 	coverage->sscount = build.collect.Size();
-	memcpy(coverage->subsectors, &build.collect[0], build.collect.Size() * sizeof(uint32_t));
+	memcpy(coverage->subsectors, &build.collect[0], build.collect.Size() * sizeof(DWORD));
 }
 
 //==========================================================================
@@ -338,19 +351,27 @@ void gl_BuildPortalCoverage(FPortalCoverage *coverage, subsector_t *subsector, c
 
 static void CollectPortalSectors(FPortalMap &collection)
 {
-	for (auto &sec : level.sectors)
+	for (int i=0;i<numsectors;i++)
 	{
-		for (int j = 0; j < 2; j++)
+		sector_t *sec = &sectors[i];
+		if (sec->CeilingSkyBox != NULL && sec->CeilingSkyBox->bAlways && sec->CeilingSkyBox->Mate != NULL)
 		{
-			int ptype = sec.GetPortalType(j);
-			if (ptype== PORTS_STACKEDSECTORTHING || ptype == PORTS_PORTAL || ptype == PORTS_LINKEDPORTAL)	// only offset-displacing portal types
-			{
-				FPortalID id = { sec.GetPortalDisplacement(j) };
+			FPortalID id = { sec->CeilingSkyBox->x - sec->CeilingSkyBox->Mate->x,
+							 sec->CeilingSkyBox->y - sec->CeilingSkyBox->Mate->y};
 
-				FPortalSectors &sss = collection[id];
-				FPortalSector ss = { &sec, j };
-				sss.Push(ss);
-			}
+			FPortalSectors &sss = collection[id];
+			FPortalSector ss = { sec, sector_t::ceiling };
+			sss.Push(ss);
+		}
+
+		if (sec->FloorSkyBox != NULL && sec->FloorSkyBox->bAlways && sec->FloorSkyBox->Mate != NULL)
+		{
+			FPortalID id = { sec->FloorSkyBox->x - sec->FloorSkyBox->Mate->x,
+							 sec->FloorSkyBox->y - sec->FloorSkyBox->Mate->y };
+
+			FPortalSectors &sss = collection[id];
+			FPortalSector ss = { sec, sector_t::floor };
+			sss.Push(ss);
 		}
 	}
 }
@@ -359,11 +380,18 @@ void gl_InitPortals()
 {
 	FPortalMap collection;
 
-	if (level.nodes.Size() == 0) return;
+	if (numnodes == 0) return;
 
-	
+	for(int i=0;i<numnodes;i++)
+	{
+		node_t *no = &nodes[i];
+		double fdx = (double)no->dx;
+		double fdy = (double)no->dy;
+		no->len = (float)sqrt(fdx * fdx + fdy * fdy);
+	}
+
 	CollectPortalSectors(collection);
-	glSectorPortals.Clear();
+	portals.Clear();
 
 	FPortalMap::Iterator it(collection);
 	FPortalMap::Pair *pair;
@@ -378,14 +406,16 @@ void gl_InitPortals()
 		}
 		for (int i=1;i<=2;i<<=1)
 		{
-			// add separate glSectorPortals for floor and ceiling.
+			// For now, add separate portals for floor and ceiling. They can be merged once
+			// proper plane clipping is in.
 			if (planeflags & i)
 			{
 				FPortal *portal = new FPortal;
-				portal->mDisplacement = pair->Key.mDisplacement;
+				portal->xDisplacement = pair->Key.mXDisplacement;
+				portal->yDisplacement = pair->Key.mYDisplacement;
 				portal->plane = (i==1? sector_t::floor : sector_t::ceiling);	/**/
 				portal->glportal = NULL;
-				glSectorPortals.Push(portal);
+				portals.Push(portal);
 				for(unsigned j=0;j<pair->Value.Size(); j++)
 				{
 					sector_t *sec = pair->Value[j].mSub;
@@ -395,7 +425,7 @@ void gl_InitPortals()
 						for(int k=0;k<sec->subsectorcount; k++)
 						{
 							subsector_t *sub = sec->subsectors[k];
-							gl_BuildPortalCoverage(&sub->portalcoverage[plane], sub, pair->Key.mDisplacement);
+							gl_BuildPortalCoverage(&sub->portalcoverage[plane], sub, portal);
 						}
 						sec->portals[plane] = portal;
 					}
@@ -403,107 +433,37 @@ void gl_InitPortals()
 			}
 		}
 	}
-
-	// Now group the line glSectorPortals (each group must be a continuous set of colinear linedefs with no gaps)
-	glLinePortals.Clear();
-	linePortalToGL.Clear();
-	TArray<int> tempindex;
-
-	tempindex.Reserve(linePortals.Size());
-	memset(&tempindex[0], -1, linePortals.Size() * sizeof(int));
-
-	for (unsigned i = 0; i < linePortals.Size(); i++)
-	{
-		auto port = linePortals[i];
-		bool gotsome;
-
-		if (tempindex[i] == -1)
-		{
-			tempindex[i] = glLinePortals.Size();
-			line_t *pSrcLine = linePortals[i].mOrigin;
-			line_t *pLine = linePortals[i].mDestination;
-			FGLLinePortal &glport = glLinePortals[glLinePortals.Reserve(1)];
-			glport.lines.Push(&linePortals[i]);
-
-			// We cannot do this grouping for non-linked glSectorPortals because they can be changed at run time.
-			if (linePortals[i].mType == PORTT_LINKED && pLine != nullptr)
-			{
-				glport.v1 = pLine->v1;
-				glport.v2 = pLine->v2;
-				do
-				{
-					// now collect all other colinear lines connected to this one. We run this loop as long as it still finds a match
-					gotsome = false;
-					for (unsigned j = 0; j < linePortals.Size(); j++)
-					{
-						if (tempindex[j] == -1)
-						{
-							line_t *pSrcLine2 = linePortals[j].mOrigin;
-							line_t *pLine2 = linePortals[j].mDestination;
-							// angular precision is intentionally reduced to 32 bit BAM to account for precision problems (otherwise many not perfectly horizontal or vertical glSectorPortals aren't found here.)
-							unsigned srcang = pSrcLine->Delta().Angle().BAMs();
-							unsigned dstang = pLine->Delta().Angle().BAMs();
-							if ((pSrcLine->v2 == pSrcLine2->v1 && pLine->v1 == pLine2->v2) ||
-								(pSrcLine->v1 == pSrcLine2->v2 && pLine->v2 == pLine2->v1))
-							{
-								// The line connects, now check the translation
-								unsigned srcang2 = pSrcLine2->Delta().Angle().BAMs();
-								unsigned dstang2 = pLine2->Delta().Angle().BAMs();
-								if (srcang == srcang2 && dstang == dstang2)
-								{
-									// The lines connect and  both source and destination are colinear, so this is a match
-									gotsome = true;
-									tempindex[j] = tempindex[i];
-									if (pLine->v1 == pLine2->v2) glport.v1 = pLine2->v1;
-									else glport.v2 = pLine2->v2;
-									glport.lines.Push(&linePortals[j]);
-								}
-							}
-						}
-					}
-				} while (gotsome);
-			}
-		}
-	}
-	linePortalToGL.Resize(linePortals.Size());
-	for (unsigned i = 0; i < linePortals.Size(); i++)
-	{
-		linePortalToGL[i] = &glLinePortals[tempindex[i]];
-		/*
-		Printf("portal at line %d translates to GL portal %d, range = %f,%f to %f,%f\n",
-			int(linePortals[i].mOrigin - lines), tempindex[i], linePortalToGL[i]->v1->fixX() / 65536., linePortalToGL[i]->v1->fixY() / 65536., linePortalToGL[i]->v2->fixX() / 65536., linePortalToGL[i]->v2->fixY() / 65536.);
-		*/
-	}
 }
 
 CCMD(dumpportals)
 {
-	for(unsigned i=0;i<glSectorPortals.Size(); i++)
+	for(unsigned i=0;i<portals.Size(); i++)
 	{
-		double xdisp = glSectorPortals[i]->mDisplacement.X;
-		double ydisp = glSectorPortals[i]->mDisplacement.Y;
-		Printf(PRINT_LOG, "Portal #%d, %s, displacement = (%f,%f)\n", i, glSectorPortals[i]->plane==0? "floor":"ceiling",
+		double xdisp = portals[i]->xDisplacement/65536.;
+		double ydisp = portals[i]->yDisplacement/65536.;
+		Printf(PRINT_LOG, "Portal #%d, %s, displacement = (%f,%f)\n", i, portals[i]->plane==0? "floor":"ceiling",
 			xdisp, ydisp);
 		Printf(PRINT_LOG, "Coverage:\n");
-		for(auto &sub : level.subsectors)
+		for(int j=0;j<numsubsectors;j++)
 		{
-			FPortal *port = sub.render_sector->GetGLPortal(glSectorPortals[i]->plane);
-			if (port == glSectorPortals[i])
+			subsector_t *sub = &subsectors[j];
+			FPortal *port = sub->render_sector->portals[portals[i]->plane];
+			if (port == portals[i])
 			{
-				Printf(PRINT_LOG, "\tSubsector %d (%d):\n\t\t", sub.Index(), sub.render_sector->sectornum);
-				for(unsigned k = 0;k< sub.numlines; k++)
+				Printf(PRINT_LOG, "\tSubsector %d (%d):\n\t\t", j, sub->render_sector->sectornum);
+				for(unsigned k = 0;k< sub->numlines; k++)
 				{
-					Printf(PRINT_LOG, "(%.3f,%.3f), ",	sub.firstline[k].v1->fX() + xdisp, sub.firstline[k].v1->fY() + ydisp);
+					Printf(PRINT_LOG, "(%.3f,%.3f), ",	sub->firstline[k].v1->x/65536. + xdisp, sub->firstline[k].v1->y/65536. + ydisp);
 				}
 				Printf(PRINT_LOG, "\n\t\tCovered by subsectors:\n");
-				FPortalCoverage *cov = &sub.portalcoverage[glSectorPortals[i]->plane];
+				FPortalCoverage *cov = &sub->portalcoverage[portals[i]->plane];
 				for(int l = 0;l< cov->sscount; l++)
 				{
-					subsector_t *csub = &level.subsectors[cov->subsectors[l]];
+					subsector_t *csub = &subsectors[cov->subsectors[l]];
 					Printf(PRINT_LOG, "\t\t\t%5d (%4d): ", cov->subsectors[l], csub->render_sector->sectornum);
 					for(unsigned m = 0;m< csub->numlines; m++)
 					{
-						Printf(PRINT_LOG, "(%.3f,%.3f), ",	csub->firstline[m].v1->fX(), csub->firstline[m].v1->fY());
+						Printf(PRINT_LOG, "(%.3f,%.3f), ",	csub->firstline[m].v1->x/65536., csub->firstline[m].v1->y/65536.);
 					}
 					Printf(PRINT_LOG, "\n");
 				}

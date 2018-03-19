@@ -45,7 +45,6 @@ enum
 	STAT_AUTODECAL,							// A decal that can be automatically deleted
 	STAT_CORPSEPOINTER,						// An entry in Hexen's corpse queue
 	STAT_TRAVELLING,						// An actor temporarily travelling to a new map
-	STAT_STATIC,							// persistent across maps.
 
   // Thinkers that do think
 	STAT_FIRST_THINKING=32,
@@ -59,16 +58,11 @@ enum
 	STAT_LIGHTTRANSFER,						// A sector light transfer. These must be ticked after the light effects!!!
 	STAT_EARTHQUAKE,						// Earthquake actors
 	STAT_MAPMARKER,							// Map marker actors
-	STAT_DLIGHT,
-	
-	STAT_USER = 70,
-	STAT_USER_MAX = 90,
 
 	STAT_DEFAULT = 100,						// Thinkers go here unless specified otherwise.
 	STAT_SECTOREFFECT,						// All sector effects that cause floor and ceiling movement
 	STAT_ACTORMOVER,						// actor movers
 	STAT_SCRIPTS,							// The ACS thinker. This is to ensure that it can't tick before all actors called PostBeginPlay
-	STAT_BOT,								// Bot thinker
 };
 
 #endif

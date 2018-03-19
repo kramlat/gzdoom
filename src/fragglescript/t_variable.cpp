@@ -38,10 +38,23 @@
 //
 //---------------------------------------------------------------------------
 //
+// FraggleScript is from SMMU which is under the GPL. Technically, 
+// therefore, combining the FraggleScript code with the non-free 
+// ZDoom code is a violation of the GPL.
+//
+// As this may be a problem for you, I hereby grant an exception to my 
+// copyright on the SMMU source (including FraggleScript). You may use 
+// any code from SMMU in (G)ZDoom, provided that:
+//
+//    * For any binary release of the port, the source code is also made 
+//      available.
+//    * The copyright notice is kept on any file containing my code.
+//
+//
 
 #include "t_script.h"
 #include "a_pickups.h"
-#include "serializer.h"
+#include "farchive.h"
 
 
 //==========================================================================
@@ -53,7 +66,7 @@
 int intvalue(const svalue_t &v)
 {
 	return (v.type == svt_string ? atoi(v.string) :       
-	v.type == svt_fixed ? (int)(v.value.f / 65536.) : 
+	v.type == svt_fixed ? (int)(v.value.f / FRACUNIT) : 
 	v.type == svt_mobj ? -1 : v.value.i );
 }
 
@@ -63,11 +76,11 @@ int intvalue(const svalue_t &v)
 //
 //==========================================================================
 
-fsfix fixedvalue(const svalue_t &v)
+fixed_t fixedvalue(const svalue_t &v)
 {
 	return (v.type == svt_fixed ? v.value.f :
-	v.type == svt_string ? (fsfix)(atof(v.string) * 65536.) :
-	v.type == svt_mobj ? -65536 : v.value.i * 65536 );
+	v.type == svt_string ? (fixed_t)(atof(v.string) * FRACUNIT) :
+	v.type == svt_mobj ? -1*FRACUNIT : v.value.i * FRACUNIT );
 }
 
 //==========================================================================
@@ -80,7 +93,7 @@ double floatvalue(const svalue_t &v)
 {
 	return 
 		v.type == svt_string ? atof(v.string) :       
-		v.type == svt_fixed ? v.value.f / 65536. : 
+		v.type == svt_fixed ? FIXED2DBL(v.value.f) : 
 		v.type == svt_mobj ? -1. : (double)v.value.i;
 }
 
@@ -105,7 +118,7 @@ const char *stringvalue(const svalue_t & v)
 		
 	case svt_fixed:
 		{
-			double val = v.value.f / 65536.;
+			double val = ((double)v.value.f) / FRACUNIT;
 			mysnprintf(buffer, countof(buffer), "%g", val);
 			return buffer;
 		}
@@ -140,7 +153,7 @@ AActor* actorvalue(const svalue_t &svalue)
 	}
 	else
 	{
-		auto &SpawnedThings = DFraggleThinker::ActiveThinker->SpawnedThings;
+		TArray<TObjPtr<AActor> > &SpawnedThings = DFraggleThinker::ActiveThinker->SpawnedThings;
 		// this requires some creativity. We use the intvalue
 		// as the thing number of a thing in the level.
 		intval = intvalue(svalue);
@@ -166,12 +179,10 @@ AActor* actorvalue(const svalue_t &svalue)
 //
 //==========================================================================
 
-IMPLEMENT_CLASS(DFsVariable, false, true)
-
-IMPLEMENT_POINTERS_START(DFsVariable)
-	IMPLEMENT_POINTER(next)
-	IMPLEMENT_POINTER(actor)
-IMPLEMENT_POINTERS_END
+IMPLEMENT_POINTY_CLASS(DFsVariable)
+ DECLARE_POINTER (next)
+ DECLARE_POINTER (actor)
+END_POINTERS
 
 //==========================================================================
 //
@@ -295,15 +306,10 @@ void DFsVariable::SetValue(const svalue_t &newvalue)
 //
 //==========================================================================
 
-void DFsVariable::Serialize(FSerializer & ar)
+void DFsVariable::Serialize(FArchive & ar)
 {
 	Super::Serialize(ar);
-	ar("name", Name)
-		("type", type)
-		("string", string)
-		("actor", actor)
-		("value", value.i)
-		("next", next);
+	ar << Name << type << string << actor << value.i << next;
 }
 
 
@@ -321,7 +327,7 @@ void DFsVariable::Serialize(FSerializer & ar)
 
 DFsVariable *DFsScript::NewVariable(const char *name, int vtype)
 {
-	DFsVariable *newvar = Create<DFsVariable>(name);
+	DFsVariable *newvar = new DFsVariable(name);
 	newvar->type = vtype;
 	
 	int n = variable_hash(name);

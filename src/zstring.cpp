@@ -66,7 +66,8 @@ FString::FString (const char *copyStr)
 {
 	if (copyStr == NULL || *copyStr == '\0')
 	{
-		ResetToNull();
+		NullString.RefCount++;
+		Chars = &NullString.Nothing[0];
 	}
 	else
 	{
@@ -86,7 +87,8 @@ FString::FString (char oneChar)
 {
 	if (oneChar == '\0')
 	{
-		ResetToNull();
+		NullString.RefCount++;
+		Chars = &NullString.Nothing[0];
 	}
 	else
 	{
@@ -211,21 +213,6 @@ FString &FString::operator = (const FString &other)
 	}
 	return *this;
 }
-
-FString &FString::operator = (FString &&other)
-{
-	assert (Chars != NULL);
-
-	if (&other != this)
-	{
-		Data()->Release();
-		Chars = other.Chars;
-		other.ResetToNull();
-	}
-
-	return *this;
-}
-
 FString &FString::operator = (const char *copyStr)
 {
 	if (copyStr != Chars)
@@ -233,7 +220,8 @@ FString &FString::operator = (const char *copyStr)
 		if (copyStr == NULL || *copyStr == '\0')
 		{
 			Data()->Release();
-			ResetToNull();
+			NullString.RefCount++;
+			Chars = &NullString.Nothing[0];
 		}
 		else
 		{
@@ -355,69 +343,25 @@ FString &FString::operator += (char tail)
 
 FString &FString::AppendCStrPart (const char *tail, size_t tailLen)
 {
-	if (tailLen > 0)
-	{
-		size_t len1 = Len();
-		ReallocBuffer(len1 + tailLen);
-		StrCopy(Chars + len1, tail, tailLen);
-	}
+	size_t len1 = Len();
+	ReallocBuffer (len1 + tailLen);
+	StrCopy (Chars + len1, tail, tailLen);
 	return *this;
 }
 
 FString &FString::CopyCStrPart(const char *tail, size_t tailLen)
 {
-	if (tailLen > 0)
-	{
-		ReallocBuffer(tailLen);
-		StrCopy(Chars, tail, tailLen);
-	}
-	else
-	{
-		Data()->Release();
-		ResetToNull();
-	}
+	ReallocBuffer(tailLen);
+	StrCopy(Chars, tail, tailLen);
 	return *this;
 }
 
-void FString::Truncate(size_t newlen)
+void FString::Truncate(long newlen)
 {
-	if (newlen == 0)
-	{
-		Data()->Release();
-		ResetToNull();
-	}
-	else if (newlen < Len())
+	if (newlen >= 0 && newlen < (long)Len())
 	{
 		ReallocBuffer (newlen);
 		Chars[newlen] = '\0';
-	}
-}
-
-void FString::Remove(size_t index, size_t remlen)
-{
-	if (index < Len())
-	{
-		if (index + remlen >= Len())
-		{
-			Truncate((long)index);
-		}
-		else
-		{
-			if (Data()->RefCount == 1)
-			{ // Can do this in place
-				memmove(Chars + index, Chars + index + remlen, Len() - index - remlen);
-				memset(Chars + Len() - remlen, 0, remlen);
-				Data()->Len -= (unsigned)remlen;
-			}
-			else
-			{ // Must do it in a copy
-				FStringData *old = Data();
-				AllocBuffer(old->Len - remlen);
-				StrCopy(Chars, old->Chars(), index);
-				StrCopy(Chars + index, old->Chars() + index + remlen, old->Len - index - remlen);
-				old->Release();
-			}
-		}
 	}
 }
 
@@ -639,15 +583,10 @@ void FString::SwapCase ()
 void FString::StripLeft ()
 {
 	size_t max = Len(), i, j;
-	if (max == 0) return;
 	for (i = 0; i < max; ++i)
 	{
-		if (!isspace((unsigned char)Chars[i]))
+		if (!isspace(Chars[i]))
 			break;
-	}
-	if (i == 0)
-	{ // Nothing to strip.
-		return;
 	}
 	if (Data()->RefCount <= 1)
 	{
@@ -674,15 +613,10 @@ void FString::StripLeft (const FString &charset)
 void FString::StripLeft (const char *charset)
 {
 	size_t max = Len(), i, j;
-	if (max == 0) return;
 	for (i = 0; i < max; ++i)
 	{
 		if (!strchr (charset, Chars[i]))
 			break;
-	}
-	if (i == 0)
-	{ // Nothing to strip.
-		return;
 	}
 	if (Data()->RefCount <= 1)
 	{
@@ -704,15 +638,10 @@ void FString::StripLeft (const char *charset)
 void FString::StripRight ()
 {
 	size_t max = Len(), i;
-	if (max == 0) return;
-	for (i = --max; i > 0; i--)
+	for (i = max; i-- > 0; )
 	{
-		if (!isspace((unsigned char)Chars[i]))
+		if (!isspace(Chars[i]))
 			break;
-	}
-	if (i == max)
-	{ // Nothing to strip.
-		return;
 	}
 	if (Data()->RefCount <= 1)
 	{
@@ -736,15 +665,10 @@ void FString::StripRight (const FString &charset)
 void FString::StripRight (const char *charset)
 {
 	size_t max = Len(), i;
-	if (max == 0) return;
-	for (i = --max; i > 0; i--)
+	for (i = max; i-- > 0; )
 	{
 		if (!strchr (charset, Chars[i]))
 			break;
-	}
-	if (i == max)
-	{ // Nothing to strip.
-		return;
 	}
 	if (Data()->RefCount <= 1)
 	{
@@ -763,20 +687,15 @@ void FString::StripRight (const char *charset)
 void FString::StripLeftRight ()
 {
 	size_t max = Len(), i, j, k;
-	if (max == 0) return;
 	for (i = 0; i < max; ++i)
 	{
-		if (!isspace((unsigned char)Chars[i]))
+		if (!isspace(Chars[i]))
 			break;
 	}
 	for (j = max - 1; j >= i; --j)
 	{
-		if (!isspace((unsigned char)Chars[j]))
+		if (!isspace(Chars[j]))
 			break;
-	}
-	if (i == 0 && j == max - 1)
-	{ // Nothing to strip.
-		return;
 	}
 	if (Data()->RefCount <= 1)
 	{
@@ -790,8 +709,8 @@ void FString::StripLeftRight ()
 	else
 	{
 		FStringData *old = Data();
-		AllocBuffer(j - i + 1);
-		StrCopy(Chars, old->Chars(), j - i + 1);
+		AllocBuffer (j - i);
+		StrCopy (Chars, old->Chars(), j - i);
 		old->Release();
 	}
 }
@@ -804,7 +723,6 @@ void FString::StripLeftRight (const FString &charset)
 void FString::StripLeftRight (const char *charset)
 {
 	size_t max = Len(), i, j, k;
-	if (max == 0) return;
 	for (i = 0; i < max; ++i)
 	{
 		if (!strchr (charset, Chars[i]))
@@ -845,61 +763,90 @@ void FString::Insert (size_t index, const char *instr)
 
 void FString::Insert (size_t index, const char *instr, size_t instrlen)
 {
-	if (instrlen > 0)
+	size_t mylen = Len();
+	if (index > mylen)
 	{
-		size_t mylen = Len();
-		if (index >= mylen)
-		{
-			AppendCStrPart(instr, instrlen);
-		}
-		else if (Data()->RefCount <= 1)
-		{
-			ReallocBuffer(mylen + instrlen);
-			memmove(Chars + index + instrlen, Chars + index, (mylen - index + 1) * sizeof(char));
-			memcpy(Chars + index, instr, instrlen * sizeof(char));
-		}
-		else
-		{
-			FStringData *old = Data();
-			AllocBuffer(mylen + instrlen);
-			StrCopy(Chars, old->Chars(), index);
-			StrCopy(Chars + index, instr, instrlen);
-			StrCopy(Chars + index + instrlen, old->Chars() + index, mylen - index);
-			old->Release();
-		}
+		index = mylen;
+	}
+	if (Data()->RefCount <= 1)
+	{
+		ReallocBuffer (mylen + instrlen);
+		memmove (Chars + index + instrlen, Chars + index, (mylen - index + 1)*sizeof(char));
+		memcpy (Chars + index, instr, instrlen*sizeof(char));
+	}
+	else
+	{
+		FStringData *old = Data();
+		AllocBuffer (mylen + instrlen);
+		StrCopy (Chars, old->Chars(), index);
+		StrCopy (Chars + index, instr, instrlen);
+		StrCopy (Chars + index + instrlen, old->Chars() + index, mylen - index);
+		old->Release();
 	}
 }
 
 void FString::ReplaceChars (char oldchar, char newchar)
 {
-	if (oldchar == '\0')
-		return;
+	size_t i, j;
 
-	ReplaceChars([&oldchar](char c){ return c == oldchar; }, newchar);
+	LockBuffer();
+	for (i = 0, j = Len(); i < j; ++i)
+	{
+		if (Chars[i] == oldchar)
+		{
+			Chars[i] = newchar;
+		}
+	}
+	UnlockBuffer();
 }
 
 void FString::ReplaceChars (const char *oldcharset, char newchar)
 {
-	if (oldcharset == NULL || oldcharset[0] == '\0')
-		return;
+	size_t i, j;
 
-	ReplaceChars([&oldcharset](char c){ return strchr(oldcharset, c) != NULL; }, newchar);
+	LockBuffer();
+	for (i = 0, j = Len(); i < j; ++i)
+	{
+		if (strchr (oldcharset, Chars[i]) != NULL)
+		{
+			Chars[i] = newchar;
+		}
+	}
+	UnlockBuffer();
 }
 
 void FString::StripChars (char killchar)
 {
-	if (killchar == '\0')
-		return;
+	size_t read, write, mylen;
 
-	StripChars([&killchar](char c){ return c == killchar; });
+	LockBuffer();
+	for (read = write = 0, mylen = Len(); read < mylen; ++read)
+	{
+		if (Chars[read] != killchar)
+		{
+			Chars[write++] = Chars[read];
+		}
+	}
+	Chars[write] = '\0';
+	ReallocBuffer (write);
+	UnlockBuffer();
 }
 
-void FString::StripChars (const char *killcharset)
+void FString::StripChars (const char *killchars)
 {
-	if (killcharset == NULL || killcharset[0] == '\0')
-		return;
+	size_t read, write, mylen;
 
-	StripChars([&killcharset](char c){ return strchr(killcharset, c) != NULL; });
+	LockBuffer();
+	for (read = write = 0, mylen = Len(); read < mylen; ++read)
+	{
+		if (strchr (killchars, Chars[read]) == NULL)
+		{
+			Chars[write++] = Chars[read];
+		}
+	}
+	Chars[write] = '\0';
+	ReallocBuffer (write);
+	UnlockBuffer();
 }
 
 void FString::MergeChars (char merger)
@@ -1018,7 +965,7 @@ octdigits	= [0-7];
 	yych = *YYCURSOR;
 
 	// Skip preceding whitespace
-	while (yych != '\0' && isspace((unsigned char)yych)) { yych = *++YYCURSOR; }
+	while (yych != '\0' && isspace(yych)) { yych = *++YYCURSOR; }
 
 	// Check for sign
 	if (yych == '+' || yych == '-') { yych = *++YYCURSOR; }
@@ -1056,7 +1003,7 @@ octdigits	= [0-7];
 	}
 
 	// The rest should all be whitespace
-	while (yych != '\0' && isspace((unsigned char)yych)) { yych = *++YYCURSOR; }
+	while (yych != '\0' && isspace(yych)) { yych = *++YYCURSOR; }
 	return yych == '\0';
 }
 
@@ -1076,7 +1023,7 @@ digits		= [0-9];
 	yych = *YYCURSOR;
 
 	// Skip preceding whitespace
-	while (yych != '\0' && isspace((unsigned char)yych)) { yych = *++YYCURSOR; }
+	while (yych != '\0' && isspace(yych)) { yych = *++YYCURSOR; }
 
 	// Check for sign
 	if (yych == '+' || yych == '-') { yych = *++YYCURSOR; }
@@ -1107,18 +1054,18 @@ digits		= [0-9];
 	}
 
 	// The rest should all be whitespace
-	while (yych != '\0' && isspace((unsigned char)yych)) { yych = *++YYCURSOR; }
+	while (yych != '\0' && isspace(yych)) { yych = *++YYCURSOR; }
 	return yych == '\0';
 }
 
 long FString::ToLong (int base) const
 {
-	return (long)strtoll (Chars, NULL, base);
+	return strtol (Chars, NULL, base);
 }
 
 unsigned long FString::ToULong (int base) const
 {
-	return (unsigned long)strtoull (Chars, NULL, base);
+	return strtoul (Chars, NULL, base);
 }
 
 double FString::ToDouble () const
@@ -1149,7 +1096,7 @@ void FString::ReallocBuffer (size_t newlen)
 	{ // If more than one reference, we must use a new copy
 		FStringData *old = Data();
 		AllocBuffer (newlen);
-		StrCopy (Chars, old->Chars(), newlen < old->Len ? newlen : old->Len);
+		StrCopy (Chars, old->Chars(), old->Len);
 		old->Release();
 	}
 	else
@@ -1159,49 +1106,6 @@ void FString::ReallocBuffer (size_t newlen)
 			Chars = (char *)(Data()->Realloc(newlen) + 1);
 		}
 		Data()->Len = (unsigned int)newlen;
-	}
-}
-
-TArray<FString> FString::Split(const FString &delimiter, const EmptyTokenType keepEmpty) const
-{
-	return Split(delimiter.GetChars(), keepEmpty);
-}
-
-TArray<FString> FString::Split(const char *const delimiter, const EmptyTokenType keepEmpty) const
-{
-	TArray<FString> tokens;
-	Split(tokens, delimiter, keepEmpty);
-	return tokens;
-}
-
-void FString::Split(TArray<FString>& tokens, const FString &delimiter, EmptyTokenType keepEmpty) const
-{
-	Split(tokens, delimiter.GetChars(), keepEmpty);
-}
-
-void FString::Split(TArray<FString>& tokens, const char *delimiter, EmptyTokenType keepEmpty) const
-{
-	assert(nullptr != delimiter);
-
-	const long selfLen = static_cast<long>(Len());
-	const long delimLen = static_cast<long>(strlen(delimiter));
-	long lastPos = 0;
-
-	while (lastPos <= selfLen)
-	{
-		long pos = IndexOf(delimiter, lastPos);
-
-		if (-1 == pos)
-		{
-			pos = selfLen;
-		}
-
-		if (pos != lastPos || TOK_KEEPEMPTY == keepEmpty)
-		{
-			tokens.Push(FString(GetChars() + lastPos, pos - lastPos));
-		}
-
-		lastPos = pos + delimLen;
 	}
 }
 
@@ -1282,12 +1186,4 @@ FStringData *FStringData::MakeCopy ()
 	copy->Len = Len;
 	FString::StrCopy (copy->Chars(), Chars(), Len);
 	return copy;
-}
-
-FStringf::FStringf(const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	VFormat(fmt, ap);
-	va_end(ap);
 }

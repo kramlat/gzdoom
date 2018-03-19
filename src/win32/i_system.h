@@ -1,23 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //		System specific interface stuff.
@@ -41,14 +36,37 @@ enum
 	LANGIDX_SysPreferred,
 	LANGIDX_SysDefault
 };
-extern uint32_t LanguageIDs[4];
+extern uint32 LanguageIDs[4];
 extern void SetLanguageIDs ();
 
 // [RH] Detects the OS the game is running under.
 void I_DetectOS (void);
 
+typedef enum {
+	os_unknown,
+	os_Win95,
+	os_WinNT4,
+	os_Win2k
+} os_t;
+
+extern os_t OSPlatform;
+
 // Called by DoomMain.
 void I_Init (void);
+
+// Called by D_DoomLoop, returns current time in tics.
+extern int (*I_GetTime) (bool saveMS);
+
+// like I_GetTime, except it waits for a new tic before returning
+extern int (*I_WaitForTic) (int);
+
+// Freezes tic counting temporarily. While frozen, calls to I_GetTime()
+// will always return the same value. This does not affect I_MSTime().
+// You must also not call I_WaitForTic() while freezing time, since the
+// tic will never arrive (unless it's the current one).
+extern void (*I_FreezeTime) (bool frozen);
+
+fixed_t I_GetTimeFrac (uint32 *ms);
 
 // Return a seed value for the RNG.
 unsigned int I_MakeRNGSeed();
@@ -90,8 +108,8 @@ void I_Quit (void);
 
 void I_Tactile (int on, int off, int total);
 
-void I_Error (const char *error, ...) GCCPRINTF(1,2);
-void I_FatalError (const char *error, ...) GCCPRINTF(1,2);
+void STACK_ARGS I_Error (const char *error, ...) GCCPRINTF(1,2);
+void STACK_ARGS I_FatalError (const char *error, ...) GCCPRINTF(1,2);
 
 void atterm (void (*func)(void));
 void popterm ();
@@ -102,8 +120,6 @@ bool I_SetCursor(FTexture *cursor);
 
 // Repaint the pre-game console
 void I_PaintConsole (void);
-
-void I_DebugPrint (const char *cp);
 
 // Print a console string
 void I_PrintStr (const char *cp);
@@ -117,15 +133,16 @@ int I_PickIWad (WadStuff *wads, int numwads, bool queryiwad, int defaultiwad);
 // The ini could not be saved at exit
 bool I_WriteIniFailed ();
 
+// [RH] Returns millisecond-accurate time
+unsigned int I_MSTime (void);
+unsigned int I_FPSTime();
+
 // [RH] Used by the display code to set the normal window procedure
 void I_SetWndProc();
 
 // [RH] Checks the registry for Steam's install path, so we can scan its
 // directories for IWADs if the user purchased any through Steam.
-TArray<FString> I_GetSteamPath();
-
-// [GZ] Same deal for GOG paths
-TArray<FString> I_GetGogPaths();
+FString I_GetSteamPath();
 
 // Damn Microsoft for doing Get/SetWindowLongPtr half-assed. Instead of
 // giving them proper prototypes under Win32, they are just macros for
@@ -153,32 +170,20 @@ FString I_GetLongPathName(FString shortpath);
 
 struct findstate_t
 {
-private:
-	uint32_t Attribs;
-	uint32_t Times[3*2];
-	uint32_t Size[2];
-	uint32_t Reserved[2];
+	DWORD Attribs;
+	DWORD Times[3*2];
+	DWORD Size[2];
+	DWORD Reserved[2];
 	char Name[MAX_PATH];
 	char AltName[14];
-
-	friend void *I_FindFirst(const char *filespec, findstate_t *fileinfo);
-	friend int I_FindNext(void *handle, findstate_t *fileinfo);
-	friend const char *I_FindName(findstate_t *fileinfo);
-	friend int I_FindAttr(findstate_t *fileinfo);
 };
 
 void *I_FindFirst (const char *filespec, findstate_t *fileinfo);
 int I_FindNext (void *handle, findstate_t *fileinfo);
 int I_FindClose (void *handle);
 
-inline const char *I_FindName(findstate_t *fileinfo)
-{
-	return fileinfo->Name;
-}
-inline int I_FindAttr(findstate_t *fileinfo)
-{
-	return fileinfo->Attribs;
-}
+#define I_FindName(a)	((a)->Name)
+#define I_FindAttr(a)	((a)->Attribs)
 
 #define FA_RDONLY	0x00000001
 #define FA_HIDDEN	0x00000002

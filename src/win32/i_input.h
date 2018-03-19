@@ -37,25 +37,20 @@
 #include "doomtype.h"
 #include "doomdef.h"
 
+void I_SetMouseCapture();
+void I_ReleaseMouseCapture();
+
 bool I_InitInput (void *hwnd);
 void I_ShutdownInput ();
+void I_PutInClipboard (const char *str);
+FString I_GetFromClipboard (bool windows_has_no_selection_clipboard);
 
 void I_GetEvent();
 
-enum
-{
-	INPUT_DIJoy,
-	INPUT_XInput,
-	INPUT_RawPS2,
-	NUM_JOYDEVICES
-};
-
-
-#ifdef _WIN32
+#ifdef USE_WINDOWS_DWORD
 #include "m_joy.h"
 
 // Don't make these definitions available to the main body of the source code.
-
 
 struct tagRAWINPUT;
 
@@ -85,7 +80,7 @@ protected:
 
 	int WheelMove[2];
 	int LastX, LastY;	// for m_filter
-	int ButtonState;	// bit mask of current button states (1=down, 0=up)
+	WORD ButtonState;	// bit mask of current button states (1=down, 0=up)
 };
 
 class FKeyboard : public FInputDevice
@@ -97,7 +92,7 @@ public:
 	void AllKeysUp();
 
 protected:
-	uint8_t KeyStates[256/8];
+	BYTE KeyStates[256/8];
 
 	int CheckKey(int keynum) const
 	{
@@ -124,6 +119,14 @@ public:
 	virtual void AddAxes(float axes[NUM_JOYAXIS]) = 0;
 	virtual void GetDevices(TArray<IJoystickConfig *> &sticks) = 0;
 	virtual IJoystickConfig *Rescan() = 0;
+};
+
+enum
+{
+	INPUT_DIJoy,
+	INPUT_XInput,
+	INPUT_RawPS2,
+	NUM_JOYDEVICES
 };
 
 extern FJoystickCollection *JoyDevices[NUM_JOYDEVICES];

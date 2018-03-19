@@ -1,25 +1,20 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1994-1996 Raven Software
-// Copyright 1998-1998 Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// $Log:$
 //
 // DESCRIPTION:
 //		Plats (i.e. elevator platforms) code, raising/lowering.
@@ -35,37 +30,48 @@
 #include "doomstat.h"
 #include "r_state.h"
 #include "gi.h"
-#include "serializer.h"
-#include "p_spec.h"
-#include "g_levellocals.h"
+#include "farchive.h"
 
 static FRandom pr_doplat ("DoPlat");
 
-IMPLEMENT_CLASS(DPlat, false, false)
+IMPLEMENT_CLASS (DPlat)
+
+inline FArchive &operator<< (FArchive &arc, DPlat::EPlatType &type)
+{
+	BYTE val = (BYTE)type;
+	arc << val;
+	type = (DPlat::EPlatType)val;
+	return arc;
+}
+inline FArchive &operator<< (FArchive &arc, DPlat::EPlatState &state)
+{
+	BYTE val = (BYTE)state;
+	arc << val;
+	state = (DPlat::EPlatState)val;
+	return arc;
+}
 
 DPlat::DPlat ()
 {
 }
 
-void DPlat::Serialize(FSerializer &arc)
+void DPlat::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc.Enum("type", m_Type)
-		("speed", m_Speed)
-		("low", m_Low)
-		("high", m_High)
-		("wait", m_Wait)
-		("count", m_Count)
-		.Enum("status", m_Status)
-		.Enum("oldstatus", m_OldStatus)
-		("crush", m_Crush)
-		("tag", m_Tag);
+	arc << m_Speed
+		<< m_Low
+		<< m_High
+		<< m_Wait
+		<< m_Count
+		<< m_Status
+		<< m_OldStatus
+		<< m_Crush
+		<< m_Tag
+		<< m_Type;
 }
 
 void DPlat::PlayPlatSound (const char *sound)
 {
-	if (m_Sector->Flags & SECF_SILENTMOVE) return;
-
 	if (m_Sector->seqType >= 0)
 	{
 		SN_StartSequence (m_Sector, CHAN_FLOOR, m_Sector->seqType, SEQ_PLATFORM, 0);
@@ -85,20 +91,20 @@ void DPlat::PlayPlatSound (const char *sound)
 //
 void DPlat::Tick ()
 {
-	EMoveResult res;
+	EResult res;
 		
 	switch (m_Status)
 	{
 	case up:
-		res = m_Sector->MoveFloor (m_Speed, m_High, m_Crush, 1, false);
+		res = MoveFloor (m_Speed, m_High, m_Crush, 1, false);
 										
-		if (res == EMoveResult::crushed && (m_Crush == -1))
+		if (res == crushed && (m_Crush == -1))
 		{
 			m_Count = m_Wait;
 			m_Status = down;
 			PlayPlatSound ("Platform");
 		}
-		else if (res == EMoveResult::pastdest)
+		else if (res == pastdest)
 		{
 			SN_StopSequence (m_Sector, CHAN_FLOOR);
 			if (m_Type != platToggle)
@@ -135,9 +141,9 @@ void DPlat::Tick ()
 		break;
 		
 	case down:
-		res = m_Sector->MoveFloor (m_Speed, m_Low, -1, -1, false);
+		res = MoveFloor (m_Speed, m_Low, -1, -1, false);
 
-		if (res == EMoveResult::pastdest)
+		if (res == pastdest)
 		{
 			SN_StopSequence (m_Sector, CHAN_FLOOR);
 			// if not an instant toggle, start waiting
@@ -163,7 +169,7 @@ void DPlat::Tick ()
 				m_Status = in_stasis;		//for reactivation of toggle
 			}
 		}
-		else if (res == EMoveResult::crushed && m_Crush < 0 && m_Type != platToggle)
+		else if (res == crushed && m_Crush < 0 && m_Type != platToggle)
 		{
 			m_Status = up;
 			m_Count = m_Wait;
@@ -189,7 +195,7 @@ void DPlat::Tick ()
 	case waiting:
 		if (m_Count > 0 && !--m_Count)
 		{
-			if (m_Sector->floorplane.fD() == m_Low)
+			if (m_Sector->floorplane.d == m_Low)
 				m_Status = up;
 			else
 				m_Status = down;
@@ -216,49 +222,58 @@ DPlat::DPlat (sector_t *sector)
 //	[RH] Changed amount to height and added delay,
 //		 lip, change, tag, and speed parameters.
 //
-bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
-				double speed, int delay, int lip, int change)
+bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, int height,
+				int speed, int delay, int lip, int change)
 {
 	DPlat *plat;
 	int secnum;
 	sector_t *sec;
 	bool rtn = false;
 	bool manual = false;
-	double newheight = 0;
+	fixed_t newheight = 0;
 	vertex_t *spot;
-
-	if (tag != 0)
-	{
-		//	Activate all <type> plats that are in_stasis
-		switch (type)
-		{
-		case DPlat::platToggle:
-			rtn = true;
-		case DPlat::platPerpetualRaise:
-			P_ActivateInStasis (tag);
-			break;
-
-		default:
-			break;
-		}
-	}
-
 
 	// [RH] If tag is zero, use the sector on the back side
 	//		of the activating line (if any).
-	FSectorTagIterator itr(tag, line);
-	while ((secnum = itr.Next()) >= 0)
+	if (!tag)
 	{
-		sec = &level.sectors[secnum];
+		if (!line || !(sec = line->backsector))
+			return false;
+		secnum = (int)(sec - sectors);
+		manual = true;
+		goto manual_plat;
+	}
 
+	//	Activate all <type> plats that are in_stasis
+	switch (type)
+	{
+	case DPlat::platToggle:
+		rtn = true;
+	case DPlat::platPerpetualRaise:
+		P_ActivateInStasis (tag);
+		break;
+
+	default:
+		break;
+	}
+
+	secnum = -1;
+	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+	{
+		sec = &sectors[secnum];
+
+manual_plat:
 		if (sec->PlaneMoving(sector_t::floor))
 		{
-			continue;
+			if (!manual)
+				continue;
+			else
+				return false;
 		}
 
 		// Find lowest & highest floors around sector
 		rtn = true;
-		plat = Create<DPlat> (sec);
+		plat = new DPlat (sec);
 
 		plat->m_Type = type;
 		plat->m_Crush = -1;
@@ -268,13 +283,14 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
 
 		//jff 1/26/98 Avoid raise plat bouncing a head off a ceiling and then
 		//going down forever -- default lower to plat height when triggered
-		plat->m_Low = sec->floorplane.fD();
+		plat->m_Low = sec->floorplane.d;
 
 		if (change)
 		{
 			if (line)
 				sec->SetTexture(sector_t::floor, line->sidedef[0]->sector->GetTexture(sector_t::floor));
-			if (change == 1) sec->ClearSpecial();
+			if (change == 1)
+				sec->special &= SECRET_MASK;	// Stop damage and other stuff, if any
 		}
 
 		switch (type)
@@ -283,38 +299,38 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
 		case DPlat::platRaiseAndStayLockout:
 			newheight = sec->FindNextHighestFloor (&spot);
 			plat->m_High = sec->floorplane.PointToDist (spot, newheight);
-			plat->m_Low = sec->floorplane.fD();
+			plat->m_Low = sec->floorplane.d;
 			plat->m_Status = DPlat::up;
 			plat->PlayPlatSound ("Floor");
-			sec->ClearSpecial();
+			sec->special &= SECRET_MASK;		// NO MORE DAMAGE, IF APPLICABLE
 			break;
 
 		case DPlat::platUpByValue:
 		case DPlat::platUpByValueStay:
-			newheight = sec->floorplane.ZatPoint (sec->centerspot) + height;
-			plat->m_High = sec->floorplane.PointToDist (sec->centerspot, newheight);
-			plat->m_Low = sec->floorplane.fD();
+			newheight = sec->floorplane.ZatPoint (0, 0) + height;
+			plat->m_High = sec->floorplane.PointToDist (0, 0, newheight);
+			plat->m_Low = sec->floorplane.d;
 			plat->m_Status = DPlat::up;
 			plat->PlayPlatSound ("Floor");
 			break;
 		
 		case DPlat::platDownByValue:
-			newheight = sec->floorplane.ZatPoint (sec->centerspot) - height;
-			plat->m_Low = sec->floorplane.PointToDist (sec->centerspot, newheight);
-			plat->m_High = sec->floorplane.fD();
+			newheight = sec->floorplane.ZatPoint (0, 0) - height;
+			plat->m_Low = sec->floorplane.PointToDist (0, 0, newheight);
+			plat->m_High = sec->floorplane.d;
 			plat->m_Status = DPlat::down;
 			plat->PlayPlatSound ("Floor");
 			break;
 
 		case DPlat::platDownWaitUpStay:
 		case DPlat::platDownWaitUpStayStone:
-			newheight = sec->FindLowestFloorSurrounding (&spot) + lip;
+			newheight = sec->FindLowestFloorSurrounding (&spot) + lip*FRACUNIT;
 			plat->m_Low = sec->floorplane.PointToDist (spot, newheight);
 
-			if (plat->m_Low < sec->floorplane.fD())
-				plat->m_Low = sec->floorplane.fD();
+			if (plat->m_Low < sec->floorplane.d)
+				plat->m_Low = sec->floorplane.d;
 
-			plat->m_High = sec->floorplane.fD();
+			plat->m_High = sec->floorplane.d;
 			plat->m_Status = DPlat::down;
 			plat->PlayPlatSound (type == DPlat::platDownWaitUpStay ? "Platform" : "Floor");
 			break;
@@ -329,27 +345,27 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
 				newheight = sec->FindHighestFloorSurrounding (&spot);
 			}
 			plat->m_High = sec->floorplane.PointToDist (spot, newheight);
-			plat->m_Low = sec->floorplane.fD();
+			plat->m_Low = sec->floorplane.d;
 
-			if (plat->m_High > sec->floorplane.fD())
-				plat->m_High = sec->floorplane.fD();
+			if (plat->m_High > sec->floorplane.d)
+				plat->m_High = sec->floorplane.d;
 
 			plat->m_Status = DPlat::up;
 			plat->PlayPlatSound ("Platform");
 			break;
 
 		case DPlat::platPerpetualRaise:
-			newheight = sec->FindLowestFloorSurrounding (&spot) + lip;
+			newheight = sec->FindLowestFloorSurrounding (&spot) + lip*FRACUNIT;
 			plat->m_Low =  sec->floorplane.PointToDist (spot, newheight);
 
-			if (plat->m_Low < sec->floorplane.fD())
-				plat->m_Low = sec->floorplane.fD();
+			if (plat->m_Low < sec->floorplane.d)
+				plat->m_Low = sec->floorplane.d;
 
 			newheight = sec->FindHighestFloorSurrounding (&spot);
 			plat->m_High =  sec->floorplane.PointToDist (spot, newheight);
 
-			if (plat->m_High > sec->floorplane.fD())
-				plat->m_High = sec->floorplane.fD();
+			if (plat->m_High > sec->floorplane.d)
+				plat->m_High = sec->floorplane.d;
 
 			plat->m_Status = pr_doplat() & 1 ? DPlat::up : DPlat::down;
 
@@ -362,26 +378,26 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
 			// set up toggling between ceiling, floor inclusive
 			newheight = sec->FindLowestCeilingPoint (&spot);
 			plat->m_Low = sec->floorplane.PointToDist (spot, newheight);
-			plat->m_High = sec->floorplane.fD();
+			plat->m_High = sec->floorplane.d;
 			plat->m_Status = DPlat::down;
 			SN_StartSequence (sec, CHAN_FLOOR, "Silence", 0);
 			break;
 
 		case DPlat::platDownToNearestFloor:
-			newheight = sec->FindNextLowestFloor (&spot) + lip;
+			newheight = sec->FindNextLowestFloor (&spot) + lip*FRACUNIT;
 			plat->m_Low = sec->floorplane.PointToDist (spot, newheight);
 			plat->m_Status = DPlat::down;
-			plat->m_High = sec->floorplane.fD();
+			plat->m_High = sec->floorplane.d;
 			plat->PlayPlatSound ("Platform");
 			break;
 
 		case DPlat::platDownToLowestCeiling:
 			newheight = sec->FindLowestCeilingSurrounding (&spot);
 		    plat->m_Low = sec->floorplane.PointToDist (spot, newheight);
-			plat->m_High = sec->floorplane.fD();
+			plat->m_High = sec->floorplane.d;
 
-			if (plat->m_Low < sec->floorplane.fD())
-				plat->m_Low = sec->floorplane.fD();
+			if (plat->m_Low < sec->floorplane.d)
+				plat->m_Low = sec->floorplane.d;
 
 			plat->m_Status = DPlat::down;
 			plat->PlayPlatSound ("Platform");
@@ -390,6 +406,8 @@ bool EV_DoPlat (int tag, line_t *line, DPlat::EPlatType type, double height,
 		default:
 			break;
 		}
+		if (manual)
+			return rtn;
 	}
 	return rtn;
 }
@@ -420,21 +438,15 @@ void DPlat::Stop ()
 	m_Status = in_stasis;
 }
 
-void EV_StopPlat (int tag, bool remove)
+void EV_StopPlat (int tag)
 {
 	DPlat *scan;
 	TThinkerIterator<DPlat> iterator;
 
-	scan = iterator.Next();
-	while (scan != nullptr)
+	while ( (scan = iterator.Next ()) )
 	{
-		DPlat *next = iterator.Next();
 		if (scan->m_Status != DPlat::in_stasis && scan->m_Tag == tag)
-		{
-			if (!remove) scan->Stop();
-			else scan->Destroy();
-		}
-		scan = next;
+			scan->Stop ();
 	}
 }
 

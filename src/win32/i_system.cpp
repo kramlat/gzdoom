@@ -4,8 +4,6 @@
 **
 **---------------------------------------------------------------------------
 ** Copyright 1998-2009 Randy Heit
-** Copyright (C) 2007-2012 Skulltag Development Team
-** Copyright (C) 2007-2016 Zandronum Development Team
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -19,15 +17,6 @@
 **    documentation and/or other materials provided with the distribution.
 ** 3. The name of the author may not be used to endorse or promote products
 **    derived from this software without specific prior written permission.
-** 4. Redistributions in any form must be accompanied by information on how to
-**    obtain complete source code for the software and any accompanying software
-**    that uses the software. The source code must either be included in the
-**    distribution or be available for no more than the cost of distribution plus
-**    a nominal fee, and must be freely redistributable under reasonable
-**    conditions. For an executable file, complete source code means the source
-**    code for all modules it contains. It does not include source code for
-**    modules or files that typically accompany the major components of the
-**    operating system on which the executable file runs.
 **
 ** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
 ** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -63,6 +52,7 @@
 #include <richedit.h>
 #include <wincrypt.h>
 
+#define USE_WINDOWS_DWORD
 #include "hardware.h"
 #include "doomerrors.h"
 #include <math.h>
@@ -96,8 +86,6 @@
 #include "textures/bitmap.h"
 #include "textures/textures.h"
 
-#include "optwin32.h"
-
 // MACROS ------------------------------------------------------------------
 
 #ifdef _MSC_VER
@@ -118,6 +106,15 @@ extern void LayoutMainWindow(HWND hWnd, HWND pane);
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
 static void CalculateCPUSpeed();
+static void I_SelectTimer();
+
+static int I_GetTimePolled(bool saveMS);
+static int I_WaitForTicPolled(int prevtic);
+static void I_FreezeTimePolled(bool frozen);
+static int I_GetTimeEventDriven(bool saveMS);
+static int I_WaitForTicEvent(int prevtic);
+static void I_FreezeTimeEventDriven(bool frozen);
+static void CALLBACK TimerTicked(UINT id, UINT msg, DWORD_PTR user, DWORD_PTR dw1, DWORD_PTR dw2);
 
 static HCURSOR CreateCompatibleCursor(FTexture *cursorpic);
 static HCURSOR CreateAlphaCursor(FTexture *cursorpic);
@@ -128,12 +125,6 @@ static void DestroyCustomCursor();
 
 EXTERN_CVAR(String, language);
 EXTERN_CVAR (Bool, queryiwad);
-// Used on welcome/IWAD screen.
-EXTERN_CVAR (Int, vid_renderer)
-EXTERN_CVAR (Bool, fullscreen)
-EXTERN_CVAR (Bool, disableautoload)
-EXTERN_CVAR (Bool, autoloadlights)
-EXTERN_CVAR (Bool, autoloadbrightmaps)
 
 extern HWND Window, ConWindow, GameTitleWindow;
 extern HANDLE StdOut;
@@ -141,31 +132,47 @@ extern bool FancyStdOut;
 extern HINSTANCE g_hInst;
 extern FILE *Logfile;
 extern bool NativeMouse;
-extern bool ConWindowHidden;
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 CVAR (String, queryiwad_key, "shift", CVAR_GLOBALCONFIG|CVAR_ARCHIVE);
-CVAR (Bool, con_debugoutput, false, 0);
 
 double PerfToSec, PerfToMillisec;
-uint32_t LanguageIDs[4];
-
 UINT TimerPeriod;
+UINT TimerEventID;
+UINT MillisecondsPerTic;
+HANDLE NewTicArrived;
+uint32 LanguageIDs[4];
 
+int (*I_GetTime) (bool saveMS);
+int (*I_WaitForTic) (int);
+void (*I_FreezeTime) (bool frozen);
+
+os_t OSPlatform;
 bool gameisdead;
-int sys_ostype = 0;
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
 static ticcmd_t emptycmd;
 static bool HasExited;
 
+static DWORD basetime = 0;
+// These are for the polled timer.
+static DWORD TicStart;
+static DWORD TicNext;
+static int TicFrozen;
+
+// These are for the event-driven timer.
+static int tics;
+static DWORD ted_start, ted_next;
+
 static WadStuff *WadList;
 static int NumWads;
 static int DefaultWad;
 
 static HCURSOR CustomCursor;
+
+// CODE --------------------------------------------------------------------
 
 //==========================================================================
 //
@@ -196,6 +203,303 @@ ticcmd_t *I_BaseTiccmd()
 	return &emptycmd;
 }
 
+// Stubs that select the timer to use and then call into it ----------------
+
+//==========================================================================
+//
+// I_GetTimeSelect
+//
+//==========================================================================
+
+static int I_GetTimeSelect(bool saveMS)
+{
+	I_SelectTimer();
+	return I_GetTime(saveMS);
+}
+
+//==========================================================================
+//
+// I_WaitForTicSelect
+//
+//==========================================================================
+
+static int I_WaitForTicSelect(int prevtic)
+{
+	I_SelectTimer();
+	return I_WaitForTic(prevtic);
+}
+
+//==========================================================================
+//
+// I_SelectTimer
+//
+// Tries to create a timer event for efficent CPU use when the FPS is
+// capped. Failing that, it sets things up for a polling timer instead.
+//
+//==========================================================================
+
+static void I_SelectTimer()
+{
+	assert(basetime == 0);
+
+	// Use a timer event if possible.
+	NewTicArrived = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (NewTicArrived)
+	{
+		UINT delay;
+		const char *cmdDelay;
+
+		cmdDelay = Args->CheckValue("-timerdelay");
+		delay = 0;
+		if (cmdDelay != 0)
+		{
+			delay = atoi(cmdDelay);
+		}
+		if (delay == 0)
+		{
+			delay = 1000/TICRATE;
+		}
+		MillisecondsPerTic = delay;
+		TimerEventID = timeSetEvent(delay, 0, TimerTicked, 0, TIME_PERIODIC);
+	}
+	// Get the current time as the basetime.
+	basetime = timeGetTime();
+	// Set timer functions.
+	if (TimerEventID != 0)
+	{
+		I_GetTime = I_GetTimeEventDriven;
+		I_WaitForTic = I_WaitForTicEvent;
+		I_FreezeTime = I_FreezeTimeEventDriven;
+	}
+	else
+	{
+		I_GetTime = I_GetTimePolled;
+		I_WaitForTic = I_WaitForTicPolled;
+		I_FreezeTime = I_FreezeTimePolled;
+	}
+}
+
+//==========================================================================
+//
+// I_MSTime
+//
+// Returns the current time in milliseconds, where 0 is the first call
+// to I_GetTime or I_WaitForTic.
+//
+//==========================================================================
+
+unsigned int I_MSTime()
+{
+	assert(basetime != 0);
+	return timeGetTime() - basetime;
+}
+
+//==========================================================================
+//
+// I_FPSTime
+//
+// Returns the current system time in milliseconds. This is used by the FPS
+// meter of DFrameBuffer::DrawRateStuff(). Since the screen can display
+// before the play simulation is ready to begin, this needs to be
+// separate from I_MSTime().
+//
+//==========================================================================
+
+unsigned int I_FPSTime()
+{
+	return timeGetTime();
+}
+
+//==========================================================================
+//
+// I_GetTimePolled
+//
+// Returns the current time in tics. If saveMS is true, then calls to
+// I_GetTimeFrac() will use this tic as 0 and the next tic as 1.
+//
+//==========================================================================
+
+static int I_GetTimePolled(bool saveMS)
+{
+	DWORD tm;
+
+	if (TicFrozen != 0)
+	{
+		return TicFrozen;
+	}
+
+	tm = timeGetTime();
+	if (basetime == 0)
+	{
+		basetime = tm;
+	}
+	if (saveMS)
+	{
+		TicStart = tm;
+		TicNext = (tm * TICRATE / 1000 + 1) * 1000 / TICRATE;
+	}
+
+	return ((tm-basetime)*TICRATE)/1000;
+}
+
+//==========================================================================
+//
+// I_WaitForTicPolled
+//
+// Busy waits until the current tic is greater than prevtic. Time must not
+// be frozen.
+//
+//==========================================================================
+
+static int I_WaitForTicPolled(int prevtic)
+{
+	int time;
+
+	assert(TicFrozen == 0);
+	while ((time = I_GetTimePolled(false)) <= prevtic)
+	{ }
+
+	return time;
+}
+
+//==========================================================================
+//
+// I_FreezeTimePolled
+//
+// Freeze/unfreeze the timer.
+//
+//==========================================================================
+
+static void I_FreezeTimePolled(bool frozen)
+{
+	if (frozen)
+	{
+		assert(TicFrozen == 0);
+		TicFrozen = I_GetTimePolled(false);
+	}
+	else
+	{
+		assert(TicFrozen != 0);
+		int froze = TicFrozen;
+		TicFrozen = 0;
+		int now = I_GetTimePolled(false);
+		basetime += (now - froze) * 1000 / TICRATE;
+	}
+}
+
+//==========================================================================
+//
+// I_GetTimeEventDriven
+//
+// Returns the current tick counter. This is incremented asynchronously as
+// the timer event fires.
+//
+//==========================================================================
+
+static int I_GetTimeEventDriven(bool saveMS)
+{
+	if (saveMS)
+	{
+		TicStart = ted_start;
+		TicNext = ted_next;
+	}
+	return tics;
+}
+
+//==========================================================================
+//
+// I_WaitForTicEvent
+//
+// Waits on the timer event as long as the current tic is not later than
+// prevtic.
+//
+//==========================================================================
+
+static int I_WaitForTicEvent(int prevtic)
+{
+	assert(!TicFrozen);
+	while (prevtic >= tics)
+	{
+		WaitForSingleObject(NewTicArrived, 1000/TICRATE);
+	}
+	return tics;
+}
+
+//==========================================================================
+//
+// I_FreezeTimeEventDriven
+//
+// Freeze/unfreeze the ticker.
+//
+//==========================================================================
+
+static void I_FreezeTimeEventDriven(bool frozen)
+{
+	TicFrozen = frozen;
+}
+
+//==========================================================================
+//
+// TimerTicked
+//
+// Advance the tick count and signal the NewTicArrived event.
+//
+//==========================================================================
+
+static void CALLBACK TimerTicked(UINT id, UINT msg, DWORD_PTR user, DWORD_PTR dw1, DWORD_PTR dw2)
+{
+	if (!TicFrozen)
+	{
+		tics++;
+	}
+	ted_start = timeGetTime ();
+	ted_next = ted_start + MillisecondsPerTic;
+	SetEvent(NewTicArrived);
+}
+
+//==========================================================================
+//
+// I_GetTimeFrac
+//
+// Returns the fractional amount of a tic passed since the most recently
+// saved tic.
+//
+//==========================================================================
+
+fixed_t I_GetTimeFrac(uint32 *ms)
+{
+	DWORD now = timeGetTime();
+	if (ms != NULL)
+	{
+		*ms = TicNext;
+	}
+	DWORD step = TicNext - TicStart;
+	if (step == 0)
+	{
+		return FRACUNIT;
+	}
+	else
+	{
+		fixed_t frac = clamp<fixed_t> ((now - TicStart)*FRACUNIT/step, 0, FRACUNIT);
+		return frac;
+	}
+}
+
+//==========================================================================
+//
+// I_WaitVBL
+//
+// I_WaitVBL is never used to actually synchronize to the vertical blank.
+// Instead, it's used for delay purposes. Doom used a 70 Hz display mode,
+// so that's what we use to determine how long to wait for.
+//
+//==========================================================================
+
+void I_WaitVBL(int count)
+{
+	Sleep(1000 * count / 70);
+}
+
 //==========================================================================
 //
 // I_DetectOS
@@ -219,7 +523,24 @@ void I_DetectOS(void)
 
 	switch (info.dwPlatformId)
 	{
+	case VER_PLATFORM_WIN32_WINDOWS:
+		OSPlatform = os_Win95;
+		if (info.dwMinorVersion < 10)
+		{
+			osname = "95";
+		}
+		else if (info.dwMinorVersion < 90)
+		{
+			osname = "98";
+		}
+		else
+		{
+			osname = "Me";
+		}
+		break;
+
 	case VER_PLATFORM_WIN32_NT:
+		OSPlatform = info.dwMajorVersion < 5 ? os_WinNT4 : os_Win2k;
 		osname = "NT";
 		if (info.dwMajorVersion == 5)
 		{
@@ -230,60 +551,77 @@ void I_DetectOS(void)
 			if (info.dwMinorVersion == 1)
 			{
 				osname = "XP";
-				sys_ostype = 1; // legacy OS
 			}
 			else if (info.dwMinorVersion == 2)
 			{
 				osname = "Server 2003";
-				sys_ostype = 1; // legacy OS
 			}
 		}
 		else if (info.dwMajorVersion == 6)
 		{
 			if (info.dwMinorVersion == 0)
 			{
-				osname = (info.wProductType == VER_NT_WORKSTATION) ? "Vista" : "Server 2008";
-				sys_ostype = 2; // legacy OS
+				if (info.wProductType == VER_NT_WORKSTATION)
+				{
+					osname = "Vista";
+				}
+				else
+				{
+					osname = "Server 2008";
+				}
 			}
 			else if (info.dwMinorVersion == 1)
 			{
-				osname = (info.wProductType == VER_NT_WORKSTATION) ? "7" : "Server 2008 R2";
-				sys_ostype = 2; // supported OS
+				if (info.wProductType == VER_NT_WORKSTATION)
+				{
+					osname = "7";
+				}
+				else
+				{
+					osname = "Server 2008 R2";
+				}
 			}
 			else if (info.dwMinorVersion == 2)	
 			{
-				// Starting with Windows 8.1, you need to specify in your manifest
-				// the highest version of Windows you support, which will also be the
-				// highest version of Windows this function returns.
-				osname = (info.wProductType == VER_NT_WORKSTATION) ? "8" : "Server 2012";
-				sys_ostype = 2; // supported OS
+				// Microsoft broke this API for 8.1 so without jumping through hoops it won't be possible anymore to detect never versions aside from the build number, especially for older compilers.
+				if (info.wProductType == VER_NT_WORKSTATION)
+				{
+					osname = "8 (or higher)";
+				}
+				else
+				{
+					osname = "Server 2012 (or higher)";
+				}
 			}
-			else if (info.dwMinorVersion == 3)
-			{
-				osname = (info.wProductType == VER_NT_WORKSTATION) ? "8.1" : "Server 2012 R2";
-				sys_ostype = 2; // supported OS
-			}
-			else if (info.dwMinorVersion == 4)
-			{
-				osname = (info.wProductType == VER_NT_WORKSTATION) ? "10 (beta)" : "Server 10 (beta)";
-			}
-		}
-		else if (info.dwMajorVersion == 10)
-		{
-			osname = (info.wProductType == VER_NT_WORKSTATION) ? "10 (or higher)" : "Server 10 (or higher)";
-			sys_ostype = 3; // modern OS
 		}
 		break;
 
 	default:
+		OSPlatform = os_unknown;
 		osname = "Unknown OS";
 		break;
 	}
 
-	if (!batchrun) Printf ("OS: Windows %s (NT %lu.%lu) Build %lu\n    %s\n",
-			osname,
-			info.dwMajorVersion, info.dwMinorVersion,
-			info.dwBuildNumber, info.szCSDVersion);
+	if (OSPlatform == os_Win95)
+	{
+		Printf ("OS: Windows %s %lu.%lu.%lu %s\n",
+				osname,
+				info.dwMajorVersion, info.dwMinorVersion,
+				info.dwBuildNumber & 0xffff, info.szCSDVersion);
+	}
+	else
+	{
+		Printf ("OS: Windows %s (NT %lu.%lu) Build %lu\n    %s\n",
+				osname,
+				info.dwMajorVersion, info.dwMinorVersion,
+				info.dwBuildNumber, info.szCSDVersion);
+	}
+
+	if (OSPlatform == os_unknown)
+	{
+		Printf ("(Assuming Windows 2000)\n");
+		OSPlatform = os_Win2k;
+	}
 }
 
 //==========================================================================
@@ -333,11 +671,11 @@ void SetLanguageIDs()
 	}
 	else
 	{
-		uint32_t lang = 0;
+		DWORD lang = 0;
 
-		((uint8_t *)&lang)[0] = (language)[0];
-		((uint8_t *)&lang)[1] = (language)[1];
-		((uint8_t *)&lang)[2] = (language)[2];
+		((BYTE *)&lang)[0] = (language)[0];
+		((BYTE *)&lang)[1] = (language)[1];
+		((BYTE *)&lang)[2] = (language)[2];
 		LanguageIDs[0] = lang;
 		LanguageIDs[1] = lang;
 		LanguageIDs[2] = lang;
@@ -361,7 +699,7 @@ void CalculateCPUSpeed()
 
 	QueryPerformanceFrequency (&freq);
 
-	if (freq.QuadPart != 0)
+	if (freq.QuadPart != 0 && CPU.bRDTSC)
 	{
 		LARGE_INTEGER count1, count2;
 		cycle_t ClockCalibration;
@@ -398,7 +736,7 @@ void CalculateCPUSpeed()
 		PerfToMillisec = PerfToSec * 1000.0;
 	}
 
-	if (!batchrun) Printf ("CPU speed: %.0f MHz\n", 0.001 / PerfToMillisec);
+	Printf ("CPU Speed: %.0f MHz\n", 0.001 / PerfToMillisec);
 }
 
 //==========================================================================
@@ -412,6 +750,9 @@ void I_Init()
 	CheckCPUID(&CPU);
 	CalculateCPUSpeed();
 	DumpCPUInfo(&CPU);
+
+	I_GetTime = I_GetTimeSelect;
+	I_WaitForTic = I_WaitForTicSelect;
 
 	atterm (I_ShutdownSound);
 	I_InitSound ();
@@ -427,8 +768,15 @@ void I_Quit()
 {
 	HasExited = true;		/* Prevent infinitely recursive exits -- killough */
 
+	if (TimerEventID != 0)
+	{
+		timeKillEvent(TimerEventID);
+	}
+	if (NewTicArrived != NULL)
+	{
+		CloseHandle(NewTicArrived);
+	}
 	timeEndPeriod(TimerPeriod);
-
 	if (demorecording)
 	{
 		G_CheckDemoStatus();
@@ -446,7 +794,7 @@ void I_Quit()
 //
 //==========================================================================
 
-void I_FatalError(const char *error, ...)
+void STACK_ARGS I_FatalError(const char *error, ...)
 {
 	static BOOL alreadyThrown = false;
 	gameisdead = true;
@@ -459,7 +807,6 @@ void I_FatalError(const char *error, ...)
 		va_start(argptr, error);
 		myvsnprintf(errortext, MAX_ERRORTEXT, error, argptr);
 		va_end(argptr);
-		OutputDebugString(errortext);
 
 		// Record error to log (if logging)
 		if (Logfile)
@@ -487,7 +834,7 @@ void I_FatalError(const char *error, ...)
 //
 //==========================================================================
 
-void I_Error(const char *error, ...)
+void STACK_ARGS I_Error(const char *error, ...)
 {
 	va_list argptr;
 	char errortext[MAX_ERRORTEXT];
@@ -495,7 +842,6 @@ void I_Error(const char *error, ...)
 	va_start(argptr, error);
 	myvsnprintf(errortext, MAX_ERRORTEXT, error, argptr);
 	va_end(argptr);
-	OutputDebugString(errortext);
 
 	throw CRecoverableError(errortext);
 }
@@ -553,7 +899,7 @@ void ToEditControl(HWND edit, const char *buf, wchar_t *wbuf, int bpos)
 	};
 	for (int i = 0; i <= bpos; ++i)
 	{
-		wchar_t code = (uint8_t)buf[i];
+		wchar_t code = (BYTE)buf[i];
 		if (code >= 0x1D && code <= 0x1F)
 		{ // The bar characters, most commonly used to indicate map changes
 			code = 0x2550;	// Box Drawings Double Horizontal
@@ -577,11 +923,12 @@ void ToEditControl(HWND edit, const char *buf, wchar_t *wbuf, int bpos)
 //
 //==========================================================================
 
-static void DoPrintStr(const char *cp, HWND edit, HANDLE StdOut)
+void I_PrintStr(const char *cp)
 {
-	if (edit == NULL && StdOut == NULL)
+	if (ConWindow == NULL && StdOut == NULL)
 		return;
 
+	HWND edit = ConWindow;
 	char buf[256];
 	wchar_t wbuf[countof(buf)];
 	int bpos = 0;
@@ -628,7 +975,7 @@ static void DoPrintStr(const char *cp, HWND edit, HANDLE StdOut)
 		}
 		else
 		{
-			const uint8_t *color_id = (const uint8_t *)cp + 1;
+			const BYTE *color_id = (const BYTE *)cp + 1;
 			EColorRange range = V_ParseFontColor(color_id, CR_UNTRANSLATED, CR_YELLOW);
 			cp = (const char *)color_id;
 
@@ -642,7 +989,7 @@ static void DoPrintStr(const char *cp, HWND edit, HANDLE StdOut)
 					// eight basic colors, and each comes in a dark and a bright
 					// variety.
 					float h, s, v, r, g, b;
-					int attrib = 0;
+					WORD attrib = 0;
 
 					RGBtoHSV(color.r / 255.f, color.g / 255.f, color.b / 255.f, &h, &s, &v);
 					if (s != 0)
@@ -659,7 +1006,7 @@ static void DoPrintStr(const char *cp, HWND edit, HANDLE StdOut)
 						else if (v < 0.90) attrib = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 						else			   attrib = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
 					}
-					SetConsoleTextAttribute(StdOut, (WORD)attrib);
+					SetConsoleTextAttribute(StdOut, attrib);
 				}
 				if (edit != NULL)
 				{
@@ -711,60 +1058,6 @@ static void DoPrintStr(const char *cp, HWND edit, HANDLE StdOut)
 	{ // Set text back to gray, in case it was changed.
 		SetConsoleTextAttribute(StdOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 	}
-}
-
-static TArray<FString> bufferedConsoleStuff;
-
-void I_DebugPrint(const char *cp)
-{
-	OutputDebugStringA(cp);
-}
-
-void I_PrintStr(const char *cp)
-{
-	if (con_debugoutput)
-	{
-		// Strip out any color escape sequences before writing to debug output
-		char * copy = new char[strlen(cp)+1];
-		const char * srcp = cp;
-		char * dstp = copy;
-
-		while (*srcp != 0)
-		{
-			if (*srcp!=0x1c && *srcp!=0x1d && *srcp!=0x1e && *srcp!=0x1f)
-			{
-				*dstp++=*srcp++;
-			}
-			else
-			{
-				if (srcp[1]!=0) srcp+=2;
-				else break;
-			}
-		}
-		*dstp=0;
-
-		OutputDebugStringA(copy);
-		delete [] copy;
-	}
-
-	if (ConWindowHidden)
-	{
-		bufferedConsoleStuff.Push(cp);
-		DoPrintStr(cp, NULL, StdOut);
-	}
-	else
-	{
-		DoPrintStr(cp, ConWindow, StdOut);
-	}
-}
-
-void I_FlushBufferedConsoleStuff()
-{
-	for (unsigned i = 0; i < bufferedConsoleStuff.Size(); i++)
-	{
-		DoPrintStr(bufferedConsoleStuff[i], ConWindow, NULL);
-	}
-	bufferedConsoleStuff.Clear();
 }
 
 //==========================================================================
@@ -819,23 +1112,6 @@ BOOL CALLBACK IWADBoxCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
 			newlabel.Format(GAMESIG " %s: %s", GetVersionString(), label);
 			SetWindowText(hDlg, newlabel.GetChars());
 		}
-
-		// [SP] Upstreamed from Zandronum
-		char	szString[256];
-
-		// Check the current video settings.
-		SendDlgItemMessage( hDlg, vid_renderer ? IDC_WELCOME_OPENGL : IDC_WELCOME_SOFTWARE, BM_SETCHECK, BST_CHECKED, 0 );
-		SendDlgItemMessage( hDlg, IDC_WELCOME_FULLSCREEN, BM_SETCHECK, fullscreen ? BST_CHECKED : BST_UNCHECKED, 0 );
-
-		// [SP] This is our's
-		SendDlgItemMessage( hDlg, IDC_WELCOME_NOAUTOLOAD, BM_SETCHECK, disableautoload ? BST_CHECKED : BST_UNCHECKED, 0 );
-		SendDlgItemMessage( hDlg, IDC_WELCOME_LIGHTS, BM_SETCHECK, autoloadlights ? BST_CHECKED : BST_UNCHECKED, 0 );
-		SendDlgItemMessage( hDlg, IDC_WELCOME_BRIGHTMAPS, BM_SETCHECK, autoloadbrightmaps ? BST_CHECKED : BST_UNCHECKED, 0 );
-
-		// Set up our version string.
-		sprintf(szString, "Version %s.", GetVersionString());
-		SetDlgItemText (hDlg, IDC_WELCOME_VERSION, szString);
-
 		// Populate the list with all the IWADs found
 		ctrl = GetDlgItem(hDlg, IDC_IWADLIST);
 		for (i = 0; i < NumWads; i++)
@@ -869,14 +1145,6 @@ BOOL CALLBACK IWADBoxCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
 			(LOWORD(wParam) == IDC_IWADLIST && HIWORD(wParam) == LBN_DBLCLK))
 		{
 			SetQueryIWad(hDlg);
-			// [SP] Upstreamed from Zandronum
-			vid_renderer = SendDlgItemMessage( hDlg, IDC_WELCOME_OPENGL, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
-			fullscreen = SendDlgItemMessage( hDlg, IDC_WELCOME_FULLSCREEN, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
-
-			// [SP] This is our's.
-			disableautoload = SendDlgItemMessage( hDlg, IDC_WELCOME_NOAUTOLOAD, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
-			autoloadlights = SendDlgItemMessage( hDlg, IDC_WELCOME_LIGHTS, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
-			autoloadbrightmaps = SendDlgItemMessage( hDlg, IDC_WELCOME_BRIGHTMAPS, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
 			ctrl = GetDlgItem (hDlg, IDC_IWADLIST);
 			EndDialog(hDlg, SendMessage (ctrl, LB_GETCURSEL, 0, 0));
 		}
@@ -999,7 +1267,7 @@ static HCURSOR CreateCompatibleCursor(FTexture *cursorpic)
 	HDC dc = GetDC(NULL);
 	if (dc == NULL)
 	{
-		return nullptr;
+		return false;
 	}
 	HDC and_mask_dc = CreateCompatibleDC(dc);
 	HDC xor_mask_dc = CreateCompatibleDC(dc);
@@ -1019,7 +1287,7 @@ static HCURSOR CreateCompatibleCursor(FTexture *cursorpic)
 	Rectangle(xor_mask_dc, 0, 0, 32, 32);
 
 	FBitmap bmp;
-	const uint8_t *pixels;
+	const BYTE *pixels;
 
 	bmp.Create(picwidth, picheight);
 	cursorpic->CopyTrueColorPixels(&bmp, 0, 0);
@@ -1030,7 +1298,7 @@ static HCURSOR CreateCompatibleCursor(FTexture *cursorpic)
 	{
 		for (int x = 0; x < picwidth; ++x)
 		{
-			const uint8_t *bgra = &pixels[x*4 + y*bmp.GetPitch()];
+			const BYTE *bgra = &pixels[x*4 + y*bmp.GetPitch()];
 			if (bgra[3] != 0)
 			{
 				SetPixelV(and_mask_dc, x, y, RGB(0,0,0));
@@ -1060,16 +1328,10 @@ static HCURSOR CreateAlphaCursor(FTexture *cursorpic)
 	HBITMAP color, mono;
 	void *bits;
 
-	// Find closest integer scale factor for the monitor DPI
-	HDC screenDC = GetDC(0);
-	int dpi = GetDeviceCaps(screenDC, LOGPIXELSX);
-	int scale = MAX((dpi + 96 / 2 - 1) / 96, 1);
-	ReleaseDC(0, screenDC);
-
 	memset(&bi, 0, sizeof(bi));
 	bi.bV5Size = sizeof(bi);
-	bi.bV5Width = 32 * scale;
-	bi.bV5Height = 32 * scale;
+	bi.bV5Width = 32;
+	bi.bV5Height = 32;
 	bi.bV5Planes = 1;
 	bi.bV5BitCount = 32;
 	bi.bV5Compression = BI_BITFIELDS;
@@ -1094,7 +1356,7 @@ static HCURSOR CreateAlphaCursor(FTexture *cursorpic)
 	}
 
 	// Create an empty mask bitmap, since CreateIconIndirect requires this.
-	mono = CreateBitmap(32 * scale, 32 * scale, 1, 1, NULL);
+	mono = CreateBitmap(32, 32, 1, 1, NULL);
 	if (mono == NULL)
 	{
 		DeleteObject(color);
@@ -1104,29 +1366,10 @@ static HCURSOR CreateAlphaCursor(FTexture *cursorpic)
 	// Copy cursor to the color bitmap. Note that GDI bitmaps are upside down compared
 	// to normal conventions, so we create the FBitmap pointing at the last row and use
 	// a negative pitch so that CopyTrueColorPixels will use GDI's orientation.
-	if (scale == 1)
-	{
-		FBitmap bmp((uint8_t *)bits + 31 * 32 * 4, -32 * 4, 32, 32);
-		cursorpic->CopyTrueColorPixels(&bmp, 0, 0);
-	}
-	else
-	{
-		TArray<uint32_t> unscaled;
-		unscaled.Resize(32 * 32);
-		for (int i = 0; i < 32 * 32; i++) unscaled[i] = 0;
-		FBitmap bmp((uint8_t *)&unscaled[0] + 31 * 32 * 4, -32 * 4, 32, 32);
-		cursorpic->CopyTrueColorPixels(&bmp, 0, 0);
-		uint32_t *scaled = (uint32_t*)bits;
-		for (int y = 0; y < 32 * scale; y++)
-		{
-			for (int x = 0; x < 32 * scale; x++)
-			{
-				scaled[x + y * 32 * scale] = unscaled[x / scale + y / scale * 32];
-			}
-		}
-	}
+	FBitmap bmp((BYTE *)bits + 31*32*4, -32*4, 32, 32);
+	cursorpic->CopyTrueColorPixels(&bmp, 0, 0);
 
-	return CreateBitmapCursor(cursorpic->LeftOffset * scale, cursorpic->TopOffset * scale, mono, color);
+	return CreateBitmapCursor(cursorpic->LeftOffset, cursorpic->TopOffset, mono, color);
 }
 
 //==========================================================================
@@ -1142,8 +1385,8 @@ static HCURSOR CreateBitmapCursor(int xhot, int yhot, HBITMAP and_mask, HBITMAP 
 	ICONINFO iconinfo =
 	{
 		FALSE,		// fIcon
-		(DWORD)xhot,	// xHotspot
-		(DWORD)yhot,	// yHotspot
+		xhot,		// xHotspot
+		yhot,		// yHotspot
 		and_mask,	// hbmMask
 		color_mask	// hbmColor
 	};
@@ -1248,95 +1491,28 @@ int I_FindClose(void *handle)
 
 static bool QueryPathKey(HKEY key, const char *keypath, const char *valname, FString &value)
 {
-	HKEY pathkey;
+	HKEY steamkey;
 	DWORD pathtype;
 	DWORD pathlen;
 	LONG res;
 
-	if(ERROR_SUCCESS == RegOpenKeyEx(key, keypath, 0, KEY_QUERY_VALUE, &pathkey))
+	if(ERROR_SUCCESS == RegOpenKeyEx(key, keypath, 0, KEY_QUERY_VALUE, &steamkey))
 	{
-		if (ERROR_SUCCESS == RegQueryValueEx(pathkey, valname, 0, &pathtype, NULL, &pathlen) &&
+		if (ERROR_SUCCESS == RegQueryValueEx(steamkey, valname, 0, &pathtype, NULL, &pathlen) &&
 			pathtype == REG_SZ && pathlen != 0)
 		{
 			// Don't include terminating null in count
 			char *chars = value.LockNewBuffer(pathlen - 1);
-			res = RegQueryValueEx(pathkey, valname, 0, NULL, (LPBYTE)chars, &pathlen);
+			res = RegQueryValueEx(steamkey, valname, 0, NULL, (LPBYTE)chars, &pathlen);
 			value.UnlockBuffer();
 			if (res != ERROR_SUCCESS)
 			{
 				value = "";
 			}
 		}
-		RegCloseKey(pathkey);
+		RegCloseKey(steamkey);
 	}
 	return value.IsNotEmpty();
-}
-
-//==========================================================================
-//
-// I_GetGogPaths
-//
-// Check the registry for GOG installation paths, so we can search for IWADs
-// that were bought from GOG.com. This is a bit different from the Steam
-// version because each game has its own independent installation path, no
-// such thing as <steamdir>/SteamApps/common/<GameName>.
-//
-//==========================================================================
-
-TArray<FString> I_GetGogPaths()
-{
-	TArray<FString> result;
-	FString path;
-	FString gamepath;
-
-#ifdef _WIN64
-	FString gogregistrypath = "Software\\Wow6432Node\\GOG.com\\Games";
-#else
-	// If a 32-bit ZDoom runs on a 64-bit Windows, this will be transparently and
-	// automatically redirected to the Wow6432Node address instead, so this address
-	// should be safe to use in all cases.
-	FString gogregistrypath = "Software\\GOG.com\\Games";
-#endif
-
-	// Look for Ultimate Doom
-	gamepath = gogregistrypath + "\\1435827232";
-	if (QueryPathKey(HKEY_LOCAL_MACHINE, gamepath.GetChars(), "Path", path))
-	{
-		result.Push(path);	// directly in install folder
-	}
-
-	// Look for Doom II
-	gamepath = gogregistrypath + "\\1435848814";
-	if (QueryPathKey(HKEY_LOCAL_MACHINE, gamepath.GetChars(), "Path", path))
-	{
-		result.Push(path + "/doom2");	// in a subdirectory
-		// If direct support for the Master Levels is ever added, they are in path + /master/wads
-	}
-
-	// Look for Final Doom
-	gamepath = gogregistrypath + "\\1435848742";
-	if (QueryPathKey(HKEY_LOCAL_MACHINE, gamepath.GetChars(), "Path", path))
-	{
-		// in subdirectories
-		result.Push(path + "/TNT");
-		result.Push(path + "/Plutonia");
-	}
-
-	// Look for Doom 3: BFG Edition
-	gamepath = gogregistrypath + "\\1135892318";
-	if (QueryPathKey(HKEY_LOCAL_MACHINE, gamepath.GetChars(), "Path", path))
-	{
-		result.Push(path + "/base/wads");	// in a subdirectory
-	}
-
-	// Look for Strife: Veteran Edition
-	gamepath = gogregistrypath + "\\1432899949";
-	if (QueryPathKey(HKEY_LOCAL_MACHINE, gamepath.GetChars(), "Path", path))
-	{
-		result.Push(path);	// directly in install folder
-	}
-
-	return result;
 }
 
 //==========================================================================
@@ -1348,36 +1524,20 @@ TArray<FString> I_GetGogPaths()
 //
 //==========================================================================
 
-TArray<FString> I_GetSteamPath()
+FString I_GetSteamPath()
 {
-	TArray<FString> result;
-	static const char *const steam_dirs[] =
-	{
-		"doom 2/base",
-		"final doom/base",
-		"heretic shadow of the serpent riders/base",
-		"hexen/base",
-		"hexen deathkings of the dark citadel/base",
-		"ultimate doom/base",
-		"DOOM 3 BFG Edition/base/wads",
-		"Strife"
-	};
-
 	FString path;
 
-	if (!QueryPathKey(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath", path))
+	if (QueryPathKey(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath", path))
 	{
-		if (!QueryPathKey(HKEY_LOCAL_MACHINE, "Software\\Valve\\Steam", "InstallPath", path))
-			return result;
+		return path;
 	}
-	path += "/SteamApps/common/";
-
-	for(unsigned int i = 0; i < countof(steam_dirs); ++i)
+	if (QueryPathKey(HKEY_LOCAL_MACHINE, "Software\\Valve\\Steam", "InstallPath", path))
 	{
-		result.Push(path + steam_dirs[i]);
+		return path;
 	}
-
-	return result;
+	path = "";
+	return path;
 }
 
 //==========================================================================
@@ -1416,7 +1576,7 @@ unsigned int I_MakeRNGSeed()
 	{
 		return (unsigned int)time(NULL);
 	}
-	if (!CryptGenRandom(prov, sizeof(seed), (uint8_t *)&seed))
+	if (!CryptGenRandom(prov, sizeof(seed), (BYTE *)&seed))
 	{
 		seed = (unsigned int)time(NULL);
 	}
@@ -1435,19 +1595,13 @@ unsigned int I_MakeRNGSeed()
 
 FString I_GetLongPathName(FString shortpath)
 {
-	using OptWin32::GetLongPathNameA;
-
-	// Doesn't exist on NT4
-	if (!GetLongPathNameA)
-		return shortpath;
-
-	DWORD buffsize = GetLongPathNameA(shortpath.GetChars(), NULL, 0);
+	DWORD buffsize = GetLongPathName(shortpath.GetChars(), NULL, 0);
 	if (buffsize == 0)
 	{ // nothing to change (it doesn't exist, maybe?)
 		return shortpath;
 	}
 	TCHAR *buff = new TCHAR[buffsize];
-	DWORD buffsize2 = GetLongPathNameA(shortpath.GetChars(), buff, buffsize);
+	DWORD buffsize2 = GetLongPathName(shortpath.GetChars(), buff, buffsize);
 	if (buffsize2 >= buffsize)
 	{ // Failure! Just return the short path
 		delete[] buff;
@@ -1457,36 +1611,3 @@ FString I_GetLongPathName(FString shortpath)
 	delete[] buff;
 	return longpath;
 }
-
-#if _MSC_VER == 1900 && defined(_USING_V110_SDK71_)
-//==========================================================================
-//
-// VS14Stat
-//
-// Work around an issue where stat doesn't work with v140_xp. This was
-// supposedly fixed, but as of Update 1 continues to not function on XP.
-//
-//==========================================================================
-
-#include <sys/stat.h>
-
-int VS14Stat(const char *path, struct _stat64i32 *buffer)
-{
-	WIN32_FILE_ATTRIBUTE_DATA data;
-	if(!GetFileAttributesEx(path, GetFileExInfoStandard, &data))
-		return -1;
-
-	buffer->st_ino = 0;
-	buffer->st_mode = ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? S_IFDIR : S_IFREG)|
-	                  ((data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) ? S_IREAD : S_IREAD|S_IWRITE);
-	buffer->st_dev = buffer->st_rdev = 0;
-	buffer->st_nlink = 1;
-	buffer->st_uid = 0;
-	buffer->st_gid = 0;
-	buffer->st_size = data.nFileSizeLow;
-	buffer->st_atime = (*(uint64_t*)&data.ftLastAccessTime) / 10000000 - 11644473600LL;
-	buffer->st_mtime = (*(uint64_t*)&data.ftLastWriteTime) / 10000000 - 11644473600LL;
-	buffer->st_ctime = (*(uint64_t*)&data.ftCreationTime) / 10000000 - 11644473600LL;
-	return 0;
-}
-#endif

@@ -1,30 +1,27 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// $Log:$
 //
 // DESCRIPTION:
 //		Ticker.
 //
 //-----------------------------------------------------------------------------
 
-#include <float.h>
+
 #include "p_local.h"
 #include "p_effect.h"
 #include "c_console.h"
@@ -34,13 +31,7 @@
 #include "sbar.h"
 #include "r_data/r_interpolate.h"
 #include "i_sound.h"
-#include "d_player.h"
 #include "g_level.h"
-#include "r_utility.h"
-#include "p_spec.h"
-#include "g_levellocals.h"
-#include "events.h"
-#include "actorinlines.h"
 
 extern gamestate_t wipegamestate;
 
@@ -48,7 +39,7 @@ extern gamestate_t wipegamestate;
 //
 // P_CheckTickerPaused
 //
-// Returns true if the ticker should be paused. In that case, it also
+// Returns true if the ticker should be paused. In that cause, it also
 // pauses sound effects and possibly music. If the ticker should not be
 // paused, then it returns false but does not unpause anything.
 //
@@ -63,7 +54,7 @@ bool P_CheckTickerPaused ()
 			 ConsoleState == c_down || ConsoleState == c_falling)
 		 && !demoplayback
 		 && !demorecording
-		 && players[consoleplayer].viewz != NO_VALUE
+		 && players[consoleplayer].viewz != 1
 		 && wipegamestate == gamestate)
 	{
 		S_PauseSound (!(level.flags2 & LEVEL2_PAUSE_MUSIC_IN_MENUS), false);
@@ -93,7 +84,7 @@ void P_Ticker (void)
 	if (paused || P_CheckTickerPaused())
 		return;
 
-	DPSprite::NewTick();
+	P_NewPspriteTick();
 
 	// [RH] Frozen mode is only changed every 4 tics, to make it work with A_Tracer().
 	if ((level.time & 3) == 0)
@@ -118,30 +109,21 @@ void P_Ticker (void)
 		S_ResumeSound (false);
 
 	P_ResetSightCounters (false);
-	R_ClearInterpolationPath();
-
-	// Reset all actor interpolations for all actors before the current thinking turn so that indirect actor movement gets properly interpolated.
-	TThinkerIterator<AActor> it;
-	AActor *ac;
-
-	while ((ac = it.Next()))
-	{
-		ac->ClearInterpolation();
-	}
 
 	// Since things will be moving, it's okay to interpolate them in the renderer.
 	r_NoInterpolate = false;
 
-	P_ThinkParticles();	// [RH] make the particles think
+	if (!bglobal.freeze && !(level.flags2 & LEVEL2_FROZEN))
+	{
+		P_ThinkParticles ();	// [RH] make the particles think
+	}
 
 	for (i = 0; i<MAXPLAYERS; i++)
 		if (playeringame[i] &&
-			/*Added by MC: Freeze mode.*/!(bglobal.freeze && players[i].Bot != NULL))
+			/*Added by MC: Freeze mode.*/!(bglobal.freeze && players[i].isbot))
 			P_PlayerThink (&players[i]);
 
-	// [ZZ] call the WorldTick hook
-	E_WorldTick();
-	StatusBar->CallTick ();		// [RH] moved this here
+	StatusBar->Tick ();		// [RH] moved this here
 	level.Tick ();			// [RH] let the level tick
 	DThinker::RunThinkers ();
 

@@ -77,6 +77,7 @@
 #endif
 
 
+#define USE_WINDOWS_DWORD
 #include "c_dispatch.h"
 #include "doomtype.h"
 #include "doomdef.h"
@@ -100,7 +101,6 @@
 #include "d_event.h"
 #include "v_text.h"
 #include "version.h"
-#include "events.h"
 
 // Prototypes and declarations.
 #include "rawinput.h"
@@ -109,11 +109,6 @@
 	name##Proto My##name;
 #include "rawinput.h"
 
-
-// Compensate for w32api's lack
-#ifndef GET_XBUTTON_WPARAM
-#define GET_XBUTTON_WPARAM(wParam) (HIWORD(wParam))
-#endif
 
 
 #ifdef _DEBUG
@@ -130,6 +125,9 @@ FJoystickCollection *JoyDevices[NUM_JOYDEVICES];
 extern HINSTANCE g_hInst;
 extern DWORD SessionID;
 
+extern void ShowEAXEditor ();
+extern bool SpawnEAXWindow;
+
 static HMODULE DInputDLL;
 
 bool GUICapture;
@@ -138,8 +136,10 @@ extern FKeyboard *Keyboard;
 
 bool VidResizing;
 
+extern bool SpawnEAXWindow;
 extern BOOL vidactive;
 extern HWND Window, ConWindow;
+extern HWND EAXEditWindow;
 
 EXTERN_CVAR (String, language)
 EXTERN_CVAR (Bool, lookstrafe)
@@ -160,12 +160,11 @@ BOOL AppActive = TRUE;
 int SessionState = 0;
 int BlockMouseMove; 
 
-CVAR (Bool, i_soundinbackground, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool, k_allowfullscreentoggle, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 CUSTOM_CVAR(Bool, norawinput, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
 {
-	Printf("This won't take effect until " GAMENAME " is restarted.\n");
+	Printf("This won't take effect until "GAMENAME" is restarted.\n");
 }
 
 extern int chatmodeon;
@@ -182,10 +181,6 @@ static void I_CheckGUICapture ()
 	{
 		wantCapt = (menuactive == MENU_On || menuactive == MENU_OnNoPause);
 	}
-
-	// [ZZ] check active event handlers that want the UI processing
-	if (!wantCapt && E_CheckUiProcessors())
-		wantCapt = true;
 
 	if (wantCapt != GUICapture)
 	{
@@ -328,11 +323,11 @@ bool GUIWndProcHook(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESU
 			if (BlockMouseMove > 0) return true;
 		}
 
-		ev.data1 = LOWORD(lParam);
-		ev.data2 = HIWORD(lParam);
-		if (screen != NULL)
 		{
-			screen->ScaleCoordsFromWindow(ev.data1, ev.data2);
+			int shift = screen? screen->GetPixelDoubling() : 0;
+			ev.data1 = LOWORD(lParam) >> shift; 
+			ev.data2 = HIWORD(lParam) >> shift; 
+			if (screen) ev.data2 -= (screen->GetTrueHeight() - screen->GetHeight())/2;
 		}
 
 		if (wParam & MK_SHIFT)				ev.data3 |= GKM_SHIFT;
@@ -395,7 +390,7 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			if (!MyGetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER)) &&
 				size != 0)
 			{
-				uint8_t *buffer = (uint8_t *)alloca(size);
+				BYTE *buffer = (BYTE *)alloca(size);
 				if (MyGetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer, &size, sizeof(RAWINPUTHEADER)) == size)
 				{
 					int code = GET_RAWINPUT_CODE_WPARAM(wParam);
@@ -495,6 +490,12 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 
 	case WM_KEYDOWN:
+		// When the EAX editor is open, pressing Ctrl+Tab will switch to it
+		if (EAXEditWindow != 0 && wParam == VK_TAB && !(lParam & 0x40000000) &&
+			(GetKeyState (VK_CONTROL) & 0x8000))
+		{
+			SetForegroundWindow (EAXEditWindow);
+		}
 		break;
 
 	case WM_SYSKEYDOWN:
@@ -519,25 +520,20 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 
 	case WM_DISPLAYCHANGE:
-	case WM_STYLECHANGED:
-		return DefWindowProc(hWnd, message, wParam, lParam);
+		if (SpawnEAXWindow)
+		{
+			SpawnEAXWindow = false;
+			ShowEAXEditor ();
+		}
+		break;
 
 	case WM_GETMINMAXINFO:
 		if (screen && !VidResizing)
 		{
 			LPMINMAXINFO mmi = (LPMINMAXINFO)lParam;
-			if (screen->IsFullscreen())
-			{
-				RECT rect = { 0, 0, screen->GetWidth(), screen->GetHeight() };
-				AdjustWindowRectEx(&rect, WS_VISIBLE | WS_OVERLAPPEDWINDOW, FALSE, WS_EX_APPWINDOW);
-				mmi->ptMinTrackSize.x = rect.right - rect.left;
-				mmi->ptMinTrackSize.y = rect.bottom - rect.top;
-			}
-			else
-			{
-				mmi->ptMinTrackSize.x = 320;
-				mmi->ptMinTrackSize.y = 200;
-			}
+			mmi->ptMinTrackSize.x = SCREENWIDTH + GetSystemMetrics (SM_CXSIZEFRAME) * 2;
+			mmi->ptMinTrackSize.y = SCREENHEIGHT + GetSystemMetrics (SM_CYSIZEFRAME) * 2 +
+									GetSystemMetrics (SM_CYCAPTION);
 			return 0;
 		}
 		break;
@@ -552,7 +548,7 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		{
 			SetPriorityClass (GetCurrentProcess (), IDLE_PRIORITY_CLASS);
 		}
-		S_SetSoundPaused ((!!i_soundinbackground) || wParam);
+		S_SetSoundPaused (wParam);
 		break;
 
 	case WM_WTSSESSION_CHANGE:
@@ -579,9 +575,11 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					break;
 				case WTS_CONSOLE_DISCONNECT:
 					SessionState |= 2;
+					//I_MovieDisableSound ();
 					break;
 				case WTS_CONSOLE_CONNECT:
 					SessionState &= ~2;
+					//I_MovieResumeSound ();
 					break;
 				}
 			}
@@ -605,6 +603,10 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				if (!oldstate && SessionState)
 				{
 					GSnd->SuspendSound ();
+				}
+				else if (oldstate && !SessionState)
+				{
+					GSnd->MovieResumeSound ();
 				}
 #endif
 			}
@@ -782,12 +784,14 @@ void I_GetEvent ()
 	{
 		if (mess.message == WM_QUIT)
 			exit (mess.wParam);
-
-		if (GUICapture)
+		if (EAXEditWindow == 0 || !IsDialogMessage (EAXEditWindow, &mess))
 		{
-			TranslateMessage (&mess);
+			if (GUICapture)
+			{
+				TranslateMessage (&mess);
+			}
+			DispatchMessage (&mess);
 		}
-		DispatchMessage (&mess);
 	}
 
 	if (Keyboard != NULL)
@@ -927,6 +931,18 @@ FString I_GetFromClipboard (bool return_nothing)
 
 	CloseClipboard ();
 	return retstr;
+}
+
+#include "i_movie.h"
+
+CCMD (playmovie)
+{
+	if (argv.argc() != 2)
+	{
+		Printf ("Usage: playmovie <movie name>\n");
+		return;
+	}
+	I_PlayMovie (argv[1]);
 }
 
 //==========================================================================

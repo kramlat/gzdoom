@@ -31,15 +31,15 @@ struct FIIntermissionPatch
 
 struct FCastSound
 {
-	uint8_t mSequence;
-	uint8_t mIndex;
+	BYTE mSequence;
+	BYTE mIndex;
 	FString mSound;
 };
 
 struct FICastSound
 {
-	uint8_t mSequence;
-	uint8_t mIndex;
+	BYTE mSequence;
+	BYTE mIndex;
 	FSoundID mSound;
 };
 
@@ -58,15 +58,15 @@ enum EScrollDir
 };
 
 // actions that don't create objects
-#define WIPER_ID ((PClass*)intptr_t(-1))
-#define TITLE_ID ((PClass*)intptr_t(-2))
+#define WIPER_ID ((const PClass*)intptr_t(-1))
+#define TITLE_ID ((const PClass*)intptr_t(-2))
 
 //==========================================================================
 
 struct FIntermissionAction
 {
 	int mSize;
-	PClass *mClass;
+	const PClass *mClass;
 	FString mMusic;
 	int mMusicOrder;
 	int mCdTrack;
@@ -176,7 +176,7 @@ public:
 	virtual int Responder (event_t *ev);
 	virtual int Ticker ();
 	virtual void Drawer ();
-	void OnDestroy() override;
+	void Destroy();
 	FTextureID GetBackground(bool *fill)
 	{
 		*fill = mFlatfill;
@@ -229,12 +229,12 @@ class DIntermissionScreenCast : public DIntermissionScreen
 	DECLARE_CLASS (DIntermissionScreenCast, DIntermissionScreen)
 
 	const char *mName;
-	PClassActor *mClass;
+	const PClass *mClass;
 	AActor *mDefaults;
 	TArray<FICastSound> mCastSounds;
 
 	int 			casttics;
-	uint32_t		casttranslation;	// [RH] Draw "our hero" with their chosen suit color
+	const FRemapTable *casttranslation;	// [RH] Draw "our hero" with their chosen suit color
 	FState*			caststate;
 	FState*			basestate;
 	FState*			advplayerstate;
@@ -285,11 +285,11 @@ class DIntermissionController : public DObject
 	HAS_OBJECT_POINTERS
 
 	FIntermissionDescriptor *mDesc;
-	TObjPtr<DIntermissionScreen*> mScreen;
+	TObjPtr<DIntermissionScreen> mScreen;
 	bool mDeleteDesc;
 	bool mFirst;
 	bool mAdvance, mSentAdvance;
-	uint8_t mGameState;
+	BYTE mGameState;
 	int mIndex;
 
 	bool NextPage();
@@ -297,14 +297,13 @@ class DIntermissionController : public DObject
 public:
 	static DIntermissionController *CurrentIntermission;
 
-	DIntermissionController(FIntermissionDescriptor *mDesc = NULL, bool mDeleteDesc = false, uint8_t state = FSTATE_ChangingLevel);
+	DIntermissionController(FIntermissionDescriptor *mDesc = NULL, bool mDeleteDesc = false, BYTE state = FSTATE_ChangingLevel);
 	bool Responder (event_t *ev);
 	void Ticker ();
 	void Drawer ();
-	void OnDestroy() override;
+	void Destroy();
 
 	friend void F_AdvanceIntermission();
-	friend void F_StartIntermission(FIntermissionDescriptor *, bool, uint8_t);
 };
 
 
@@ -312,8 +311,8 @@ public:
 bool F_Responder (event_t* ev);
 void F_Ticker ();
 void F_Drawer ();
-void F_StartIntermission(FIntermissionDescriptor *desc, bool deleteme, uint8_t state);
-void F_StartIntermission(FName desc, uint8_t state);
+void F_StartIntermission(FIntermissionDescriptor *desc, bool deleteme, BYTE state);
+void F_StartIntermission(FName desc, BYTE state);
 void F_EndFinale ();
 void F_AdvanceIntermission();
 

@@ -1,59 +1,26 @@
-// 
-//---------------------------------------------------------------------------
-//
-// Copyright(C) 2005-2016 Christoph Oelckers
-// All rights reserved.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//--------------------------------------------------------------------------
-//
-
 #ifndef __VERTEXBUFFER_H
 #define __VERTEXBUFFER_H
 
 #include "tarray.h"
 #include "gl/utility/gl_clock.h"
 #include "gl/system/gl_interface.h"
-#include "r_data/models/models.h"
 
 struct vertex_t;
 struct secplane_t;
 struct subsector_t;
 struct sector_t;
-class FMaterial;
-
-enum
-{
-	VATTR_VERTEX_BIT,
-	VATTR_TEXCOORD_BIT,
-	VATTR_COLOR_BIT,
-	VATTR_VERTEX2_BIT,
-	VATTR_NORMAL_BIT
-};
 
 
 class FVertexBuffer
 {
 protected:
 	unsigned int vbo_id;
+	unsigned int vao_id;
 
 public:
-	FVertexBuffer(bool wantbuffer = true);
+	FVertexBuffer();
 	virtual ~FVertexBuffer();
-	virtual void BindVBO() = 0;
-	void EnableBufferArrays(int enable, int disable);
+	void BindVBO();
 };
 
 struct FFlatVertex
@@ -72,37 +39,8 @@ struct FFlatVertex
 	}
 };
 
-struct FSimpleVertex
-{
-	float x, z, y;	// world position
-	float u, v;		// texture coordinates
-	PalEntry color;
-
-	void Set(float xx, float zz, float yy, float uu = 0, float vv = 0, PalEntry col = 0xffffffff)
-	{
-		x = xx;
-		z = zz;
-		y = yy;
-		u = uu;
-		v = vv;
-		color = col;
-	}
-};
-
 #define VTO ((FFlatVertex*)NULL)
-#define VSiO ((FSimpleVertex*)NULL)
 
-class FSimpleVertexBuffer : public FVertexBuffer
-{
-	TArray<FSimpleVertex> mBuffer;
-public:
-	FSimpleVertexBuffer()
-	{
-	}
-	void BindVBO();
-	void set(FSimpleVertex *verts, int count);
-	void EnableColorArray(bool on);
-};
 
 class FFlatVertexBuffer : public FVertexBuffer
 {
@@ -113,29 +51,16 @@ class FFlatVertexBuffer : public FVertexBuffer
 
 	void CheckPlanes(sector_t *sector);
 
-	static const unsigned int BUFFER_SIZE = 2000000;
-	static const unsigned int BUFFER_SIZE_TO_USE = 1999500;
+	const unsigned int BUFFER_SIZE = 2000000;
+	const unsigned int BUFFER_SIZE_TO_USE = 1999500;
+
+	void ImmRenderBuffer(unsigned int primtype, unsigned int offset, unsigned int count);
 
 public:
-	enum
-	{
-		QUAD_INDEX = 0,
-		FULLSCREEN_INDEX = 4,
-		PRESENT_INDEX = 8,
-		STENCILTOP_INDEX = 12,
-		STENCILBOTTOM_INDEX = 16,
-
-		NUM_RESERVED = 20
-	};
-
 	TArray<FFlatVertex> vbo_shadowdata;	// this is kept around for updating the actual (non-readable) buffer and as stand-in for pre GL 4.x
 
-	FFlatVertexBuffer(int width, int height);
+	FFlatVertexBuffer();
 	~FFlatVertexBuffer();
-
-	void OutputResized(int width, int height);
-
-	void BindVBO();
 
 	void CreateVBO();
 	void CheckUpdate(sector_t *sector);
@@ -144,17 +69,9 @@ public:
 	{
 		return &map[mCurIndex];
 	}
-	FFlatVertex *Alloc(int num, int *poffset)
-	{
-		FFlatVertex *p = GetBuffer();
-		*poffset = mCurIndex;
-		mCurIndex += num;
-		if (mCurIndex >= BUFFER_SIZE_TO_USE) mCurIndex = mIndex;
-		return p;
-	}
-
 	unsigned int GetCount(FFlatVertex *newptr, unsigned int *poffset)
 	{
+
 		unsigned int newofs = (unsigned int)(newptr - map);
 		unsigned int diff = newofs - mCurIndex;
 		*poffset = mCurIndex;
@@ -166,7 +83,14 @@ public:
 	void RenderArray(unsigned int primtype, unsigned int offset, unsigned int count)
 	{
 		drawcalls.Clock();
-		glDrawArrays(primtype, offset, count);
+		if (gl.flags & RFL_BUFFER_STORAGE)
+		{
+			glDrawArrays(primtype, offset, count);
+		}
+		else
+		{
+			ImmRenderBuffer(primtype, offset, count);
+		}
 		drawcalls.Unclock();
 	}
 
@@ -184,9 +108,6 @@ public:
 	{
 		mCurIndex = mIndex;
 	}
-
-	void Map();
-	void Unmap();
 
 private:
 	int CreateSubsectorVertices(subsector_t *sub, const secplane_t &plane, int floor);
@@ -213,16 +134,6 @@ struct FSkyVertex
 		color = col;
 	}
 
-	void SetXYZ(float xx, float yy, float zz, float uu = 0, float vv = 0, PalEntry col = 0xffffffff)
-	{
-		x = xx;
-		y = yy;
-		z = zz;
-		u = uu;
-		v = vv;
-		color = col;
-	}
-
 };
 
 class FSkyVertexBuffer : public FVertexBuffer
@@ -244,10 +155,6 @@ private:
 
 	int mRows, mColumns;
 
-	// indices for sky cubemap faces
-	int mFaceStart[7];
-	int mSideStart;
-
 	void SkyVertex(int r, int c, bool yflip);
 	void CreateSkyHemisphere(int hemi);
 	void CreateDome();
@@ -258,36 +165,49 @@ public:
 	FSkyVertexBuffer();
 	virtual ~FSkyVertexBuffer();
 	void RenderDome(FMaterial *tex, int mode);
-	void BindVBO();
-	int FaceStart(int i)
-	{
-		if (i >= 0 && i < 7) return mFaceStart[i];
-		else return mSideStart;
-	}
 
-};
-
-class FModelVertexBuffer : public FVertexBuffer, public IModelVertexBuffer
-{
-	int mIndexFrame[2];
-	FModelVertex *vbo_ptr;
-	uint32_t ibo_id;
-
-public:
-
-	FModelVertexBuffer(bool needindex, bool singleframe);
-	~FModelVertexBuffer();
-
-	FModelVertex *LockVertexBuffer(unsigned int size) override;
-	void UnlockVertexBuffer() override;
-
-	unsigned int *LockIndexBuffer(unsigned int size) override;
-	void UnlockIndexBuffer() override;
-
-	void SetupFrame(FModelRenderer *renderer, unsigned int frame1, unsigned int frame2, unsigned int size) override;
-	void BindVBO() override;
 };
 
 #define VSO ((FSkyVertex*)NULL)
+
+struct FModelVertex
+{
+	float x, y, z;	// world position
+	float u, v;		// texture coordinates
+
+	void Set(float xx, float yy, float zz, float uu, float vv)
+	{
+		x = xx;
+		y = yy;
+		z = zz;
+		u = uu;
+		v = vv;
+	}
+
+	void SetNormal(float nx, float ny, float nz)
+	{
+		// GZDoom currently doesn't use normals. This function is so that the high level code can pretend it does.
+	}
+};
+
+
+class FModelVertexBuffer : public FVertexBuffer
+{
+	int mIndexFrame[2];
+	unsigned int ibo_id;
+
+public:
+	// these are public because it's the models having to fill them in.
+	TArray<FModelVertex> vbo_shadowdata;	// this is kept around for interpolating on GL 2.0
+	TArray<unsigned int> ibo_shadowdata;	// this is kept around for interpolating on GL 2.0
+
+	FModelVertexBuffer();
+	~FModelVertexBuffer();
+
+	unsigned int SetupFrame(unsigned int frame1, unsigned int frame2, float factor);
+};
+
+#define VMO ((FModelVertex*)NULL)
+
 
 #endif

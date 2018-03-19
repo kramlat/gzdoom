@@ -1,23 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //	 Setup a game, startup stuff.
@@ -34,86 +29,69 @@
 
 struct MapData
 {
-private:
 	struct MapLump
 	{
-		char Name[8] = { 0 };
-		FileReader Reader;
+		char Name[8];
+		FileReader *Reader;
 	} MapLumps[ML_MAX];
-	FileReader nofile;
-public:
-	bool HasBehavior = false;
-	bool Encrypted = false;
-	bool isText = false;
-	bool InWad = false;
-	int lumpnum = -1;
-	FResourceFile * resource = nullptr;
+	bool HasBehavior;
+	bool Encrypted;
+	bool isText;
+	bool InWad;
+	int lumpnum;
+	FileReader * file;
+	FResourceFile * resource;
+	
+	MapData()
+	{
+		memset(MapLumps, 0, sizeof(MapLumps));
+		file = NULL;
+		resource = NULL;
+		lumpnum = -1;
+		HasBehavior = false;
+		Encrypted = false;
+		isText = false;
+		InWad = false;
+	}
 	
 	~MapData()
 	{
-		if (resource != nullptr) delete resource;
-		resource = nullptr;
+		for (unsigned int i = 0;i < ML_MAX;++i)
+			delete MapLumps[i].Reader;
+
+		delete resource;
+		resource = NULL;
 	}
 
-	/*
 	void Seek(unsigned int lumpindex)
 	{
 		if (lumpindex<countof(MapLumps))
 		{
-			file = &MapLumps[lumpindex].Reader;
-			file->Seek(0, FileReader::SeekSet);
+			file = MapLumps[lumpindex].Reader;
+			file->Seek(0, SEEK_SET);
 		}
-	}
-	*/
-
-	FileReader &Reader(unsigned int lumpindex)
-	{
-		if (lumpindex < countof(MapLumps))
-		{
-			auto &file = MapLumps[lumpindex].Reader;
-			file.Seek(0, FileReader::SeekSet);
-			return file;
-		}
-		return nofile;
 	}
 
 	void Read(unsigned int lumpindex, void * buffer, int size = -1)
 	{
 		if (lumpindex<countof(MapLumps))
 		{
-			if (size == -1) size = Size(lumpindex);
-			if (size > 0)
-			{
-				auto &file = MapLumps[lumpindex].Reader;
-				file.Seek(0, FileReader::SeekSet);
-				file.Read(buffer, size);
-			}
+			if (size == -1) size = MapLumps[lumpindex].Reader->GetLength();
+			Seek(lumpindex);
+			file->Read(buffer, size);
 		}
 	}
 
-	uint32_t Size(unsigned int lumpindex)
+	DWORD Size(unsigned int lumpindex)
 	{
-		if (lumpindex<countof(MapLumps) && MapLumps[lumpindex].Reader.isOpen())
+		if (lumpindex<countof(MapLumps) && MapLumps[lumpindex].Reader)
 		{
-			return (uint32_t)MapLumps[lumpindex].Reader.GetLength();
+			return MapLumps[lumpindex].Reader->GetLength();
 		}
 		return 0;
 	}
 
-	bool CheckName(unsigned int lumpindex, const char *name)
-	{
-		if (lumpindex < countof(MapLumps))
-		{
-			return !strnicmp(MapLumps[lumpindex].Name, name, 8);
-		}
-		return false;
-	}
-
-	void GetChecksum(uint8_t cksum[16]);
-
-	friend bool P_LoadGLNodes(MapData * map);
-	friend MapData *P_OpenMapData(const char * mapname, bool justcheck);
-
+	void GetChecksum(BYTE cksum[16]);
 };
 
 MapData * P_OpenMapData(const char * mapname, bool justcheck);
@@ -137,11 +115,11 @@ struct line_t;
 struct maplinedef_t;
 
 void P_LoadTranslator(const char *lumpname);
-void P_TranslateLineDef (line_t *ld, maplinedef_t *mld, int lineindexforid = -1);
+void P_TranslateLineDef (line_t *ld, maplinedef_t *mld);
 int P_TranslateSectorSpecial (int);
 
-int GetUDMFInt(int type, int index, FName key);
-double GetUDMFFloat(int type, int index, FName key);
+int GetUDMFInt(int type, int index, const char *key);
+fixed_t GetUDMFFixed(int type, int index, const char *key);
 
 bool P_LoadGLNodes(MapData * map);
 bool P_CheckNodes(MapData * map, bool rebuilt, int buildtime);
@@ -159,19 +137,20 @@ struct sidei_t	// [RH] Only keep BOOM sidedef init stuff around for init
 		{
 			short tag, special;
 			short alpha;
-			uint32_t map;
+			DWORD map;
 		} a;
 
 		// Used when grouping sidedefs into loops.
 		struct
 		{
-			uint32_t first, next;
+			DWORD first, next;
 			char lineside;
 		} b;
 	};
 };
 extern sidei_t *sidetemp;
 extern bool hasglnodes;
+extern struct glsegextra_t *glsegextras;
 
 struct FMissingCount
 {

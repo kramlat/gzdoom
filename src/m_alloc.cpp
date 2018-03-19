@@ -38,8 +38,6 @@
 #elif defined(__APPLE__)
 #include <stdlib.h>
 #include <malloc/malloc.h>
-#elif defined(__OpenBSD__)
-#include <stdlib.h>
 #else
 #include <malloc.h>
 #endif
@@ -54,14 +52,14 @@
 #endif
 #if defined(__APPLE__)
 #define _msize(p)				malloc_size(p)
-#elif defined(__solaris__) || defined(__OpenBSD__)
+#elif defined(__sun)
 #define _msize(p)				(*((size_t*)(p)-1))
 #elif !defined(_WIN32)
 #define _msize(p)				malloc_usable_size(p)	// from glibc/FreeBSD
 #endif
 
 #ifndef _DEBUG
-#if !defined(__solaris__) && !defined(__OpenBSD__)
+#if !defined(__sun)
 void *M_Malloc(size_t size)
 {
 	void *block = malloc(size);
@@ -131,7 +129,7 @@ void *M_Realloc(void *memblock, size_t size)
 #include <crtdbg.h>
 #endif
 
-#if !defined(__solaris__) && !defined(__OpenBSD__)
+#if !defined(__sun)
 void *M_Malloc_Dbg(size_t size, const char *file, int lineno)
 {
 	void *block = _malloc_dbg(size, _NORMAL_BLOCK, file, lineno);
@@ -199,7 +197,7 @@ void *M_Realloc_Dbg(void *memblock, size_t size, const char *file, int lineno)
 #endif
 #endif
 
-#if !defined(__solaris__) && !defined(__OpenBSD__)
+#if !defined(__sun)
 void M_Free (void *block)
 {
 	if (block != NULL)

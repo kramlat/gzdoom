@@ -50,10 +50,7 @@
 #include "d_netinf.h"
 #include "i_system.h"
 #include "d_player.h"
-#include "serializer.h"
-#include "v_text.h"
-#include "g_levellocals.h"
-#include "vm.h"
+#include "farchive.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -80,15 +77,15 @@ struct FRandomSoundList
 		}
 	}
 
-	uint16_t		*Sounds;	// A list of sounds that can result for the following id
-	uint16_t		SfxHead;	// The sound id used to reference this list
-	uint16_t		NumSounds;
+	WORD		*Sounds;	// A list of sounds that can result for the following id
+	WORD		SfxHead;	// The sound id used to reference this list
+	WORD		NumSounds;
 };
 
 struct FPlayerClassLookup
 {
 	FString		Name;
-	uint16_t		ListIndex[3];	// indices into PlayerSounds (0xffff means empty)
+	WORD		ListIndex[3];	// indices into PlayerSounds (0xffff means empty)
 };
 
 // Used to lookup a sound like "*grunt". This contains all player sounds for
@@ -164,11 +161,11 @@ enum SICommands
 
 struct FBloodSFX
 {
-	uint32_t	RelVol;		// volume, 0-255
-	int		Pitch;		// pitch change
-	int		PitchRange;	// range of random pitch
-	uint32_t	Format;		// format of audio 1=11025 5=22050
-	int32_t	LoopStart;	// loop position (-1 means no looping)
+	DWORD	RelVol;		// volume, 0-255
+	fixed_t	Pitch;		// pitch change
+	fixed_t	PitchRange;	// range of random pitch
+	DWORD	Format;		// format of audio 1=11025 5=22050
+	SDWORD	LoopStart;	// loop position (-1 means no looping)
 	char	RawName[9];	// name of RAW resource
 };
 
@@ -202,7 +199,7 @@ extern bool IsFloat (const char *str);
 
 // PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
 
-static int SortPlayerClasses (const void *a, const void *b);
+static int STACK_ARGS SortPlayerClasses (const void *a, const void *b);
 static int S_DupPlayerSound (const char *pclass, int gender, int refid, int aliasref);
 static void S_SavePlayerSound (const char *pclass, int gender, int refid, int lumpnum, bool alias);
 static void S_RestorePlayerSounds();
@@ -271,7 +268,7 @@ static TArray<FPlayerSoundHashTable> PlayerSounds;
 static FString DefPlayerClassName;
 static int DefPlayerClass;
 
-static uint8_t CurrentPitchMask;
+static BYTE CurrentPitchMask;
 
 static FRandom pr_randsound ("RandSound");
 
@@ -331,111 +328,19 @@ void S_HashSounds ()
 
 //==========================================================================
 //
-// S_CheckIntegrity
-//
-// Scans the entire sound list and looks for recursive definitions.
-//==========================================================================
-
-static bool S_CheckSound(sfxinfo_t *startsfx, sfxinfo_t *sfx, TArray<sfxinfo_t *> &chain)
-{
-	sfxinfo_t *me = sfx;
-	bool success = true;
-	unsigned siz = chain.Size();
-
-	if (sfx->bPlayerReserve)
-	{
-		return true;
-	}
-
-	// There is a bad link in here, but let's report it only for the sound that contains the broken definition.
-	// Once that sound has been disabled this one will work again.
-	if (chain.Find(sfx) < chain.Size())
-	{
-		return true;
-	}
-	chain.Push(sfx);
-
-	if (me->bRandomHeader)
-	{
-		const FRandomSoundList *list = &S_rnd[me->link];
-		for (int i = 0; i < list->NumSounds; ++i)
-		{
-			auto rsfx = &S_sfx[list->Sounds[i]];
-			if (rsfx == startsfx)
-			{
-				Printf(TEXTCOLOR_RED "recursive sound $random found for %s:\n", startsfx->name.GetChars());
-				success = false;
-				for (unsigned i = 1; i<chain.Size(); i++)
-				{
-					Printf(TEXTCOLOR_ORANGE "    -> %s\n", chain[i]->name.GetChars());
-				}
-			}
-			else
-			{
-				success &= S_CheckSound(startsfx, rsfx, chain);
-			}
-		}
-	}
-	else if (me->link != sfxinfo_t::NO_LINK)
-	{
-		me = &S_sfx[me->link];
-		if (me == startsfx)
-		{
-			Printf(TEXTCOLOR_RED "recursive sound $alias found for %s:\n", startsfx->name.GetChars());
-			success = false;
-			for (unsigned i = 1; i<chain.Size(); i++)
-			{
-				Printf(TEXTCOLOR_ORANGE "    -> %s\n", chain[i]->name.GetChars());
-			}
-			chain.Resize(siz);
-		}
-		else
-		{
-			success &= S_CheckSound(startsfx, me, chain);
-		}
-	}
-	chain.Pop();
-	return success;
-}
-
-void S_CheckIntegrity()
-{
-	TArray<sfxinfo_t *> chain;
-	TArray<bool> broken;
-
-	broken.Resize(S_sfx.Size());
-	memset(&broken[0], 0, sizeof(bool)*S_sfx.Size());
-	for (unsigned i = 0; i < S_sfx.Size(); i++)
-	{
-		auto &sfx = S_sfx[i];
-		broken[i] = !S_CheckSound(&sfx, &sfx, chain);
-	}
-	for (unsigned i = 0; i < S_sfx.Size(); i++)
-	{
-		if (broken[i])
-		{
-			auto &sfx = S_sfx[i];
-			Printf(TEXTCOLOR_RED "Sound %s has been disabled\n", sfx.name.GetChars());
-			sfx.bRandomHeader = false;
-			sfx.link = 0;	// link to the empty sound.
-		}
-	}
-}
-
-//==========================================================================
-//
 // S_PickReplacement
 //
 // Picks a replacement sound from the associated random list. If this sound
 // is not the head of a random list, then the sound passed is returned.
 //==========================================================================
 
-int S_PickReplacement(int refid)
+int S_PickReplacement (int refid)
 {
-	while (S_sfx[refid].bRandomHeader)
+	if (S_sfx[refid].bRandomHeader)
 	{
 		const FRandomSoundList *list = &S_rnd[S_sfx[refid].link];
-		refid = list->Sounds[pr_randsound() % list->NumSounds];
+
+		return list->Sounds[pr_randsound() % list->NumSounds];
 	}
 	return refid;
 }
@@ -492,12 +397,6 @@ unsigned int S_GetMSLength(FSoundID sound)
 	else return 0;
 }
 
-DEFINE_ACTION_FUNCTION(DObject,S_GetLength)
-{
-	PARAM_PROLOGUE;
-	PARAM_SOUND(sound_id);
-	ACTION_RETURN_FLOAT(S_GetMSLength(sound_id)/1000.0);
-}
 
 //==========================================================================
 //
@@ -601,7 +500,6 @@ int S_AddSoundLump (const char *logicalname, int lump)
 	sfxinfo_t newsfx;
 
 	newsfx.data.Clear();
-    newsfx.data3d.Clear();
 	newsfx.name = logicalname;
 	newsfx.lumpnum = lump;
 	newsfx.next = 0;
@@ -1042,7 +940,6 @@ void S_ParseSndInfo (bool redefine)
 	S_ShrinkPlayerSoundLists ();
 
 	sfx_empty = Wads.CheckNumForName ("dsempty", ns_sounds);
-	S_CheckIntegrity();
 }
 
 //==========================================================================
@@ -1063,7 +960,6 @@ void S_AddLocalSndInfo(int lump)
 	}
 
 	S_ShrinkPlayerSoundLists ();
-	S_CheckIntegrity();
 }
 
 //==========================================================================
@@ -1077,7 +973,7 @@ void S_AddLocalSndInfo(int lump)
 static void S_AddSNDINFO (int lump)
 {
 	bool skipToEndIf;
-	TArray<uint16_t> list;
+	TArray<WORD> list;
 
 	FScanner sc(lump);
 	skipToEndIf = false;
@@ -1402,7 +1298,7 @@ static void S_AddSNDINFO (int lump)
 				sc.MustGetStringName ("{");
 				while (sc.GetString () && !sc.Compare ("}"))
 				{
-					uint16_t sfxto = S_FindSoundTentative (sc.String);
+					WORD sfxto = S_FindSoundTentative (sc.String);
 					if (sfxto == random.SfxHead)
 					{
 						Printf("Definition of random sound '%s' refers to itself recursively.", sc.String);
@@ -1417,11 +1313,11 @@ static void S_AddSNDINFO (int lump)
 				}
 				else if (list.Size() > 1)
 				{ // Only add non-empty random lists
-					random.NumSounds = (uint16_t)list.Size();
-					S_sfx[random.SfxHead].link = (uint16_t)S_rnd.Push (random);
+					random.NumSounds = (WORD)list.Size();
+					S_sfx[random.SfxHead].link = (WORD)S_rnd.Push (random);
 					S_sfx[random.SfxHead].bRandomHeader = true;
-					S_rnd[S_sfx[random.SfxHead].link].Sounds = new uint16_t[random.NumSounds];
-					memcpy (S_rnd[S_sfx[random.SfxHead].link].Sounds, &list[0], sizeof(uint16_t)*random.NumSounds);
+					S_rnd[S_sfx[random.SfxHead].link].Sounds = new WORD[random.NumSounds];
+					memcpy (S_rnd[S_sfx[random.SfxHead].link].Sounds, &list[0], sizeof(WORD)*random.NumSounds);
 					S_sfx[random.SfxHead].NearLimit = -1;
 				}
 				}
@@ -1468,36 +1364,15 @@ static void S_AddSNDINFO (int lump)
 			case SI_MidiDevice: {
 				sc.MustGetString();
 				FName nm = sc.String;
-				FScanner::SavedPos save = sc.SavePos();
-				
-				sc.SetCMode(true);
 				sc.MustGetString();
-				MidiDeviceSetting devset;
-				if (sc.Compare("timidity")) devset.device = MDEV_TIMIDITY;
-				else if (sc.Compare("fmod") || sc.Compare("sndsys")) devset.device = MDEV_SNDSYS;
-				else if (sc.Compare("standard")) devset.device = MDEV_MMAPI;
-				else if (sc.Compare("opl")) devset.device = MDEV_OPL;
-				else if (sc.Compare("default")) devset.device = MDEV_DEFAULT;
-				else if (sc.Compare("fluidsynth")) devset.device = MDEV_FLUIDSYNTH;
-				else if (sc.Compare("gus")) devset.device = MDEV_GUS;
-				else if (sc.Compare("wildmidi")) devset.device = MDEV_WILDMIDI;
+				if (sc.Compare("timidity")) MidiDevices[nm] = MDEV_TIMIDITY;
+				else if (sc.Compare("fmod")) MidiDevices[nm] = MDEV_FMOD;
+				else if (sc.Compare("standard")) MidiDevices[nm] = MDEV_MMAPI;
+				else if (sc.Compare("opl")) MidiDevices[nm] = MDEV_OPL;
+				else if (sc.Compare("default")) MidiDevices[nm] = MDEV_DEFAULT;
+				else if (sc.Compare("fluidsynth")) MidiDevices[nm] = MDEV_FLUIDSYNTH;
+				else if (sc.Compare("gus")) MidiDevices[nm] = MDEV_GUS;
 				else sc.ScriptError("Unknown MIDI device %s\n", sc.String);
-
-				if (sc.CheckString(","))
-				{
-					sc.SetCMode(false);
-					sc.MustGetString();
-					devset.args = sc.String;
-				}
-				else
-				{
-					// This does not really do what one might expect, because the next token has already been parsed and can be a '$'.
-					// So in order to continue parsing without C-Mode, we need to reset and parse the last token again.
-					sc.SetCMode(false);
-					sc.RestorePos(save);
-					sc.MustGetString();
-				}
-				MidiDevices[nm] = devset;
 				}
 				break;
 
@@ -1707,7 +1582,7 @@ static int S_AddPlayerGender (int classnum, int gender)
 	if (index == 0xffff)
 	{
 		index = PlayerSounds.Reserve (1);
-		PlayerClassLookups[classnum].ListIndex[gender] = (uint16_t)index;
+		PlayerClassLookups[classnum].ListIndex[gender] = (WORD)index;
 	}
 	return index;
 }
@@ -1731,7 +1606,7 @@ void S_ShrinkPlayerSoundLists ()
 	DefPlayerClass = S_FindPlayerClass (DefPlayerClassName);
 }
 
-static int SortPlayerClasses (const void *a, const void *b)
+static int STACK_ARGS SortPlayerClasses (const void *a, const void *b)
 {
 	return stricmp (((const FPlayerClassLookup *)a)->Name,
 					((const FPlayerClassLookup *)b)->Name);
@@ -2134,7 +2009,6 @@ CCMD (soundlist)
 		{
 			Printf ("%3d. %s **not present**\n", i, sfx->name.GetChars());
 		}
-		Printf("    PitchMask = %d\n", sfx->PitchMask);
 	}
 }
 
@@ -2206,8 +2080,7 @@ class AAmbientSound : public AActor
 {
 	DECLARE_CLASS (AAmbientSound, AActor)
 public:
-	
-	void Serialize(FSerializer &arc);
+	void Serialize (FArchive &arc);
 
 	void MarkPrecacheSounds () const;
 	void BeginPlay ();
@@ -2222,7 +2095,7 @@ private:
 	int NextCheck;
 };
 
-IMPLEMENT_CLASS(AAmbientSound, false, false)
+IMPLEMENT_CLASS (AAmbientSound)
 
 //==========================================================================
 //
@@ -2230,11 +2103,10 @@ IMPLEMENT_CLASS(AAmbientSound, false, false)
 //
 //==========================================================================
 
-void AAmbientSound::Serialize(FSerializer &arc)
+void AAmbientSound::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc("active", bActive)
-		("nextcheck", NextCheck);
+	arc << bActive << NextCheck;
 }
 
 //==========================================================================
@@ -2280,7 +2152,7 @@ void AAmbientSound::Tick ()
 		loop = CHAN_LOOP;
 	}
 
-	if (ambient->sound != FSoundID(0))
+	if (ambient->sound != 0)
 	{
 		// The second argument scales the ambient sound's volume.
 		// 0 and 100 are normal volume. The maximum volume level
@@ -2355,7 +2227,7 @@ void AAmbientSound::SetTicker (struct FAmbientSound *ambient)
 void AAmbientSound::BeginPlay ()
 {
 	Super::BeginPlay ();
-	CallActivate (NULL);
+	Activate (NULL);
 }
 
 //==========================================================================
@@ -2388,7 +2260,7 @@ void AAmbientSound::Activate (AActor *activator)
 				Destroy ();
 				return;
 			}
-			amb->periodmin = ::Scale(S_GetMSLength(sndnum), TICRATE, 1000);
+			amb->periodmin = Scale(S_GetMSLength(sndnum), TICRATE, 1000);
 		}
 
 		NextCheck = level.maptime;
@@ -2465,3 +2337,68 @@ void S_ParseMusInfo()
 }
 
 
+//==========================================================================
+//
+// Music changer. Uses the sector action class to do its job
+//
+//==========================================================================
+
+class AMusicChanger : public ASectorAction
+{
+	DECLARE_CLASS (AMusicChanger, ASectorAction)
+public:
+	virtual bool TriggerAction (AActor *triggerer, int activationType);
+	virtual void Tick();
+	virtual void PostBeginPlay();
+};
+
+IMPLEMENT_CLASS(AMusicChanger)
+
+bool AMusicChanger::TriggerAction (AActor *triggerer, int activationType)
+{
+	if (activationType & SECSPAC_Enter)
+	{
+		if (args[0] == 0 || level.info->MusicMap.CheckKey(args[0]))
+ 		{
+			level.nextmusic = args[0];
+			reactiontime = 30;
+		}
+	}
+	return Super::TriggerAction (triggerer, activationType);
+}
+ 
+void AMusicChanger::Tick()
+{
+	Super::Tick();
+	if (reactiontime > -1 && --reactiontime == 0)
+	{
+		// Is it our music that's queued for being played?
+		if (level.nextmusic == args[0])
+		{
+			if (args[0] != 0)
+ 			{
+				FName *music = level.info->MusicMap.CheckKey(args[0]);
+
+				if (music != NULL)
+				{
+					S_ChangeMusic(music->GetChars(), args[1]);
+				}
+ 			}
+			else
+			{
+				S_ChangeMusic("*");
+			}
+ 		}
+ 	}
+ }
+
+void AMusicChanger::PostBeginPlay()
+{
+	// The music changer should consider itself activated if the player
+	// spawns in its sector as well as if it enters the sector during a P_TryMove.
+	Super::PostBeginPlay();
+	if (players[consoleplayer].mo && players[consoleplayer].mo->Sector == this->Sector)
+	{
+		TriggerAction(players[consoleplayer].mo, SECSPAC_Enter);
+	}
+}

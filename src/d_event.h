@@ -1,22 +1,22 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
+// DESCRIPTION:
 //
+//	  
 //-----------------------------------------------------------------------------
 
 
@@ -45,23 +45,22 @@ enum EGenericEvent
 // Event structure.
 struct event_t
 {
-	uint8_t		type;
-	uint8_t		subtype;
-	int16_t 		data1;		// keys / mouse/joystick buttons
-	int16_t		data2;
-	int16_t		data3;
+	BYTE		type;
+	BYTE		subtype;
+	SWORD 		data1;		// keys / mouse/joystick buttons
+	SWORD		data2;
+	SWORD		data3;
 	int 		x;			// mouse/joystick x move
 	int 		y;			// mouse/joystick y move
 };
 
  
-enum gameaction_t : int
+typedef enum
 {
 	ga_nothing,
 	ga_loadlevel,
 	ga_newgame,
 	ga_newgame2,
-	ga_recordgame,
 	ga_loadgame,
 	ga_loadgamehidecon,
 	ga_loadgameplaydemo,
@@ -75,7 +74,7 @@ enum gameaction_t : int
 	ga_screenshot,
 	ga_togglemap,
 	ga_fullconsole,
-};
+} gameaction_t;
 
 
 

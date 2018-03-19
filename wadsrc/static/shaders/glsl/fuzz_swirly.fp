@@ -1,4 +1,5 @@
 //created by Evil Space Tomato
+uniform float timer;
 
 vec4 ProcessTexel()
 {

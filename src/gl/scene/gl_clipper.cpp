@@ -36,13 +36,28 @@
 */
 
 #include "gl/scene/gl_clipper.h"
-#include "g_levellocals.h"
 
-unsigned Clipper::starttime;
 
-Clipper::Clipper()
+
+ClipNode * ClipNode::freelist;
+int Clipper::anglecache;
+
+
+//-----------------------------------------------------------------------------
+//
+// Destructor
+//
+//-----------------------------------------------------------------------------
+
+Clipper::~Clipper()
 {
-	starttime++;
+	Clear();
+	while (ClipNode::freelist != NULL)
+	{
+		ClipNode * node = ClipNode::freelist;
+		ClipNode::freelist = node->next;
+		delete node;
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -63,7 +78,7 @@ void Clipper::RemoveRange(ClipNode * range)
 		if (range->next) range->next->prev = range->prev;
 	}
 	
-	Free(range);
+	range->Free();
 }
 
 //-----------------------------------------------------------------------------
@@ -77,12 +92,11 @@ void Clipper::Clear()
 	ClipNode *node = cliphead;
 	ClipNode *temp;
 	
-	blocked = false;
 	while (node != NULL)
 	{
 		temp = node;
 		node = node->next;
-		Free(temp);
+		temp->Free();
 	}
 	node = silhouette;
 
@@ -90,12 +104,12 @@ void Clipper::Clear()
 	{
 		temp = node;
 		node = node->next;
-		Free(temp);
+		temp->Free();
 	}
 	
 	cliphead = NULL;
 	silhouette = NULL;
-	starttime++;
+	anglecache++;
 }
 
 //-----------------------------------------------------------------------------
@@ -111,7 +125,7 @@ void Clipper::SetSilhouette()
 
 	while (node != NULL)
 	{
-		ClipNode *snode = NewRange(node->start, node->end);
+		ClipNode *snode = ClipNode::NewRange(node->start, node->end);
 		if (silhouette == NULL) silhouette = snode;
 		snode->prev = last;
 		if (last != NULL) last->next = snode;
@@ -119,6 +133,7 @@ void Clipper::SetSilhouette()
 		node = node->next;
 	}
 }
+
 
 //-----------------------------------------------------------------------------
 //
@@ -211,7 +226,7 @@ void Clipper::AddClipRange(angle_t start, angle_t end)
 		//just add range
 		node = cliphead;
 		prevNode = NULL;
-		temp = NewRange(start, end);
+		temp = ClipNode::NewRange(start, end);
 		
 		while (node != NULL && node->start < end)
 		{
@@ -243,7 +258,7 @@ void Clipper::AddClipRange(angle_t start, angle_t end)
 	}
 	else
 	{
-		temp = NewRange(start, end);
+		temp = ClipNode::NewRange(start, end);
 		cliphead = temp;
 		return;
 	}
@@ -327,7 +342,7 @@ void Clipper::DoRemoveClipRange(angle_t start, angle_t end)
 			}
 			else if (node->start < start && node->end > end)
 			{
-				temp = NewRange(end, node->end);
+				temp=ClipNode::NewRange(end, node->end);
 				node->end=start;
 				temp->next=node->next;
 				temp->prev=node;
@@ -364,7 +379,7 @@ angle_t Clipper::AngleToPseudo(angle_t ang)
 //
 // ! Returns the pseudoangle between the line p1 to (infinity, p1.y) and the 
 // line from p1 to p2. The pseudoangle has the property that the ordering of 
-// points by true angle around p1 and ordering of points by pseudoangle are the 
+// points by true angle anround p1 and ordering of points by pseudoangle are the 
 // same.
 //
 // For clipping exact angles are not needed. Only the ordering matters.
@@ -373,11 +388,12 @@ angle_t Clipper::AngleToPseudo(angle_t ang)
 //
 //-----------------------------------------------------------------------------
 
-angle_t R_PointToPseudoAngle(double x, double y)
+angle_t R_PointToPseudoAngle (fixed_t viewx, fixed_t viewy, fixed_t x, fixed_t y)
 {
-	double vecx = x - r_viewpoint.Pos.X;
-	double vecy = y - r_viewpoint.Pos.Y;
-
+	// Note: float won't work here as it's less precise than the BAM values being passed as parameters
+	double vecx = double(x-viewx);
+	double vecy = double(y-viewy);
+	
 	if (vecx == 0 && vecy == 0)
 	{
 		return 0;
@@ -387,11 +403,12 @@ angle_t R_PointToPseudoAngle(double x, double y)
 		double result = vecy / (fabs(vecx) + fabs(vecy));
 		if (vecx < 0)
 		{
-			result = 2. - result;
+			result = 2.f - result;
 		}
 		return xs_Fix<30>::ToFix(result);
 	}
 }
+
 
 
 
@@ -403,7 +420,7 @@ angle_t R_PointToPseudoAngle(double x, double y)
 //  if some part of the bbox might be visible.
 //
 //-----------------------------------------------------------------------------
-	static const uint8_t checkcoord[12][4] = // killough -- static const
+	static const int checkcoord[12][4] = // killough -- static const
 	{
 	  {3,0,2,1},
 	  {3,0,2,0},
@@ -418,23 +435,23 @@ angle_t R_PointToPseudoAngle(double x, double y)
 	  {2,1,3,0}
 	};
 
-bool Clipper::CheckBox(const float *bspcoord) 
+bool Clipper::CheckBox(const fixed_t *bspcoord) 
 {
 	angle_t angle1, angle2;
 
 	int        boxpos;
-	const uint8_t* check;
+	const int* check;
 	
 	// Find the corners of the box
 	// that define the edges from current viewpoint.
-	boxpos = (r_viewpoint.Pos.X <= bspcoord[BOXLEFT] ? 0 : r_viewpoint.Pos.X < bspcoord[BOXRIGHT ] ? 1 : 2) +
-		(r_viewpoint.Pos.Y >= bspcoord[BOXTOP ] ? 0 : r_viewpoint.Pos.Y > bspcoord[BOXBOTTOM] ? 4 : 8);
+	boxpos = (viewx <= bspcoord[BOXLEFT] ? 0 : viewx < bspcoord[BOXRIGHT ] ? 1 : 2) +
+		(viewy >= bspcoord[BOXTOP ] ? 0 : viewy > bspcoord[BOXBOTTOM] ? 4 : 8);
 	
 	if (boxpos == 5) return true;
 	
 	check = checkcoord[boxpos];
-	angle1 = R_PointToPseudoAngle (bspcoord[check[0]], bspcoord[check[1]]);
-	angle2 = R_PointToPseudoAngle (bspcoord[check[2]], bspcoord[check[3]]);
+	angle1 = R_PointToPseudoAngle (viewx, viewy, bspcoord[check[0]], bspcoord[check[1]]);
+	angle2 = R_PointToPseudoAngle (viewx, viewy, bspcoord[check[2]], bspcoord[check[3]]);
 	
 	return SafeCheckRange(angle2, angle1);
 }

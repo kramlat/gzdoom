@@ -42,12 +42,19 @@ class FCommandLine;
 
 void C_NameKeys (char *str, int first, int second);
 
+struct FBinding
+{
+	const char *Key;
+	const char *Bind;
+};
+
 class FKeyBindings
 {
 	FString Binds[NUM_KEYS];
 
 public:
 	void PerformBind(FCommandLine &argv, const char *msg);
+	void SetBinds(const FBinding *binds);
 	bool DoKey(event_t *ev);
 	void ArchiveBindings(FConfigFile *F, const char *matchcmd = NULL);
 	int  GetKeysForCommand (const char *cmd, int *first, int *second);
@@ -69,7 +76,7 @@ public:
 
 	const char *GetBind(unsigned int index) const
 	{
-		if (index < NUM_KEYS) return Binds[index].GetChars();
+		if (index < NUM_KEYS) return Binds[index];
 		else return NULL;
 	}
 

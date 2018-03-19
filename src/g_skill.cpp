@@ -43,8 +43,6 @@
 #include "v_font.h"
 #include "m_fixed.h"
 #include "gstrings.h"
-#include "g_levellocals.h"
-#include "vm.h"
 
 TArray<FSkillInfo> AllSkills;
 int DefaultSkill = -1;
@@ -61,14 +59,10 @@ void FMapInfoParser::ParseSkill ()
 	bool thisisdefault = false;
 	bool acsreturnisset = false;
 
-	skill.NoMenu = false;
-	skill.AmmoFactor = 1.;
-	skill.DoubleAmmoFactor = 2.;
-	skill.DropAmmoFactor = -1.;
-	skill.DamageFactor = 1.;
-	skill.ArmorFactor = 1.;
-	skill.HealthFactor = 1.;
-	skill.KickbackFactor = 1.;
+	skill.AmmoFactor = FRACUNIT;
+	skill.DoubleAmmoFactor = 2*FRACUNIT;
+	skill.DropAmmoFactor = -1;
+	skill.DamageFactor = FRACUNIT;
 	skill.FastMonsters = false;
 	skill.SlowMonsters = false;
 	skill.DisableCheats = false;
@@ -77,7 +71,7 @@ void FMapInfoParser::ParseSkill ()
 	skill.AutoUseHealth = false;
 	skill.RespawnCounter = 0;
 	skill.RespawnLimit = 0;
-	skill.Aggressiveness = 1.;
+	skill.Aggressiveness = FRACUNIT;
 	skill.SpawnFilter = 0;
 	skill.ACSReturn = 0;
 	skill.MustConfirm = false;
@@ -85,11 +79,10 @@ void FMapInfoParser::ParseSkill ()
 	skill.TextColor = "";
 	skill.Replace.Clear();
 	skill.Replaced.Clear();
-	skill.MonsterHealth = 1.;
-	skill.FriendlyHealth = 1.;
+	skill.MonsterHealth = FRACUNIT;
+	skill.FriendlyHealth = FRACUNIT;
 	skill.NoPain = false;
-	skill.Infighting = 0;
-	skill.PlayerRespawn = false;
+	skill.ArmorFactor = FRACUNIT;
 
 	sc.MustGetString();
 	skill.Name = sc.String;
@@ -102,31 +95,25 @@ void FMapInfoParser::ParseSkill ()
 		{
 			ParseAssign();
 			sc.MustGetFloat ();
-			skill.AmmoFactor = sc.Float;
+			skill.AmmoFactor = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare ("doubleammofactor"))
 		{
 			ParseAssign();
 			sc.MustGetFloat ();
-			skill.DoubleAmmoFactor = sc.Float;
+			skill.DoubleAmmoFactor = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare ("dropammofactor"))
 		{
 			ParseAssign();
 			sc.MustGetFloat ();
-			skill.DropAmmoFactor = sc.Float;
+			skill.DropAmmoFactor = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare ("damagefactor"))
 		{
 			ParseAssign();
 			sc.MustGetFloat ();
-			skill.DamageFactor = sc.Float;
-		}
-		else if (sc.Compare("kickbackfactor"))
-		{
-			ParseAssign();
-			sc.MustGetFloat();
-			skill.KickbackFactor = sc.Float;
+			skill.DamageFactor = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare ("fastmonsters"))
 		{
@@ -152,14 +139,6 @@ void FMapInfoParser::ParseSkill ()
 		{
 			skill.AutoUseHealth = true;
 		}
-		else if (sc.Compare("nomenu"))
-		{
-			skill.NoMenu = true;
-		}
-		else if (sc.Compare ("playerrespawn"))
-		{
-			skill.PlayerRespawn = true;
-		}
 		else if (sc.Compare("respawntime"))
 		{
 			ParseAssign();
@@ -176,7 +155,7 @@ void FMapInfoParser::ParseSkill ()
 		{
 			ParseAssign();
 			sc.MustGetFloat ();
-			skill.Aggressiveness = 1. - clamp(sc.Float, 0.,1.);
+			skill.Aggressiveness = FRACUNIT - FLOAT2FIXED(clamp(sc.Float, 0.,1.));
 		}
 		else if (sc.Compare("SpawnFilter"))
 		{
@@ -269,13 +248,13 @@ void FMapInfoParser::ParseSkill ()
 		{
 			ParseAssign();
 			sc.MustGetFloat();
-			skill.MonsterHealth = sc.Float;	
+			skill.MonsterHealth = FLOAT2FIXED(sc.Float);				
 		}
 		else if (sc.Compare("FriendlyHealth"))
 		{
 			ParseAssign();
 			sc.MustGetFloat();
-			skill.FriendlyHealth = sc.Float;
+			skill.FriendlyHealth = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare("NoPain"))
 		{
@@ -285,21 +264,7 @@ void FMapInfoParser::ParseSkill ()
 		{
 			ParseAssign();
 			sc.MustGetFloat();
-			skill.ArmorFactor = sc.Float;
-		}
-		else if (sc.Compare("HealthFactor"))
-		{
-			ParseAssign();
-			sc.MustGetFloat();
-			skill.HealthFactor = sc.Float;
-		}
-		else if (sc.Compare("NoInfighting"))
-		{
-			skill.Infighting = LEVEL2_NOINFIGHTING;
-		}
-		else if (sc.Compare("TotalInfighting"))
-		{
-			skill.Infighting = LEVEL2_TOTALINFIGHTING;
+			skill.ArmorFactor = FLOAT2FIXED(sc.Float);
 		}
 		else if (sc.Compare("DefaultSkill"))
 		{
@@ -360,6 +325,19 @@ int G_SkillProperty(ESkillProperty prop)
 	{
 		switch(prop)
 		{
+		case SKILLP_AmmoFactor:
+			if (dmflags2 & DF2_YES_DOUBLEAMMO)
+			{
+				return AllSkills[gameskill].DoubleAmmoFactor;
+			}
+			return AllSkills[gameskill].AmmoFactor;
+
+		case SKILLP_DropAmmoFactor:
+			return AllSkills[gameskill].DropAmmoFactor;
+
+		case SKILLP_DamageFactor:
+			return AllSkills[gameskill].DamageFactor;
+
 		case SKILLP_FastMonsters:
 			return AllSkills[gameskill].FastMonsters  || (dmflags & DF_FAST_MONSTERS);
 
@@ -373,6 +351,9 @@ int G_SkillProperty(ESkillProperty prop)
 
 		case SKILLP_RespawnLimit:
 			return AllSkills[gameskill].RespawnLimit;
+
+		case SKILLP_Aggressiveness:
+			return AllSkills[gameskill].Aggressiveness;
 
 		case SKILLP_DisableCheats:
 			return AllSkills[gameskill].DisableCheats;
@@ -392,87 +373,21 @@ int G_SkillProperty(ESkillProperty prop)
 		case SKILLP_ACSReturn:
 			return AllSkills[gameskill].ACSReturn;
 		
-		case SKILLP_NoPain:			
-			return AllSkills[gameskill].NoPain;	
-
-		case SKILLP_Infight:
-			// This property also needs to consider the level flags for the same info.
-			if (level.flags2 & LEVEL2_TOTALINFIGHTING) return 1;
-			if (level.flags2 & LEVEL2_NOINFIGHTING) return -1;	
-			if (AllSkills[gameskill].Infighting == LEVEL2_TOTALINFIGHTING) return 1;
-			if (AllSkills[gameskill].Infighting == LEVEL2_NOINFIGHTING) return -1;
-			return infighting;
-
-		case SKILLP_PlayerRespawn:
-			return AllSkills[gameskill].PlayerRespawn;
-		}
-	}
-	return 0;
-}
-
-DEFINE_ACTION_FUNCTION(DObject, G_SkillPropertyInt)
-{
-	PARAM_PROLOGUE;
-	PARAM_INT(which);
-	ACTION_RETURN_INT(G_SkillProperty((ESkillProperty)which));
-}
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-double G_SkillProperty(EFSkillProperty prop)
-{
-	if (AllSkills.Size() > 0)
-	{
-		switch (prop)
-		{
-		case SKILLP_AmmoFactor:
-			if (dmflags2 & DF2_YES_DOUBLEAMMO)
-			{
-				return AllSkills[gameskill].DoubleAmmoFactor;
-			}
-			return AllSkills[gameskill].AmmoFactor;
-
-		case SKILLP_DropAmmoFactor:
-			return AllSkills[gameskill].DropAmmoFactor;
-
-		case SKILLP_ArmorFactor:
-			return AllSkills[gameskill].ArmorFactor;
-
-		case SKILLP_HealthFactor:
-			return AllSkills[gameskill].HealthFactor;
-
-		case SKILLP_DamageFactor:
-			return AllSkills[gameskill].DamageFactor;
-
-		case SKILLP_Aggressiveness:
-			return AllSkills[gameskill].Aggressiveness;
-
 		case SKILLP_MonsterHealth:
 			return AllSkills[gameskill].MonsterHealth;
 
 		case SKILLP_FriendlyHealth:
 			return AllSkills[gameskill].FriendlyHealth;
 
-		case SKILLP_KickbackFactor:
-			return AllSkills[gameskill].KickbackFactor;
+		case SKILLP_NoPain:			
+			return AllSkills[gameskill].NoPain;	
 
+		case SKILLP_ArmorFactor:
+			return AllSkills[gameskill].ArmorFactor;
 		}
 	}
 	return 0;
 }
-
-DEFINE_ACTION_FUNCTION(DObject, G_SkillPropertyFloat)
-{
-	PARAM_PROLOGUE;
-	PARAM_INT(which);
-	ACTION_RETURN_FLOAT(G_SkillProperty((EFSkillProperty)which));
-}
-
-
 
 //==========================================================================
 //
@@ -485,7 +400,7 @@ const char * G_SkillName()
 	const char *name = AllSkills[gameskill].MenuName;
 
 	player_t *player = &players[consoleplayer];
-	const char *playerclass = player->mo->GetInfo()->DisplayName;
+	const char *playerclass = player->mo->GetClass()->Meta.GetMetaString(APMETA_DisplayName);
 
 	if (playerclass != NULL)
 	{
@@ -497,11 +412,6 @@ const char * G_SkillName()
 	return name;
 }
 
-DEFINE_ACTION_FUNCTION(DObject, G_SkillName)
-{
-	PARAM_PROLOGUE;
-	ACTION_RETURN_STRING(G_SkillName());
-}
 
 //==========================================================================
 //
@@ -527,11 +437,9 @@ FSkillInfo &FSkillInfo::operator=(const FSkillInfo &other)
 {
 	Name = other.Name;
 	AmmoFactor = other.AmmoFactor;
-	NoMenu = other.NoMenu;
 	DoubleAmmoFactor = other.DoubleAmmoFactor;
 	DropAmmoFactor = other.DropAmmoFactor;
 	DamageFactor = other.DamageFactor;
-	KickbackFactor = other.KickbackFactor;
 	FastMonsters = other.FastMonsters;
 	SlowMonsters = other.SlowMonsters;
 	DisableCheats = other.DisableCheats;
@@ -555,10 +463,7 @@ FSkillInfo &FSkillInfo::operator=(const FSkillInfo &other)
 	MonsterHealth = other.MonsterHealth;
 	FriendlyHealth = other.FriendlyHealth;
 	NoPain = other.NoPain;
-	Infighting = other.Infighting;
 	ArmorFactor = other.ArmorFactor;
-	HealthFactor = other.HealthFactor;
-	PlayerRespawn = other.PlayerRespawn;
 	return *this;
 }
 
@@ -574,7 +479,7 @@ int FSkillInfo::GetTextColor() const
 	{
 		return CR_UNTRANSLATED;
 	}
-	const uint8_t *cp = (const uint8_t *)TextColor.GetChars();
+	const BYTE *cp = (const BYTE *)TextColor.GetChars();
 	int color = V_ParseFontColor(cp, 0, 0);
 	if (color == CR_UNDEFINED)
 	{

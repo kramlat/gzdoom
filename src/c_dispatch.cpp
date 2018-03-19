@@ -53,9 +53,7 @@
 #include "v_text.h"
 #include "d_net.h"
 #include "d_main.h"
-#include "serializer.h"
-#include "menu/menu.h"
-#include "vm.h"
+#include "farchive.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -65,9 +63,9 @@ class DWaitingCommand : public DThinker
 {
 	DECLARE_CLASS (DWaitingCommand, DThinker)
 public:
-	DWaitingCommand (const char *cmd, int tics, bool unsafe);
+	DWaitingCommand (const char *cmd, int tics);
 	~DWaitingCommand ();
-	void Serialize(FSerializer &arc);
+	void Serialize (FArchive &arc);
 	void Tick ();
 
 private:
@@ -75,7 +73,6 @@ private:
 
 	char *Command;
 	int TicsLeft;
-	bool IsUnsafe;
 };
 
 class DStoredCommand : public DThinker
@@ -127,24 +124,7 @@ FButtonStatus Button_Mlook, Button_Klook, Button_Use, Button_AltAttack,
 	Button_AM_PanLeft, Button_AM_PanRight, Button_AM_PanDown, Button_AM_PanUp,
 	Button_AM_ZoomIn, Button_AM_ZoomOut;
 
-bool ParsingKeyConf, UnsafeExecutionContext;
-
-class UnsafeExecutionScope
-{
-	const bool wasEnabled;
-
-public:
-	explicit UnsafeExecutionScope(const bool enable = true)
-	: wasEnabled(UnsafeExecutionContext)
-	{
-		UnsafeExecutionContext = enable;
-	}
-
-	~UnsafeExecutionScope()
-	{
-		UnsafeExecutionContext = wasEnabled;
-	}
-};
+bool ParsingKeyConf;
 
 // To add new actions, go to the console and type "key <action name>".
 // This will give you the key value to use in the first column. Then
@@ -207,28 +187,24 @@ static const char *KeyConfCommands[] =
 
 // CODE --------------------------------------------------------------------
 
-IMPLEMENT_CLASS(DWaitingCommand, false, false)
+IMPLEMENT_CLASS (DWaitingCommand)
 
-void DWaitingCommand::Serialize(FSerializer &arc)
+void DWaitingCommand::Serialize (FArchive &arc)
 {
 	Super::Serialize (arc);
-	arc("command", Command)
-		("ticsleft", TicsLeft)
-		("unsafe", IsUnsafe);
+	arc << Command << TicsLeft;
 }
 
 DWaitingCommand::DWaitingCommand ()
 {
 	Command = NULL;
 	TicsLeft = 1;
-	IsUnsafe = false;
 }
 
-DWaitingCommand::DWaitingCommand (const char *cmd, int tics, bool unsafe)
+DWaitingCommand::DWaitingCommand (const char *cmd, int tics)
 {
 	Command = copystring (cmd);
 	TicsLeft = tics+1;
-	IsUnsafe = unsafe;
 }
 
 DWaitingCommand::~DWaitingCommand ()
@@ -243,13 +219,12 @@ void DWaitingCommand::Tick ()
 {
 	if (--TicsLeft == 0)
 	{
-		UnsafeExecutionScope scope;
 		AddCommandString (Command);
 		Destroy ();
 	}
 }
 
-IMPLEMENT_CLASS(DStoredCommand, false, false)
+IMPLEMENT_CLASS (DStoredCommand)
 
 DStoredCommand::DStoredCommand ()
 {
@@ -316,17 +291,17 @@ static int ListActionCommands (const char *pattern)
 #undef get16bits
 #if (defined(__GNUC__) && defined(__i386__)) || defined(__WATCOMC__) \
   || defined(_MSC_VER) || defined (__BORLANDC__) || defined (__TURBOC__)
-#define get16bits(d) (*((const uint16_t *) (d)))
+#define get16bits(d) (*((const WORD *) (d)))
 #endif
 
 #if !defined (get16bits)
-#define get16bits(d) ((((uint32_t)(((const uint8_t *)(d))[1])) << 8)\
-                       +(uint32_t)(((const uint8_t *)(d))[0]) )
+#define get16bits(d) ((((DWORD)(((const BYTE *)(d))[1])) << 8)\
+                       +(DWORD)(((const BYTE *)(d))[0]) )
 #endif
 
-uint32_t SuperFastHash (const char *data, size_t len)
+DWORD SuperFastHash (const char *data, size_t len)
 {
-	uint32_t hash = 0, tmp;
+	DWORD hash = 0, tmp;
 	size_t rem;
 
 	if (len == 0 || data == NULL) return 0;
@@ -340,7 +315,7 @@ uint32_t SuperFastHash (const char *data, size_t len)
 		hash  += get16bits (data);
 		tmp    = (get16bits (data+2) << 11) ^ hash;
 		hash   = (hash << 16) ^ tmp;
-		data  += 2*sizeof (uint16_t);
+		data  += 2*sizeof (WORD);
 		hash  += hash >> 11;
 	}
 
@@ -349,7 +324,7 @@ uint32_t SuperFastHash (const char *data, size_t len)
 	{
 		case 3:	hash += get16bits (data);
 				hash ^= hash << 16;
-				hash ^= data[sizeof (uint16_t)] << 18;
+				hash ^= data[sizeof (WORD)] << 18;
 				hash += hash >> 11;
 				break;
 		case 2:	hash += get16bits (data);
@@ -375,12 +350,12 @@ uint32_t SuperFastHash (const char *data, size_t len)
 /* A modified version to do a case-insensitive hash */
 
 #undef get16bits
-#define get16bits(d) ((((uint32_t)tolower(((const uint8_t *)(d))[1])) << 8)\
-                       +(uint32_t)tolower(((const uint8_t *)(d))[0]) )
+#define get16bits(d) ((((DWORD)tolower(((const BYTE *)(d))[1])) << 8)\
+                       +(DWORD)tolower(((const BYTE *)(d))[0]) )
 
-uint32_t SuperFastHashI (const char *data, size_t len)
+DWORD SuperFastHashI (const char *data, size_t len)
 {
-	uint32_t hash = 0, tmp;
+	DWORD hash = 0, tmp;
 	size_t rem;
 
 	if (len <= 0 || data == NULL) return 0;
@@ -394,7 +369,7 @@ uint32_t SuperFastHashI (const char *data, size_t len)
 		hash  += get16bits (data);
 		tmp    = (get16bits (data+2) << 11) ^ hash;
 		hash   = (hash << 16) ^ tmp;
-		data  += 2*sizeof (uint16_t);
+		data  += 2*sizeof (WORD);
 		hash  += hash >> 11;
 	}
 
@@ -403,7 +378,7 @@ uint32_t SuperFastHashI (const char *data, size_t len)
 	{
 		case 3:	hash += get16bits (data);
 				hash ^= hash << 16;
-				hash ^= tolower(data[sizeof (uint16_t)]) << 18;
+				hash ^= tolower(data[sizeof (WORD)]) << 18;
 				hash += hash >> 11;
 				break;
 		case 2:	hash += get16bits (data);
@@ -490,7 +465,7 @@ bool FButtonStatus::PressKey (int keynum)
 		}
 		Keys[open] = keynum;
 	}
-	uint8_t wasdown = bDown;
+	BYTE wasdown = bDown;
 	bDown = bWentDown = true;
 	// Returns true if this key caused the button to go down.
 	return !wasdown;
@@ -499,7 +474,7 @@ bool FButtonStatus::PressKey (int keynum)
 bool FButtonStatus::ReleaseKey (int keynum)
 {
 	int i, numdown, match;
-	uint8_t wasdown = bDown;
+	BYTE wasdown = bDown;
 
 	keynum &= KEY_DBLCLICKED-1;
 
@@ -658,7 +633,7 @@ void C_DoCommand (const char *cmd, int keynum)
 			}
 			else
 			{
-				Create<DStoredCommand> (com, beg);
+				new DStoredCommand (com, beg);
 			}
 		}
 	}
@@ -676,26 +651,20 @@ void C_DoCommand (const char *cmd, int keynum)
 			}
 			else
 			{ // Get the variable's value
-				Printf ("\"%s\" is \"%s\"\n", var->GetName(), var->GetHumanString());
+				UCVarValue val = var->GetGenericRep (CVAR_String);
+				Printf ("\"%s\" is \"%s\"\n", var->GetName(), val.String);
 			}
 		}
 		else
 		{ // We don't know how to handle this command
-			Printf ("Unknown command \"%.*s\"\n", (int)len, beg);
+			char cmdname[64];
+			size_t minlen = MIN<size_t> (len, 63);
+
+			memcpy (cmdname, beg, minlen);
+			cmdname[len] = 0;
+			Printf ("Unknown command \"%s\"\n", cmdname);
 		}
 	}
-}
-
-// This is only accessible to the special menu item to run CCMDs.
-DEFINE_ACTION_FUNCTION(DOptionMenuItemCommand, DoCommand)
-{
-	if (CurrentMenu == nullptr) return 0;
-	PARAM_PROLOGUE;
-	PARAM_STRING(cmd);
-	PARAM_BOOL(unsafe);
-	UnsafeExecutionScope scope(unsafe);
-	C_DoCommand(cmd);
-	return 0;
 }
 
 void AddCommandString (char *cmd, int keynum)
@@ -741,7 +710,7 @@ void AddCommandString (char *cmd, int keynum)
 
 					if (cmd[4] == ' ')
 					{
-						tics = (int)strtoll (cmd + 5, NULL, 0);
+						tics = strtol (cmd + 5, NULL, 0);
 					}
 					else
 					{
@@ -754,7 +723,7 @@ void AddCommandString (char *cmd, int keynum)
 						  // Note that deferred commands lose track of which key
 						  // (if any) they were pressed from.
 							*brkpt = ';';
-							Create<DWaitingCommand> (brkpt, tics, UnsafeExecutionContext);
+							new DWaitingCommand (brkpt, tics);
 						}
 						return;
 					}
@@ -1046,17 +1015,6 @@ void FConsoleCommand::Run (FCommandLine &argv, APlayerPawn *who, int key)
 	m_RunFunc (argv, who, key);
 }
 
-void FUnsafeConsoleCommand::Run (FCommandLine &args, APlayerPawn *instigator, int key)
-{
-	if (UnsafeExecutionContext)
-	{
-		Printf(TEXTCOLOR_RED "Cannot execute unsafe command " TEXTCOLOR_GOLD "%s\n", m_Name);
-		return;
-	}
-
-	FConsoleCommand::Run (args, instigator, key);
-}
-
 FConsoleAlias::FConsoleAlias (const char *name, const char *command, bool noSave)
 	: FConsoleCommand (name, NULL),
 	  bRunning(false), bKill(false)
@@ -1087,11 +1045,7 @@ FString BuildString (int argc, FString *argv)
 
 		for (arg = 0; arg < argc; arg++)
 		{
-			if (argv[arg][0] == '\0')
-			{ // It's an empty argument, we need to convert it to '""'
-				buf << "\"\" ";
-			}
-			else if (strchr(argv[arg], '"'))
+			if (strchr(argv[arg], '"'))
 			{ // If it contains one or more quotes, we need to escape them.
 				buf << '"';
 				long substr_start = 0, quotepos;
@@ -1127,8 +1081,7 @@ FString BuildString (int argc, FString *argv)
 // %x or %{x} in the command line with argument x. If argument x does not
 // exist, then the empty string is substituted in its place.
 //
-// Substitution is not done inside of quoted strings, unless that string is
-// prepended with a % character.
+// Substitution is not done inside of quoted strings.
 //
 // To avoid a substitution, use %%. The %% will be replaced by a single %.
 //
@@ -1143,12 +1096,19 @@ FString SubstituteAliasParams (FString &command, FCommandLine &args)
 	char *p = command.LockBuffer(), *start = p;
 	unsigned long argnum;
 	FString buf;
-	bool inquote = false;
 
 	while (*p != '\0')
 	{
-		if (p[0] == '%' && ((p[1] >= '0' && p[1] <= '9') || p[1] == '{'))
+		if (*p == '%' && ((p[1] >= '0' && p[1] <= '9') || p[1] == '{' || p[1] == '%'))
 		{
+			if (p[1] == '%')
+			{
+				// Do not substitute. Just collapse to a single %.
+				buf.AppendCStrPart (start, p - start + 1);
+				start = p = p + 2;
+				continue;
+			}
+
 			// Do a substitution. Output what came before this.
 			buf.AppendCStrPart (start, p - start);
 
@@ -1160,50 +1120,14 @@ FString SubstituteAliasParams (FString &command, FCommandLine &args)
 			}
 			p = (start += (p[1] == '{' && *start == '}'));
 		}
-		else if (p[0] == '%' && p[1] == '%')
+		else if (*p == '"')
 		{
-			// Do not substitute. Just collapse to a single %.
-			buf.AppendCStrPart (start, p - start + 1);
-			start = p = p + 2;
-			continue;
-		}
-		else if (p[0] == '%' && p[1] == '"')
-		{
-			// Collapse %" to " and remember that we're in a quote so when we
-			// see a " character again, we don't start skipping below.
-			if (!inquote)
-			{
-				inquote = true;
-				buf.AppendCStrPart(start, p - start);
-				start = p + 1;
-			}
-			else
-			{
-				inquote = false;
-			}
-			p += 2;
-		}
-		else if (p[0] == '\\' && p[1] == '"')
-		{
-			p += 2;
-		}
-		else if (p[0] == '"')
-		{
-			// Don't substitute inside quoted strings if it didn't start
-			// with a %"
-			if (!inquote)
-			{
+			// Don't substitute inside quoted strings.
+			p++;
+			while (*p != '\0' && (*p != '"' || *(p-1) == '\\'))
 				p++;
-				while (*p != '\0' && (*p != '"' || *(p-1) == '\\'))
-					p++;
-				if (*p != '\0')
-					p++;
-			}
-			else
-			{
-				inquote = false;
+			if (*p != '\0')
 				p++;
-			}
 		}
 		else
 		{
@@ -1254,11 +1178,11 @@ static int DumpHash (FConsoleCommand **table, bool aliases, const char *pattern=
 
 void FConsoleAlias::PrintAlias ()
 {
-	if (m_Command[0].IsNotEmpty())
+	if (m_Command[0])
 	{
 		Printf (TEXTCOLOR_YELLOW "%s : %s\n", m_Name, m_Command[0].GetChars());
 	}
-	if (m_Command[1].IsNotEmpty())
+	if (m_Command[1])
 	{
 		Printf (TEXTCOLOR_ORANGE "%s : %s\n", m_Name, m_Command[1].GetChars());
 	}
@@ -1377,13 +1301,9 @@ CCMD (alias)
 					alias = NULL;
 				}
 			}
-			else if (ParsingKeyConf)
-			{
-				new FUnsafeConsoleAlias (argv[1], argv[2]);
-			}
 			else
 			{
-				new FConsoleAlias (argv[1], argv[2], false);
+				alias = new FConsoleAlias (argv[1], argv[2], ParsingKeyConf);
 			}
 		}
 	}
@@ -1415,7 +1335,7 @@ CCMD (key)
 
 // Execute any console commands specified on the command line.
 // These all begin with '+' as opposed to '-'.
-FExecList *C_ParseCmdLineParams(FExecList *exec)
+void C_ExecCmdLineParams ()
 {
 	for (int currArg = 1; currArg < Args->NumArgs(); )
 	{
@@ -1436,15 +1356,10 @@ FExecList *C_ParseCmdLineParams(FExecList *exec)
 			cmdString = BuildString (cmdlen, Args->GetArgList (argstart));
 			if (!cmdString.IsEmpty())
 			{
-				if (exec == NULL)
-				{
-					exec = new FExecList;
-				}
-				exec->AddCommand(&cmdString[1]);
+				C_DoCommand (&cmdString[1]);
 			}
 		}
 	}
-	return exec;
 }
 
 bool FConsoleCommand::IsAlias ()
@@ -1521,66 +1436,28 @@ void FConsoleAlias::SafeDelete ()
 	}
 }
 
-void FUnsafeConsoleAlias::Run (FCommandLine &args, APlayerPawn *instigator, int key)
-{
-	UnsafeExecutionScope scope;
-	FConsoleAlias::Run(args, instigator, key);
-}
+static BYTE PullinBad = 2;
+static const char *PullinFile;
+extern TArray<FString> allwads;
 
-void FExecList::AddCommand(const char *cmd, const char *file)
-{
-	// Pullins are special and need to be separated from general commands.
-	// They also turned out to be a really bad idea, since they make things
-	// more complicated. :(
-	if (file != NULL && strnicmp(cmd, "pullin", 6) == 0 && isspace(cmd[6]))
-	{
-		FCommandLine line(cmd);
-		C_SearchForPullins(this, file, line);
-	}
-	// Recursive exec: Parse this file now.
-	else if (strnicmp(cmd, "exec", 4) == 0 && isspace(cmd[4]))
-	{
-		FCommandLine argv(cmd);
-		for (int i = 1; i < argv.argc(); ++i)
-		{
-			C_ParseExecFile(argv[i], this);
-		}
-	}
-	else
-	{
-		Commands.Push(cmd);
-	}
-}
-
-void FExecList::ExecCommands() const
-{
-	for (unsigned i = 0; i < Commands.Size(); ++i)
-	{
-		AddCommandString(Commands[i].LockBuffer());
-		Commands[i].UnlockBuffer();
-	}
-}
-
-void FExecList::AddPullins(TArray<FString> &wads) const
-{
-	for (unsigned i = 0; i < Pullins.Size(); ++i)
-	{
-		D_AddFile(wads, Pullins[i]);
-	}
-}
-
-FExecList *C_ParseExecFile(const char *file, FExecList *exec)
+int C_ExecFile (const char *file, bool usePullin)
 {
 	FILE *f;
 	char cmd[4096];
 	int retval = 0;
 
+	BYTE pullinSaved = PullinBad;
+	const char *fileSaved = PullinFile;
+
 	if ( (f = fopen (file, "r")) )
 	{
-		while (fgets(cmd, countof(cmd)-1, f))
+		PullinBad = 1-usePullin;
+		PullinFile = file;
+
+		while (fgets (cmd, 4095, f))
 		{
 			// Comments begin with //
-			char *stop = cmd + strlen(cmd) - 1;
+			char *stop = cmd + strlen (cmd) - 1;
 			char *comment = cmd;
 			int inQuote = 0;
 
@@ -1607,78 +1484,88 @@ FExecList *C_ParseExecFile(const char *file, FExecList *exec)
 			{ // Comment in middle of line
 				*comment = 0;
 			}
-			if (exec == NULL)
-			{
-				exec = new FExecList;
-			}
-			exec->AddCommand(cmd, file);
+
+			AddCommandString (cmd);
 		}
-		if (!feof(f))
+		if (!feof (f))
 		{
-			Printf("Error parsing \"%s\"\n", file);
+			retval = 2;
 		}
-		fclose(f);
+		fclose (f);
 	}
 	else
 	{
-		Printf ("Could not open \"%s\"\n", file);
+		retval = 1;
 	}
-	return exec;
-}
-
-bool C_ExecFile (const char *file)
-{
-	FExecList *exec = C_ParseExecFile(file, NULL);
-	if (exec != NULL)
-	{
-		exec->ExecCommands();
-		if (exec->Pullins.Size() > 0)
-		{
-			Printf(TEXTCOLOR_BOLD "Notice: Pullin files were ignored.\n");
-		}
-		delete exec;
-	}
-	return exec != NULL;
-}
-
-void C_SearchForPullins(FExecList *exec, const char *file, FCommandLine &argv)
-{
-	const char *lastSlash;
-
-	assert(exec != NULL);
-	assert(file != NULL);
-#ifdef __unix__
-	lastSlash = strrchr(file, '/');
-#else
-	const char *lastSlash1, *lastSlash2;
-
-	lastSlash1 = strrchr(file, '/');
-	lastSlash2 = strrchr(file, '\\');
-	lastSlash = MAX(lastSlash1, lastSlash2);
-#endif
-
-	for (int i = 1; i < argv.argc(); ++i)
-	{
-		// Try looking for the wad in the same directory as the .cfg
-		// before looking for it in the current directory.
-		if (lastSlash != NULL)
-		{
-			FString path(file, (lastSlash - file) + 1);
-			path += argv[i];
-			if (FileExists(path))
-			{
-				exec->Pullins.Push(path);
-				continue;
-			}
-		}
-		exec->Pullins.Push(argv[i]);
-	}
+	PullinBad = pullinSaved;
+	PullinFile = fileSaved;
+	return retval;
 }
 
 CCMD (pullin)
 {
-	// Actual handling for pullin is now completely special-cased above
-	Printf (TEXTCOLOR_BOLD "Pullin" TEXTCOLOR_NORMAL " is only valid from .cfg\n"
-			"files and only when used at startup.\n");
+	if (PullinBad == 2)
+	{
+		Printf ("This command is only valid from .cfg\n"
+				"files and only when used at startup.\n");
+	}
+	else if (argv.argc() > 1)
+	{
+		const char *lastSlash;
+
+#ifdef __unix__
+		lastSlash = strrchr (PullinFile, '/');
+#else
+		const char *lastSlash1, *lastSlash2;
+
+		lastSlash1 = strrchr (PullinFile, '/');
+		lastSlash2 = strrchr (PullinFile, '\\');
+		lastSlash = MAX (lastSlash1, lastSlash2);
+#endif
+
+		if (PullinBad)
+		{
+			Printf ("Not loading:");
+		}
+		for (int i = 1; i < argv.argc(); ++i)
+		{
+			if (PullinBad)
+			{
+				Printf (" %s", argv[i]);
+			}
+			else
+			{
+				// Try looking for the wad in the same directory as the .cfg
+				// before looking for it in the current directory.
+				char *path = argv[i];
+
+				if (lastSlash != NULL)
+				{
+					size_t pathlen = lastSlash - PullinFile + strlen (argv[i]) + 2;
+					path = new char[pathlen];
+					strncpy (path, PullinFile, (lastSlash - PullinFile) + 1);
+					strcpy (path + (lastSlash - PullinFile) + 1, argv[i]);
+					if (!FileExists (path))
+					{
+						delete[] path;
+						path = argv[i];
+					}
+					else
+					{
+						FixPathSeperator (path);
+					}
+				}
+				D_AddFile (allwads, path);
+				if (path != argv[i])
+				{
+					delete[] path;
+				}
+			}
+		}
+		if (PullinBad)
+		{
+			Printf ("\n");
+		}
+	}
 }
 

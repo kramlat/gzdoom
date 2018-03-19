@@ -47,40 +47,147 @@
 #include "stats.h"
 #include "a_sharedglobal.h"
 #include "dsectoreffect.h"
-#include "serializer.h"
-#include "vm.h"
-#include "g_levellocals.h"
-#include "types.h"
-#include "i_time.h"
+#include "farchive.h"
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
+PClass DObject::_StaticType;
 ClassReg DObject::RegistrationInfo =
 {
-	nullptr,								// MyClass
-	"DObject",								// Name
-	nullptr,								// ParentType
-	nullptr,								
-	nullptr,								// Pointers
-	&DObject::InPlaceConstructor,			// ConstructNative
-	nullptr,
-	sizeof(DObject),						// SizeOf
-	CLASSREG_PClass,						// MetaClassNum
+	&DObject::_StaticType,			// MyClass
+	"DObject",						// Name
+	NULL,							// ParentType
+	sizeof(DObject),				// SizeOf
+	NULL,							// Pointers
+	&DObject::InPlaceConstructor	// ConstructNative
 };
 _DECLARE_TI(DObject)
 
-// This bit is needed in the playsim - but give it a less crappy name.
-DEFINE_FIELD_BIT(DObject,ObjectFlags, bDestroyed, OF_EuthanizeMe)
+FMetaTable::~FMetaTable ()
+{
+	FreeMeta ();
+}
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
+FMetaTable::FMetaTable (const FMetaTable &other)
+{
+	Meta = NULL;
+	CopyMeta (&other);
+}
+
+FMetaTable &FMetaTable::operator = (const FMetaTable &other)
+{
+	CopyMeta (&other);
+	return *this;
+}
+
+void FMetaTable::FreeMeta ()
+{
+	while (Meta != NULL)
+	{
+		FMetaData *meta = Meta;
+
+		switch (meta->Type)
+		{
+		case META_String:
+			delete[] meta->Value.String;
+			break;
+		default:
+			break;
+		}
+		Meta = meta->Next;
+		delete meta;
+	}
+}
+
+void FMetaTable::CopyMeta (const FMetaTable *other)
+{
+	const FMetaData *meta_src;
+	FMetaData **meta_dest;
+
+	FreeMeta ();
+
+	meta_src = other->Meta;
+	meta_dest = &Meta;
+	while (meta_src != NULL)
+	{
+		FMetaData *newmeta = new FMetaData (meta_src->Type, meta_src->ID);
+		switch (meta_src->Type)
+		{
+		case META_String:
+			newmeta->Value.String = copystring (meta_src->Value.String);
+			break;
+		default:
+			newmeta->Value = meta_src->Value;
+			break;
+		}
+		*meta_dest = newmeta;
+		meta_dest = &newmeta->Next;
+		meta_src = meta_src->Next;
+	}
+	*meta_dest = NULL;
+}
+
+FMetaData *FMetaTable::FindMeta (EMetaType type, DWORD id) const
+{
+	FMetaData *meta = Meta;
+
+	while (meta != NULL)
+	{
+		if (meta->ID == id && meta->Type == type)
+		{
+			return meta;
+		}
+		meta = meta->Next;
+	}
+	return NULL;
+}
+
+FMetaData *FMetaTable::FindMetaDef (EMetaType type, DWORD id)
+{
+	FMetaData *meta = FindMeta (type, id);
+	if (meta == NULL)
+	{
+		meta = new FMetaData (type, id);
+		meta->Next = Meta;
+		meta->Value.String = NULL;
+		Meta = meta;
+	}
+	return meta;
+}
+
+void FMetaTable::SetMetaInt (DWORD id, int parm)
+{
+	FMetaData *meta = FindMetaDef (META_Int, id);
+	meta->Value.Int = parm;
+}
+
+int FMetaTable::GetMetaInt (DWORD id, int def) const
+{
+	FMetaData *meta = FindMeta (META_Int, id);
+	return meta != NULL ? meta->Value.Int : def;
+}
+
+void FMetaTable::SetMetaFixed (DWORD id, fixed_t parm)
+{
+	FMetaData *meta = FindMetaDef (META_Fixed, id);
+	meta->Value.Fixed = parm;
+}
+
+fixed_t FMetaTable::GetMetaFixed (DWORD id, fixed_t def) const
+{
+	FMetaData *meta = FindMeta (META_Fixed, id);
+	return meta != NULL ? meta->Value.Fixed : def;
+}
+
+void FMetaTable::SetMetaString (DWORD id, const char *parm)
+{
+	FMetaData *meta = FindMetaDef (META_String, id);
+	ReplaceString (&meta->Value.String, parm);
+}
+
+const char *FMetaTable::GetMetaString (DWORD id) const
+{
+	FMetaData *meta = FindMeta (META_String, id);
+	return meta != NULL ? meta->Value.String : NULL;
+}
 
 CCMD (dumpactors)
 {
@@ -93,35 +200,21 @@ CCMD (dumpactors)
 		"25:DoomStrifeChex", "26:HereticStrifeChex", "27:NotHexen",	"28:HexenStrifeChex", "29:NotHeretic",
 		"30:NotDoom", "31:All",
 	};
-	Printf("%u object class types total\nActor\tEd Num\tSpawnID\tFilter\tSource\n", PClass::AllClasses.Size());
-	for (unsigned int i = 0; i < PClass::AllClasses.Size(); i++)
+	Printf("%i object class types total\nActor\tEd Num\tSpawnID\tFilter\tSource\n", PClass::m_Types.Size());
+	for (unsigned int i = 0; i < PClass::m_Types.Size(); i++)
 	{
-		PClass *cls = PClass::AllClasses[i];
-		PClassActor *acls = ValidateActor(cls);
-		if (acls != NULL)
-		{
-			auto ainfo = acls->ActorInfo();
+		PClass *cls = PClass::m_Types[i];
+		if (cls != NULL && cls->ActorInfo != NULL)
 			Printf("%s\t%i\t%i\t%s\t%s\n",
-				acls->TypeName.GetChars(), ainfo->DoomEdNum,
-				ainfo->SpawnID, filters[ainfo->GameFilter & 31],
-				acls->SourceLumpName.GetChars());
-		}
+			cls->TypeName.GetChars(), cls->ActorInfo->DoomEdNum,
+			cls->ActorInfo->SpawnID, filters[cls->ActorInfo->GameFilter & 31],
+			cls->Meta.GetMetaString (ACMETA_Lump));
 		else if (cls != NULL)
-		{
-			Printf("%s\tn/a\tn/a\tn/a\tEngine (not an actor type)\tSource: %s\n", cls->TypeName.GetChars(), cls->SourceLumpName.GetChars());
-		}
+			Printf("%s\tn/a\tn/a\tn/a\tEngine (not an actor type)\n", cls->TypeName.GetChars());
 		else
-		{
 			Printf("Type %i is not an object class\n", i);
-		}
 	}
 }
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
 
 CCMD (dumpclasses)
 {
@@ -230,6 +323,7 @@ CCMD (dumpclasses)
 	int shown, omitted;
 	DumpInfo *tree = NULL;
 	const PClass *root = NULL;
+	bool showall = true;
 
 	if (argv.argc() > 1)
 	{
@@ -239,14 +333,24 @@ CCMD (dumpclasses)
 			Printf ("Class '%s' not found\n", argv[1]);
 			return;
 		}
+		if (stricmp (argv[1], "Actor") == 0)
+		{
+			if (argv.argc() < 3 || stricmp (argv[2], "all") != 0)
+			{
+				showall = false;
+			}
+		}
 	}
 
 	shown = omitted = 0;
 	DumpInfo::AddType (&tree, root != NULL ? root : RUNTIME_CLASS(DObject));
-	for (i = 0; i < PClass::AllClasses.Size(); i++)
+	for (i = 0; i < PClass::m_Types.Size(); i++)
 	{
-		PClass *cls = PClass::AllClasses[i];
-		if (root == NULL || cls == root || cls->IsDescendantOf(root))
+		PClass *cls = PClass::m_Types[i];
+		if (root == NULL ||
+			(cls->IsDescendantOf (root) &&
+			(showall || cls == root ||
+			cls->ActorInfo != root->ActorInfo)))
 		{
 			DumpInfo::AddType (&tree, cls);
 //			Printf (" %s\n", PClass::m_Types[i]->Name + 1);
@@ -262,12 +366,6 @@ CCMD (dumpclasses)
 	Printf ("%d classes shown, %d omitted\n", shown, omitted);
 }
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
 void DObject::InPlaceConstructor (void *mem)
 {
 	new ((EInPlace *)mem) DObject;
@@ -278,7 +376,6 @@ DObject::DObject ()
 {
 	ObjectFlags = GC::CurrentWhite & OF_WhiteBits;
 	ObjNext = GC::Root;
-	GCNext = nullptr;
 	GC::Root = this;
 }
 
@@ -287,112 +384,58 @@ DObject::DObject (PClass *inClass)
 {
 	ObjectFlags = GC::CurrentWhite & OF_WhiteBits;
 	ObjNext = GC::Root;
-	GCNext = nullptr;
 	GC::Root = this;
 }
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
 DObject::~DObject ()
 {
-	if (!PClass::bShutdown)
+	if (!(ObjectFlags & OF_Cleanup))
 	{
+		DObject **probe;
 		PClass *type = GetClass();
-		if (!(ObjectFlags & OF_Cleanup) && !PClass::bShutdown)
+
+		if (!(ObjectFlags & OF_YesReallyDelete))
 		{
-			if (!(ObjectFlags & (OF_YesReallyDelete|OF_Released)))
-			{
-				Printf("Warning: '%s' is freed outside the GC process.\n",
-					type != NULL ? type->TypeName.GetChars() : "==some object==");
-			}
-
-			if (!(ObjectFlags & OF_Released))
-			{
-				// Find all pointers that reference this object and NULL them.
-				StaticPointerSubstitution(this, NULL);
-				Release();
-			}
+			Printf ("Warning: '%s' is freed outside the GC process.\n",
+				type != NULL ? type->TypeName.GetChars() : "==some object==");
 		}
-		
-		if (nullptr != type)
-		{
-			type->DestroySpecials(this);
-		}
-	}
-}
 
-void DObject::Release()
-{
-	DObject **probe;
+		// Find all pointers that reference this object and NULL them.
+		StaticPointerSubstitution(this, NULL);
 
-	// Unlink this object from the GC list.
-	for (probe = &GC::Root; *probe != NULL; probe = &((*probe)->ObjNext))
-	{
-		if (*probe == this)
-		{
-			*probe = ObjNext;
-			if (&ObjNext == GC::SweepPos)
-			{
-				GC::SweepPos = probe;
-			}
-			break;
-		}
-	}
-
-	// If it's gray, also unlink it from the gray list.
-	if (this->IsGray())
-	{
-		for (probe = &GC::Gray; *probe != NULL; probe = &((*probe)->GCNext))
+		// Now unlink this object from the GC list.
+		for (probe = &GC::Root; *probe != NULL; probe = &((*probe)->ObjNext))
 		{
 			if (*probe == this)
 			{
-				*probe = GCNext;
+				*probe = ObjNext;
+				if (&ObjNext == GC::SweepPos)
+				{
+					GC::SweepPos = probe;
+				}
 				break;
 			}
 		}
-	}
-	ObjNext = nullptr;
-	GCNext = nullptr;
-	ObjectFlags |= OF_Released;
-}
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-void DObject:: Destroy ()
-{
-	// We cannot call the VM during shutdown because all the needed data has been or is in the process of being deleted.
-	if (PClass::bVMOperational)
-	{
-		IFVIRTUAL(DObject, OnDestroy)
+		// If it's gray, also unlink it from the gray list.
+		if (this->IsGray())
 		{
-			VMValue params[1] = { (DObject*)this };
-			VMCall(func, params, 1, nullptr, 0);
+			for (probe = &GC::Gray; *probe != NULL; probe = &((*probe)->GCNext))
+			{
+				if (*probe == this)
+				{
+					*probe = GCNext;
+					break;
+				}
+			}
 		}
 	}
-	OnDestroy();
+}
+
+void DObject::Destroy ()
+{
 	ObjectFlags = (ObjectFlags & ~OF_Fixed) | OF_EuthanizeMe;
 }
-
-DEFINE_ACTION_FUNCTION(DObject, Destroy)
-{
-	PARAM_SELF_PROLOGUE(DObject);
-	self->Destroy();
-	return 0;	
-}
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
 
 size_t DObject::PropagateMark()
 {
@@ -407,36 +450,13 @@ size_t DObject::PropagateMark()
 		}
 		while (*offsets != ~(size_t)0)
 		{
-			GC::Mark((DObject **)((uint8_t *)this + *offsets));
+			GC::Mark((DObject **)((BYTE *)this + *offsets));
 			offsets++;
 		}
-
-		offsets = info->ArrayPointers;
-		if (offsets == NULL)
-		{
-			const_cast<PClass *>(info)->BuildArrayPointers();
-			offsets = info->ArrayPointers;
-		}
-		while (*offsets != ~(size_t)0)
-		{
-			auto aray = (TArray<DObject*>*)((uint8_t *)this + *offsets);
-			for (auto &p : *aray)
-			{
-				GC::Mark(&p);
-			}
-			offsets++;
-		}
-
 		return info->Size;
 	}
 	return 0;
 }
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
 
 size_t DObject::PointerSubstitution (DObject *old, DObject *notOld)
 {
@@ -450,69 +470,26 @@ size_t DObject::PointerSubstitution (DObject *old, DObject *notOld)
 	}
 	while (*offsets != ~(size_t)0)
 	{
-		if (*(DObject **)((uint8_t *)this + *offsets) == old)
+		if (*(DObject **)((BYTE *)this + *offsets) == old)
 		{
-			*(DObject **)((uint8_t *)this + *offsets) = notOld;
+			*(DObject **)((BYTE *)this + *offsets) = notOld;
 			changed++;
 		}
 		offsets++;
 	}
-
-	offsets = info->ArrayPointers;
-	if (offsets == NULL)
-	{
-		const_cast<PClass *>(info)->BuildArrayPointers();
-		offsets = info->ArrayPointers;
-	}
-	while (*offsets != ~(size_t)0)
-	{
-		auto aray = (TArray<DObject*>*)((uint8_t *)this + *offsets);
-		for (auto &p : *aray)
-		{
-			if (p == old)
-			{
-				p = notOld;
-				changed++;
-			}
-		}
-		offsets++;
-	}
-
-
 	return changed;
 }
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-size_t DObject::StaticPointerSubstitution (DObject *old, DObject *notOld, bool scandefaults)
+size_t DObject::StaticPointerSubstitution (DObject *old, DObject *notOld)
 {
 	DObject *probe;
 	size_t changed = 0;
 	int i;
 
 	// Go through all objects.
-	i = 0;DObject *last=0;
 	for (probe = GC::Root; probe != NULL; probe = probe->ObjNext)
 	{
-		i++;
 		changed += probe->PointerSubstitution(old, notOld);
-		last = probe;
-	}
-
-	if (scandefaults)
-	{
-		for (auto p : PClassActor::AllActorClasses)
-		{
-			auto def = GetDefaultByType(p);
-			if (def != nullptr)
-			{
-				def->DObject::PointerSubstitution(old, notOld);
-			}
-		}
 	}
 
 	// Go through the bodyque.
@@ -532,71 +509,111 @@ size_t DObject::StaticPointerSubstitution (DObject *old, DObject *notOld, bool s
 			changed += players[i].FixPointers (old, notOld);
 	}
 
-	for (auto &s : level.sectorPortals)
+	// Go through sectors.
+	if (sectors != NULL)
 	{
-		if (s.mSkybox == old)
+		for (i = 0; i < numsectors; ++i)
 		{
-			s.mSkybox = static_cast<AActor*>(notOld);
-			changed++;
+#define SECTOR_CHECK(f,t) \
+	if (sectors[i].f.p == static_cast<t *>(old)) { sectors[i].f = static_cast<t *>(notOld); changed++; }
+			SECTOR_CHECK( SoundTarget, AActor );
+			SECTOR_CHECK( CeilingSkyBox, ASkyViewpoint );
+			SECTOR_CHECK( FloorSkyBox, ASkyViewpoint );
+			SECTOR_CHECK( SecActTarget, ASectorAction );
+			SECTOR_CHECK( floordata, DSectorEffect );
+			SECTOR_CHECK( ceilingdata, DSectorEffect );
+			SECTOR_CHECK( lightingdata, DSectorEffect );
+#undef SECTOR_CHECK
 		}
 	}
 
-	// Go through sectors.
-	for (auto &sec : level.sectors)
-	{
-#define SECTOR_CHECK(f,t) \
-if (sec.f.pp == static_cast<t *>(old)) { sec.f = static_cast<t *>(notOld); changed++; }
-		SECTOR_CHECK( SoundTarget, AActor );
-		SECTOR_CHECK( SecActTarget, AActor );
-		SECTOR_CHECK( floordata, DSectorEffect );
-		SECTOR_CHECK( ceilingdata, DSectorEffect );
-		SECTOR_CHECK( lightingdata, DSectorEffect );
-#undef SECTOR_CHECK
-	}
-
 	// Go through bot stuff.
-	if (bglobal.firstthing.pp == (AActor *)old)		bglobal.firstthing = (AActor *)notOld, ++changed;
-	if (bglobal.body1.pp == (AActor *)old)			bglobal.body1 = (AActor *)notOld, ++changed;
-	if (bglobal.body2.pp == (AActor *)old)			bglobal.body2 = (AActor *)notOld, ++changed;
+	if (bglobal.firstthing.p == (AActor *)old)		bglobal.firstthing = (AActor *)notOld, ++changed;
+	if (bglobal.body1.p == (AActor *)old)			bglobal.body1 = (AActor *)notOld, ++changed;
+	if (bglobal.body2.p == (AActor *)old)			bglobal.body2 = (AActor *)notOld, ++changed;
 
 	return changed;
 }
 
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-void DObject::SerializeUserVars(FSerializer &arc)
+void DObject::SerializeUserVars(FArchive &arc)
 {
-	if (arc.isWriting())
+	PSymbolTable *symt;
+	FName varname;
+	DWORD count, j;
+	int *varloc = NULL;
+
+	symt = &GetClass()->Symbols;
+
+	if (arc.IsStoring())
 	{
-		// Write all fields that aren't serialized by native code.
-		GetClass()->WriteAllFields(arc, this);
+		// Write all user variables.
+		for (; symt != NULL; symt = symt->ParentSymbolTable)
+		{
+			for (unsigned i = 0; i < symt->Symbols.Size(); ++i)
+			{
+				PSymbol *sym = symt->Symbols[i];
+				if (sym->SymbolType == SYM_Variable)
+				{
+					PSymbolVariable *var = static_cast<PSymbolVariable *>(sym);
+					if (var->bUserVar)
+					{
+						count = var->ValueType.Type == VAL_Array ? var->ValueType.size : 1;
+						varloc = (int *)(reinterpret_cast<BYTE *>(this) + var->offset);
+
+						arc << var->SymbolName;
+						arc.WriteCount(count);
+						for (j = 0; j < count; ++j)
+						{
+							arc << varloc[j];
+						}
+					}
+				}
+			}
+		}
+		// Write terminator.
+		varname = NAME_None;
+		arc << varname;
 	}
 	else
 	{
-		GetClass()->ReadAllFields(arc, this);
+		// Read user variables until 'None' is encountered.
+		arc << varname;
+		while (varname != NAME_None)
+		{
+			PSymbol *sym = symt->FindSymbol(varname, true);
+			DWORD wanted = 0;
+
+			if (sym != NULL && sym->SymbolType == SYM_Variable)
+			{
+				PSymbolVariable *var = static_cast<PSymbolVariable *>(sym);
+
+				if (var->bUserVar)
+				{
+					wanted = var->ValueType.Type == VAL_Array ? var->ValueType.size : 1;
+					varloc = (int *)(reinterpret_cast<BYTE *>(this) + var->offset);
+				}
+			}
+			count = arc.ReadCount();
+			for (j = 0; j < MIN(wanted, count); ++j)
+			{
+				arc << varloc[j];
+			}
+			if (wanted < count)
+			{
+				// Ignore remaining values from archive.
+				for (; j < count; ++j)
+				{
+					int foo;
+					arc << foo;
+				}
+			}
+			arc << varname;
+		}
 	}
 }
 
-
-//==========================================================================
-//
-//
-//
-//==========================================================================
-
-void DObject::Serialize(FSerializer &arc)
+void DObject::Serialize (FArchive &arc)
 {
-	int fresh = ObjectFlags & OF_JustSpawned;
-	int freshdef = 0;
-	arc("justspawned", fresh, freshdef);
-	if (arc.isReading())
-	{
-		ObjectFlags |= fresh;
-	}
 	ObjectFlags |= OF_SerialSuccess;
 }
 
@@ -612,28 +629,3 @@ void DObject::CheckIfSerialized () const
 	}
 }
 
-
-DEFINE_ACTION_FUNCTION(DObject, MSTime)
-{
-	ACTION_RETURN_INT((uint32_t)I_msTime());
-}
-
-void *DObject::ScriptVar(FName field, PType *type)
-{
-	auto cls = GetClass();
-	auto sym = dyn_cast<PField>(cls->FindSymbol(field, true));
-	if (sym && (sym->Type == type || type == nullptr))
-	{
-		if (!(sym->Flags & VARF_Meta))
-		{
-			return (((char*)this) + sym->Offset);
-		}
-		else
-		{
-			return (cls->Meta + sym->Offset);
-		}
-	}
-	// This is only for internal use so I_Error is fine.
-	I_Error("Variable %s not found in %s\n", field.GetChars(), cls->TypeName.GetChars());
-	return nullptr;
-}

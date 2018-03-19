@@ -16,11 +16,11 @@
 #include <stdarg.h>
 
 // the dec offsetof macro doesnt work very well...
-#define myoffsetof(type,identifier) ((size_t)&((type *)alignof(type))->identifier - alignof(type))
+#define myoffsetof(type,identifier) ((size_t)&((type *)1)->identifier - 1)
 
+int		Q_filelength (FILE *f);
 bool FileExists (const char *filename);
-bool DirExists(const char *filename);
-bool DirEntryExists (const char *pathname, bool *isdir = nullptr);
+bool DirEntryExists (const char *pathname);
 
 extern	FString progdir;
 
@@ -33,11 +33,12 @@ void 	DefaultExtension (FString &path, const char *extension);
 FString	ExtractFilePath (const char *path);
 FString	ExtractFileBase (const char *path, bool keep_extension=false);
 
-struct FScriptPosition;
-int		ParseHex(const char *str, FScriptPosition *sc = nullptr);
+int		ParseHex (const char *str);
+int 	ParseNum (const char *str);
 bool	IsNum (const char *str);		// [RH] added
 
 char	*copystring(const char *s);
+char	*ncopystring(const char *s);
 void	ReplaceString (char **ptr, const char *str);
 
 bool CheckWildcards (const char *pattern, const char *text);
@@ -62,12 +63,25 @@ struct FFileList
 };
 
 void ScanDirectory(TArray<FFileList> &list, const char *dirpath);
-bool IsAbsPath(const char*);
 
+
+//==========================================================================
+//
+// Functions to compensate for a tic being a bit short.
+// Since ZDoom uses a milliseconds timer for game timing
+// 35 tics are actually only 0.98 seconds.
+// For real time display this needs to be adjusted
+//
+//==========================================================================
+
+inline int AdjustTics(int tics)
+{
+	return Scale(tics, 98, 100);
+}
 
 inline int Tics2Seconds(int tics)
 {
-	return tics / TICRATE;
+	return Scale(tics, 98, (100 * TICRATE));
 }
 
 

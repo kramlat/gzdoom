@@ -30,6 +30,8 @@
 ** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 **---------------------------------------------------------------------------
 **
+** It might be a good idea to move these into files that they are more
+** closely related to, but right now, I am too lazy to do that.
 */
 
 #include <math.h>
@@ -69,10 +71,6 @@
 #include "v_text.h"
 #include "p_lnspec.h"
 #include "v_video.h"
-#include "r_utility.h"
-#include "r_data/r_interpolate.h"
-#include "c_functions.h"
-#include "g_levellocals.h"
 
 extern FILE *Logfile;
 extern bool insave;
@@ -126,15 +124,6 @@ CCMD (god)
 	Net_WriteByte (CHT_GOD);
 }
 
-CCMD(god2)
-{
-	if (CheckCheatmode())
-		return;
-
-	Net_WriteByte(DEM_GENERICCHEAT);
-	Net_WriteByte(CHT_GOD2);
-}
-
 CCMD (iddqd)
 {
 	if (CheckCheatmode ())
@@ -151,15 +140,6 @@ CCMD (buddha)
 
 	Net_WriteByte(DEM_GENERICCHEAT);
 	Net_WriteByte(CHT_BUDDHA);
-}
-
-CCMD(buddha2)
-{
-	if (CheckCheatmode())
-		return;
-
-	Net_WriteByte(DEM_GENERICCHEAT);
-	Net_WriteByte(CHT_BUDDHA2);
 }
 
 CCMD (notarget)
@@ -364,14 +344,11 @@ CCMD (changemap)
 
 	if (argv.argc() > 1)
 	{
-		const char *mapname = argv[1];
-		if (!strcmp(mapname, "*")) mapname = level.MapName.GetChars();
-
 		try
 		{
-			if (!P_CheckMapData(mapname))
+			if (!P_CheckMapData(argv[1]))
 			{
-				Printf ("No map %s\n", mapname);
+				Printf ("No map %s\n", argv[1]);
 			}
 			else
 			{
@@ -384,7 +361,7 @@ CCMD (changemap)
 				{
 					Net_WriteByte (DEM_CHANGEMAP);
 				}
-				Net_WriteString (mapname);
+				Net_WriteString (argv[1]);
 			}
 		}
 		catch(CRecoverableError &error)
@@ -407,9 +384,9 @@ CCMD (give)
 	Net_WriteByte (DEM_GIVECHEAT);
 	Net_WriteString (argv[1]);
 	if (argv.argc() > 2)
-		Net_WriteLong(atoi(argv[2]));
+		Net_WriteWord (clamp (atoi (argv[2]), 1, 32767));
 	else
-		Net_WriteLong(0);
+		Net_WriteWord (0);
 }
 
 CCMD (take)
@@ -420,33 +397,14 @@ CCMD (take)
 	Net_WriteByte (DEM_TAKECHEAT);
 	Net_WriteString (argv[1]);
 	if (argv.argc() > 2)
-		Net_WriteLong(atoi (argv[2]));
+		Net_WriteWord (clamp (atoi (argv[2]), 1, 32767));
 	else
-		Net_WriteLong (0);
-}
-
-CCMD(setinv)
-{
-	if (CheckCheatmode() || argv.argc() < 2)
-		return;
-
-	Net_WriteByte(DEM_SETINV);
-	Net_WriteString(argv[1]);
-	if (argv.argc() > 2)
-		Net_WriteLong(atoi(argv[2]));
-	else
-		Net_WriteLong(0);
-
-	if (argv.argc() > 3)
-		Net_WriteByte(!!atoi(argv[3]));
-	else
-		Net_WriteByte(0);
-
+		Net_WriteWord (0);
 }
 
 CCMD (gameversion)
 {
-	Printf ("%s @ %s\nCommit %s\n", GetVersionString(), GetGitTime(), GetGitHash());
+	Printf ("%s @ %s\nCommit %s", GetVersionString(), GetGitTime(), GetGitHash());
 }
 
 CCMD (print)
@@ -467,24 +425,25 @@ CCMD (print)
 	}
 }
 
-UNSAFE_CCMD (exec)
+CCMD (exec)
 {
 	if (argv.argc() < 2)
 		return;
 
 	for (int i = 1; i < argv.argc(); ++i)
 	{
-		if (!C_ExecFile(argv[i]))
+		switch (C_ExecFile (argv[i], gamestate == GS_STARTUP))
 		{
-			Printf ("Could not exec \"%s\"\n", argv[i]);
-			break;
+		case 1: Printf ("Could not open \"%s\"\n", argv[1]); break;
+		case 2: Printf ("Error parsing \"%s\"\n", argv[1]); break;
+		default: break;
 		}
 	}
 }
 
-void execLogfile(const char *fn, bool append)
+void execLogfile(const char *fn)
 {
-	if ((Logfile = fopen(fn, append? "a" : "w")))
+	if ((Logfile = fopen(fn, "w")))
 	{
 		const char *timestr = myasctime();
 		Printf("Log started: %s\n", timestr);
@@ -495,7 +454,7 @@ void execLogfile(const char *fn, bool append)
 	}
 }
 
-UNSAFE_CCMD (logfile)
+CCMD (logfile)
 {
 
 	if (Logfile)
@@ -508,7 +467,7 @@ UNSAFE_CCMD (logfile)
 
 	if (argv.argc() >= 2)
 	{
-		execLogfile(argv[1], argv.argc() >=3? !!argv[2]:false);
+		execLogfile(argv[1]);
 	}
 }
 
@@ -629,7 +588,7 @@ CCMD (special)
 			}
 		}
 		Net_WriteByte(DEM_RUNSPECIAL);
-		Net_WriteWord(specnum);
+		Net_WriteByte(specnum);
 		Net_WriteByte(argc - 2);
 		for (int i = 2; i < argc; ++i)
 		{
@@ -651,7 +610,7 @@ CCMD (error)
 	}
 }
 
-UNSAFE_CCMD (error_fatal)
+CCMD (error_fatal)
 {
 	if (argv.argc() > 1)
 	{
@@ -664,24 +623,7 @@ UNSAFE_CCMD (error_fatal)
 	}
 }
 
-//==========================================================================
-//
-// CCMD crashout
-//
-// Debugging routine for testing the crash logger.
-// Useless in a win32 debug build, because that doesn't enable the crash logger.
-//
-//==========================================================================
-
-#if !defined(_WIN32) || !defined(_DEBUG)
-UNSAFE_CCMD (crashout)
-{
-	*(volatile int *)0 = 0;
-}
-#endif
-
-
-UNSAFE_CCMD (dir)
+CCMD (dir)
 {
 	FString dir, path;
 	char curdir[256];
@@ -754,6 +696,34 @@ UNSAFE_CCMD (dir)
 	chdir (curdir);
 }
 
+CCMD (fov)
+{
+	player_t *player = who ? who->player : &players[consoleplayer];
+
+	if (argv.argc() != 2)
+	{
+		Printf ("fov is %g\n", player->DesiredFOV);
+		return;
+	}
+	else if (dmflags & DF_NO_FOV)
+	{
+		if (consoleplayer == Net_Arbitrator)
+		{
+			Net_WriteByte (DEM_FOV);
+		}
+		else
+		{
+			Printf ("A setting controller has disabled FOV changes.\n");
+			return;
+		}
+	}
+	else
+	{
+		Net_WriteByte (DEM_MYFOV);
+	}
+	Net_WriteByte (clamp (atoi (argv[1]), 5, 179));
+}
+
 //==========================================================================
 //
 // CCMD warp
@@ -773,16 +743,15 @@ CCMD (warp)
 		Printf ("You can only warp inside a level.\n");
 		return;
 	}
-	if (argv.argc() < 3 || argv.argc() > 4)
+	if (argv.argc() != 3)
 	{
-		Printf ("Usage: warp <x> <y> [z]\n");
+		Printf ("Usage: warp <x> <y>\n");
 	}
 	else
 	{
 		Net_WriteByte (DEM_WARPCHEAT);
 		Net_WriteWord (atoi (argv[1]));
 		Net_WriteWord (atoi (argv[2]));
-		Net_WriteWord (argv.argc() == 3 ? ONFLOORZ/65536 : atoi (argv[3]));
 	}
 }
 
@@ -794,7 +763,7 @@ CCMD (warp)
 //
 //==========================================================================
 
-UNSAFE_CCMD (load)
+CCMD (load)
 {
     if (argv.argc() != 2)
 	{
@@ -807,7 +776,7 @@ UNSAFE_CCMD (load)
 		return;
 	}
 	FString fname = argv[1];
-	DefaultExtension (fname, "." SAVEGAME_EXT);
+	DefaultExtension (fname, ".zds");
     G_LoadGame (fname);
 }
 
@@ -819,15 +788,30 @@ UNSAFE_CCMD (load)
 //
 //==========================================================================
 
-UNSAFE_CCMD (save)
+CCMD (save)
 {
     if (argv.argc() < 2 || argv.argc() > 3)
 	{
         Printf ("usage: save <filename> [description]\n");
         return;
     }
+    if (!usergame)
+	{
+        Printf ("not in a saveable game\n");
+        return;
+    }
+    if (gamestate != GS_LEVEL)
+	{
+        Printf ("not in a level\n");
+        return;
+    }
+    if(players[consoleplayer].health <= 0 && !multiplayer)
+    {
+        Printf ("player is dead in a single-player game\n");
+        return;
+    }
     FString fname = argv[1];
-	DefaultExtension (fname, "." SAVEGAME_EXT);
+	DefaultExtension (fname, ".zds");
 	G_SaveGame (fname, argv.argc() > 2 ? argv[2] : argv[1]);
 }
 
@@ -866,127 +850,40 @@ CCMD (wdir)
 //
 //
 //-----------------------------------------------------------------------------
-
 CCMD(linetarget)
 {
-	FTranslatedLineTarget t;
+	AActor *linetarget;
 
 	if (CheckCheatmode () || players[consoleplayer].mo == NULL) return;
-	C_AimLine(&t, false);
-	if (t.linetarget)
-		C_PrintInfo(t.linetarget, argv.argc() > 1 && atoi(argv[1]) != 0);
-	else
-		Printf("No target found\n");
+	P_AimLineAttack(players[consoleplayer].mo,players[consoleplayer].mo->angle,MISSILERANGE, &linetarget, 0);
+	if (linetarget)
+	{
+		Printf("Target=%s, Health=%d, Spawnhealth=%d\n",
+			linetarget->GetClass()->TypeName.GetChars(),
+			linetarget->health,
+			linetarget->SpawnHealth());
+	}
+	else Printf("No target found\n");
 }
 
 // As linetarget, but also give info about non-shootable actors
 CCMD(info)
 {
-	FTranslatedLineTarget t;
+	AActor *linetarget;
 
 	if (CheckCheatmode () || players[consoleplayer].mo == NULL) return;
-	C_AimLine(&t, true);
-	if (t.linetarget)
-		C_PrintInfo(t.linetarget, !(argv.argc() > 1 && atoi(argv[1]) == 0));
-	else
-		Printf("No target found. Info cannot find actors that have "
-				"the NOBLOCKMAP flag or have height/radius of 0.\n");
-}
-
-CCMD(myinfo)
-{
-	if (CheckCheatmode () || players[consoleplayer].mo == NULL) return;
-	C_PrintInfo(players[consoleplayer].mo, true);
-}
-
-typedef bool (*ActorTypeChecker) (AActor *);
-
-static bool IsActorAMonster(AActor *mo)
-{
-	return mo->flags3&MF3_ISMONSTER && !(mo->flags&MF_CORPSE) && !(mo->flags&MF_FRIENDLY);
-}
-
-static bool IsActorAnItem(AActor *mo)
-{
-	return mo->IsKindOf(RUNTIME_CLASS(AInventory)) && mo->flags&MF_SPECIAL;
-}
-
-static bool IsActorACountItem(AActor *mo)
-{
-	return mo->IsKindOf(RUNTIME_CLASS(AInventory)) && mo->flags&MF_SPECIAL && mo->flags&MF_COUNTITEM;
-}
-
-// [SP] for all actors
-static bool IsActor(AActor *mo)
-{
-	if (mo->IsKindOf(RUNTIME_CLASS(AInventory)))
-		return static_cast<AInventory *>(mo)->Owner == NULL; // [SP] Exclude inventory-owned items
-	else
-		return true;
-}
-
-// [SP] modified - now allows showing count only, new arg must be passed. Also now still counts regardless, if lists are printed.
-static void PrintFilteredActorList(const ActorTypeChecker IsActorType, const char *FilterName, bool countOnly)
-{
-	AActor *mo;
-	const PClass *FilterClass = NULL;
-	int counter = 0;
-	int tid = 0;
-
-	if (FilterName != NULL)
+	P_AimLineAttack(players[consoleplayer].mo,players[consoleplayer].mo->angle,MISSILERANGE, 
+		&linetarget, 0,	ALF_CHECKNONSHOOTABLE|ALF_FORCENOSMART);
+	if (linetarget)
 	{
-		FilterClass = PClass::FindActor(FilterName);
-		if (FilterClass == NULL)
-		{
-			char *endp;
-			tid = (int)strtol(FilterName, &endp, 10);
-			if (*endp != 0)
-			{
-				Printf("%s is not an actor class.\n", FilterName);
-				return;
-			}
-		}
+		Printf("Target=%s, Health=%d, Spawnhealth=%d\n",
+			linetarget->GetClass()->TypeName.GetChars(),
+			linetarget->health,
+			linetarget->SpawnHealth());
+		PrintMiscActorInfo(linetarget);
 	}
-	TThinkerIterator<AActor> it;
-
-	while ( (mo = it.Next()) )
-	{
-		if ((FilterClass == NULL || mo->IsA(FilterClass)) && IsActorType(mo))
-		{
-			if (tid == 0 || tid == mo->tid)
-			{
-				counter++;
-				if (!countOnly)
-				{
-					Printf("%s at (%f,%f,%f)",
-						mo->GetClass()->TypeName.GetChars(), mo->X(), mo->Y(), mo->Z());
-					if (mo->tid)
-						Printf(" (TID:%d)", mo->tid);
-					Printf("\n");
-				}
-			}
-		}
-	}
-	Printf("%i match(s) found.\n", counter);
-}
-
-//-----------------------------------------------------------------------------
-//
-//
-//
-//-----------------------------------------------------------------------------
-CCMD(actorlist) // [SP] print all actors (this can get quite big?)
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActor, argv.argc() > 1 ? argv[1] : NULL, false);
-}
-
-CCMD(actornum) // [SP] count all actors
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActor, argv.argc() > 1 ? argv[1] : NULL, true);
+	else Printf("No target found. Info cannot find actors that have\
+				the NOBLOCKMAP flag or have height/radius of 0.\n");
 }
 
 //-----------------------------------------------------------------------------
@@ -996,16 +893,20 @@ CCMD(actornum) // [SP] count all actors
 //-----------------------------------------------------------------------------
 CCMD(monster)
 {
+	AActor * mo;
+
 	if (CheckCheatmode ()) return;
+	TThinkerIterator<AActor> it;
 
-	PrintFilteredActorList(IsActorAMonster, argv.argc() > 1 ? argv[1] : NULL, false);
-}
-
-CCMD(monsternum) // [SP] count monsters
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActorAMonster, argv.argc() > 1 ? argv[1] : NULL, true);
+	while ( (mo = it.Next()) )
+	{
+		if (mo->flags3&MF3_ISMONSTER && !(mo->flags&MF_CORPSE) && !(mo->flags&MF_FRIENDLY))
+		{
+			Printf ("%s at (%d,%d,%d)\n",
+				mo->GetClass()->TypeName.GetChars(),
+				mo->x >> FRACBITS, mo->y >> FRACBITS, mo->z >> FRACBITS);
+		}
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -1015,35 +916,20 @@ CCMD(monsternum) // [SP] count monsters
 //-----------------------------------------------------------------------------
 CCMD(items)
 {
+	AActor * mo;
+
 	if (CheckCheatmode ()) return;
+	TThinkerIterator<AActor> it;
 
-	PrintFilteredActorList(IsActorAnItem, argv.argc() > 1 ? argv[1] : NULL, false);
-}
-
-CCMD(itemsnum) // [SP] # of any items
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActorAnItem, argv.argc() > 1 ? argv[1] : NULL, true);
-}
-
-//-----------------------------------------------------------------------------
-//
-//
-//
-//-----------------------------------------------------------------------------
-CCMD(countitems)
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActorACountItem, argv.argc() > 1 ? argv[1] : NULL, false);
-}
-
-CCMD(countitemsnum) // [SP] # of counted items
-{
-	if (CheckCheatmode ()) return;
-
-	PrintFilteredActorList(IsActorACountItem, argv.argc() > 1 ? argv[1] : NULL, true);
+	while ( (mo = it.Next()) )
+	{
+		if (mo->IsKindOf(RUNTIME_CLASS(AInventory)) && mo->flags&MF_SPECIAL)
+		{
+			Printf ("%s at (%d,%d,%d)\n",
+				mo->GetClass()->TypeName.GetChars(),
+				mo->x >> FRACBITS, mo->y >> FRACBITS, mo->z >> FRACBITS);
+		}
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -1124,7 +1010,8 @@ CCMD(nextsecret)
 				TEXTCOLOR_NORMAL " is for single-player only.\n");
 		return;
 	}
-
+	char *next = NULL;
+	
 	if (level.NextSecretMap.Len() > 0 && level.NextSecretMap.Compare("enDSeQ", 6))
 	{
 		G_DeferedInitNew(level.NextSecretMap);
@@ -1144,15 +1031,8 @@ CCMD(nextsecret)
 CCMD(currentpos)
 {
 	AActor *mo = players[consoleplayer].mo;
-	if(mo)
-	{
-		Printf("Current player position: (%1.3f,%1.3f,%1.3f), angle: %1.3f, floorheight: %1.3f, sector:%d, lightlevel: %d\n",
-			mo->X(), mo->Y(), mo->Z(), mo->Angles.Yaw.Normalized360().Degrees, mo->floorz, mo->Sector->sectornum, mo->Sector->lightlevel);
-	}
-	else
-	{
-		Printf("You are not in game!\n");
-	}
+	Printf("Current player position: (%1.3f,%1.3f,%1.3f), angle: %1.3f, floorheight: %1.3f, sector:%d, lightlevel: %d\n",
+		FIXED2FLOAT(mo->x), FIXED2FLOAT(mo->y), FIXED2FLOAT(mo->z), mo->angle/float(ANGLE_1), FIXED2FLOAT(mo->floorz), mo->Sector->sectornum, mo->Sector->lightlevel);
 }
 
 //-----------------------------------------------------------------------------
@@ -1170,18 +1050,21 @@ static void PrintSecretString(const char *string, bool thislevel)
 		{
 			if (string[1] == 'S' || string[1] == 's')
 			{
-				auto secnum = (unsigned)strtoull(string+2, (char**)&string, 10);
+				long secnum = strtol(string+2, (char**)&string, 10);
 				if (*string == ';') string++;
-				if (thislevel && secnum < level.sectors.Size())
+				if (thislevel && secnum >= 0 && secnum < numsectors)
 				{
-					if (level.sectors[secnum].isSecret()) colstr = TEXTCOLOR_RED;
-					else if (level.sectors[secnum].wasSecret()) colstr = TEXTCOLOR_GREEN;
+					if (sectors[secnum].secretsector)
+					{
+						if ((sectors[secnum].special & SECRET_MASK)) colstr = TEXTCOLOR_RED;
+						else colstr = TEXTCOLOR_GREEN;
+					}
 					else colstr = TEXTCOLOR_ORANGE;
 				}
 			}
 			else if (string[1] == 'T' || string[1] == 't')
 			{
-				long tid = (long)strtoll(string+2, (char**)&string, 10);
+				long tid = strtol(string+2, (char**)&string, 10);
 				if (*string == ';') string++;
 				FActorIterator it(tid);
 				AActor *actor;
@@ -1190,7 +1073,7 @@ static void PrintSecretString(const char *string, bool thislevel)
 				{
 					while ((actor = it.Next()))
 					{
-						if (!actor->IsKindOf("SecretTrigger")) continue;
+						if (!actor->IsKindOf(PClass::FindClass("SecretTrigger"))) continue;
 						foundone = true;
 						break;
 					}
@@ -1224,7 +1107,7 @@ CCMD(secret)
 	int lumpno=Wads.CheckNumForName("SECRETS");
 	if (lumpno < 0) return;
 
-	auto lump = Wads.OpenLumpReader(lumpno);
+	FWadLump lump = Wads.OpenLumpNum(lumpno);
 	FString maphdr;
 	maphdr.Format("[%s]", mapname);
 
@@ -1270,37 +1153,4 @@ CCMD(secret)
 			else inlevel = false;
 		}
 	}
-}
-
-CCMD(angleconvtest)
-{
-	Printf("Testing degrees to angle conversion:\n");
-	for (double ang = -5 * 180.; ang < 5 * 180.; ang += 45.)
-	{
-		unsigned ang1 = DAngle(ang).BAMs();
-		unsigned ang2 = (unsigned)(ang * (0x40000000 / 90.));
-		unsigned ang3 = (unsigned)(int)(ang * (0x40000000 / 90.));
-		Printf("Angle = %.5f: xs_RoundToInt = %08x, unsigned cast = %08x, signed cast = %08x\n",
-			ang, ang1, ang2, ang3);
-	}
-}
-
-extern uint32_t r_renderercaps;
-#define PRINT_CAP(X, Y) Printf("  %-18s: %s (%s)\n", #Y, !!(r_renderercaps & Y) ? "Yes" : "No ", X);
-CCMD(r_showcaps)
-{
-	Printf("Renderer capabilities:\n");
-	PRINT_CAP("Flat Sprites", RFF_FLATSPRITES)
-	PRINT_CAP("3D Models", RFF_MODELS)
-	PRINT_CAP("Sloped 3D floors", RFF_SLOPE3DFLOORS)
-	PRINT_CAP("Full Freelook", RFF_TILTPITCH)	
-	PRINT_CAP("Roll Sprites", RFF_ROLLSPRITES)
-	PRINT_CAP("Unclipped Sprites", RFF_UNCLIPPEDTEX)
-	PRINT_CAP("Material Shaders", RFF_MATSHADER)
-	PRINT_CAP("Post-processing Shaders", RFF_POSTSHADER)
-	PRINT_CAP("Brightmaps", RFF_BRIGHTMAP)
-	PRINT_CAP("Custom COLORMAP lumps", RFF_COLORMAP)
-	PRINT_CAP("Uses Polygon rendering", RFF_POLYGONAL)
-	PRINT_CAP("Truecolor Enabled", RFF_TRUECOLOR)
-	PRINT_CAP("Voxels", RFF_VOXELS)
 }

@@ -50,8 +50,6 @@
 #include "i_system.h"
 #include "po_man.h"
 #include "r_state.h"
-#include "g_levellocals.h"
-#include "math/cmath.h"
 
 static const int PO_LINE_START = 1;
 static const int PO_LINE_EXPLICIT = 5;
@@ -71,9 +69,8 @@ static const int PO_LINE_EXPLICIT = 5;
 angle_t FNodeBuilder::PointToAngle (fixed_t x, fixed_t y)
 {
 	const double rad2bam = double(1<<30) / M_PI;
-	double ang = g_atan2 (double(y), double(x));
-	// Convert to signed first since negative double to unsigned is undefined.
-	return angle_t(int(ang * rad2bam)) << 1;
+	double ang = atan2 (double(y), double(x));
+	return angle_t(ang * rad2bam) << 1;
 }
 
 void FNodeBuilder::FindUsedVertices (vertex_t *oldverts, int max)
@@ -91,14 +88,14 @@ void FNodeBuilder::FindUsedVertices (vertex_t *oldverts, int max)
 
 		if (map[v1] == -1)
 		{
-			newvert.x = oldverts[v1].fixX();
-			newvert.y = oldverts[v1].fixY();
+			newvert.x = oldverts[v1].x;
+			newvert.y = oldverts[v1].y;
 			map[v1] = VertexMap->SelectVertexExact (newvert);
 		}
 		if (map[v2] == -1)
 		{
-			newvert.x = oldverts[v2].fixX();
-			newvert.y = oldverts[v2].fixY();
+			newvert.x = oldverts[v2].x;
+			newvert.y = oldverts[v2].y;
 			map[v2] = VertexMap->SelectVertexExact (newvert);
 		}
 
@@ -181,7 +178,7 @@ int FNodeBuilder::CreateSeg (int linenum, int sidenum)
 	}
 	seg.linedef = linenum;
 	side_t *sd = Level.Lines[linenum].sidedef[sidenum];
-	seg.sidedef = sd != NULL? sd->Index() : int(NO_SIDE);
+	seg.sidedef = sd != NULL? int(sd - sides) : int(NO_SIDE);
 	seg.nextforvert = Vertices[seg.v1].segs;
 	seg.nextforvert2 = Vertices[seg.v2].segs2;
 
@@ -217,11 +214,11 @@ void FNodeBuilder::AddSegs(seg_t *segs, int numsegs)
 
 		seg.frontsector = segs[i].frontsector;
 		seg.backsector = segs[i].backsector;
-		vert.x = segs[i].v1->fixX();
-		vert.y = segs[i].v1->fixY();
+		vert.x = segs[i].v1->x;
+		vert.y = segs[i].v1->y;
 		seg.v1 = VertexMap->SelectVertexExact(vert);
-		vert.x = segs[i].v2->fixX();
-		vert.y = segs[i].v2->fixY();
+		vert.x = segs[i].v2->x;
+		vert.y = segs[i].v2->y;
 		seg.v2 = VertexMap->SelectVertexExact(vert);
 		seg.linedef = int(segs[i].linedef - Level.Lines);
 		seg.sidedef = segs[i].sidedef != NULL ? int(segs[i].sidedef - Level.Sides) : int(NO_SIDE);
@@ -257,11 +254,11 @@ void FNodeBuilder::AddPolySegs(FPolySeg *segs, int numsegs)
 
 		seg.frontsector = side->sector;
 		seg.backsector = side->linedef->frontsector == side->sector ? side->linedef->backsector : side->linedef->frontsector;
-		vert.x = FLOAT2FIXED(segs[i].v1.pos.X);
-		vert.y = FLOAT2FIXED(segs[i].v1.pos.Y);
+		vert.x = segs[i].v1.x;
+		vert.y = segs[i].v1.y;
 		seg.v1 = VertexMap->SelectVertexExact(vert);
-		vert.x = FLOAT2FIXED(segs[i].v2.pos.X);
-		vert.y = FLOAT2FIXED(segs[i].v2.pos.Y);
+		vert.x = segs[i].v2.x;
+		vert.y = segs[i].v2.y;
 		seg.v2 = VertexMap->SelectVertexExact(vert);
 		seg.linedef = int(side->linedef - Level.Lines);
 		seg.sidedef = int(side - Level.Sides);
@@ -425,18 +422,18 @@ void FNodeBuilder::FindPolyContainers (TArray<FPolyStart> &spots, TArray<FPolySt
 				vertex_t mid;
 				vertex_t center;
 
-				mid.set(bbox[BOXLEFT] + (bbox[BOXRIGHT]-bbox[BOXLEFT])/2,
-						bbox[BOXBOTTOM] + (bbox[BOXTOP]-bbox[BOXBOTTOM])/2);
+				mid.x = bbox[BOXLEFT] + (bbox[BOXRIGHT]-bbox[BOXLEFT])/2;
+				mid.y = bbox[BOXBOTTOM] + (bbox[BOXTOP]-bbox[BOXBOTTOM])/2;
 
-				center.set(mid.fixX() - anchor->x + spot->x,
-							mid.fixY() - anchor->y + spot->y);
+				center.x = mid.x - anchor->x + spot->x;
+				center.y = mid.y - anchor->y + spot->y;
 
 				// Scan right for the seg closest to the polyobject's center after it
 				// gets moved to its start spot.
 				fixed_t closestdist = FIXED_MAX;
 				unsigned int closestseg = UINT_MAX;
 
-				P(Printf ("start %d,%d -- center %d, %d\n", spot->x>>16, spot->y>>16, center.fixX()>>16, center.fixY()>>16));
+				P(Printf ("start %d,%d -- center %d, %d\n", spot->x>>16, spot->y>>16, center.x>>16, center.y>>16));
 
 				for (unsigned int j = 0; j < Segs.Size(); ++j)
 				{
@@ -449,16 +446,16 @@ void FNodeBuilder::FindPolyContainers (TArray<FPolyStart> &spots, TArray<FPolySt
 					{ // Horizontal, so skip it
 						continue;
 					}
-					if ((v1->y < center.fixY() && v2->y < center.fixY()) || (v1->y > center.fixY() && v2->y > center.fixY()))
+					if ((v1->y < center.y && v2->y < center.y) || (v1->y > center.y && v2->y > center.y))
 					{ // Not crossed
 						continue;
 					}
 
 					fixed_t dx = v2->x - v1->x;
 
-					if (PointOnSide (center.fixX(), center.fixY(), v1->x, v1->y, dx, dy) <= 0)
+					if (PointOnSide (center.x, center.y, v1->x, v1->y, dx, dy) <= 0)
 					{
-						fixed_t t = DivScale30 (center.fixY() - v1->y, dy);
+						fixed_t t = DivScale30 (center.y - v1->y, dy);
 						fixed_t sx = v1->x + MulScale30 (dx, t);
 						fixed_t dist = sx - spot->x;
 
@@ -480,9 +477,9 @@ void FNodeBuilder::FindPolyContainers (TArray<FPolyStart> &spots, TArray<FPolySt
 	}
 }
 
-int FNodeBuilder::MarkLoop (uint32_t firstseg, int loopnum)
+int FNodeBuilder::MarkLoop (DWORD firstseg, int loopnum)
 {
-	uint32_t seg;
+	DWORD seg;
 	sector_t *sec = Segs[firstseg].frontsector;
 
 	if (Segs[firstseg].loopnum != 0)
@@ -502,8 +499,8 @@ int FNodeBuilder::MarkLoop (uint32_t firstseg, int loopnum)
 				Vertices[s1->v1].x>>16, Vertices[s1->v1].y>>16,
 				Vertices[s1->v2].x>>16, Vertices[s1->v2].y>>16));
 
-		uint32_t bestseg = DWORD_MAX;
-		uint32_t tryseg = Vertices[s1->v2].segs;
+		DWORD bestseg = DWORD_MAX;
+		DWORD tryseg = Vertices[s1->v2].segs;
 		angle_t bestang = ANGLE_MAX;
 		angle_t ang1 = PointToAngle (Vertices[s1->v2].x - Vertices[s1->v1].x,
 			Vertices[s1->v2].y - Vertices[s1->v1].y);
@@ -560,7 +557,8 @@ bool FNodeBuilder::GetPolyExtents (int polynum, fixed_t bbox[4])
 
 		vert = Segs[i].v1;
 
-		start.set(Vertices[vert].x, Vertices[vert].y);
+		start.x = Vertices[vert].x;
+		start.y = Vertices[vert].y;
 
 		do
 		{
@@ -568,7 +566,7 @@ bool FNodeBuilder::GetPolyExtents (int polynum, fixed_t bbox[4])
 			vert = Segs[i].v2;
 			i = Vertices[vert].segs;
 			count++;	// to prevent endless loops. Stop when this reaches the number of segs.
-		} while (i != DWORD_MAX && (Vertices[vert].x != start.fixX() || Vertices[vert].y != start.fixY()) && count < Segs.Size());
+		} while (i != DWORD_MAX && (Vertices[vert].x != start.x || Vertices[vert].y != start.y) && count < Segs.Size());
 
 		return true;
 	}
@@ -604,29 +602,25 @@ void FNodeBuilder::AddSegToBBox (fixed_t bbox[4], const FPrivSeg *seg)
 	if (v2->y > bbox[BOXTOP])		bbox[BOXTOP] = v2->y;
 }
 
-void FNodeBuilder::FLevel::FindMapBounds()
+void FNodeBuilder::FLevel::FindMapBounds ()
 {
-	double minx, maxx, miny, maxy;
+	fixed_t minx, maxx, miny, maxy;
 
-	minx = maxx = Vertices[0].fX();
-	miny = maxy = Vertices[0].fY();
+	minx = maxx = Vertices[0].x;
+	miny = maxy = Vertices[0].y;
 
-	for (int i = 1; i < NumLines; ++i)
+	for (int i = 1; i < NumVertices; ++i)
 	{
-		for (int j = 0; j < 2; j++)
-		{
-			vertex_t *v = (j == 0 ? Lines[i].v1 : Lines[i].v2);
-			if (v->fX() < minx) minx = v->fX();
-			else if (v->fX() > maxx) maxx = v->fX();
-			if (v->fY() < miny) miny = v->fY();
-			else if (v->fY() > maxy) maxy = v->fY();
-		}
+			 if (Vertices[i].x < minx) minx = Vertices[i].x;
+		else if (Vertices[i].x > maxx) maxx = Vertices[i].x;
+			 if (Vertices[i].y < miny) miny = Vertices[i].y;
+		else if (Vertices[i].y > maxy) maxy = Vertices[i].y;
 	}
 
-	MinX = FLOAT2FIXED(minx);
-	MinY = FLOAT2FIXED(miny);
-	MaxX = FLOAT2FIXED(maxx);
-	MaxY = FLOAT2FIXED(maxy);
+	MinX = minx;
+	MinY = miny;
+	MaxX = maxx;
+	MaxY = maxy;
 }
 
 FNodeBuilder::IVertexMap::~IVertexMap()
@@ -641,8 +635,8 @@ FNodeBuilder::FVertexMap::FVertexMap (FNodeBuilder &builder,
 	MinY = miny;
 	BlocksWide = int(((double(maxx) - minx + 1) + (BLOCK_SIZE - 1)) / BLOCK_SIZE);
 	BlocksTall = int(((double(maxy) - miny + 1) + (BLOCK_SIZE - 1)) / BLOCK_SIZE);
-	MaxX = MinX + fixed64_t(BlocksWide) * BLOCK_SIZE - 1;
-	MaxY = MinY + fixed64_t(BlocksTall) * BLOCK_SIZE - 1;
+	MaxX = MinX + BlocksWide * BLOCK_SIZE - 1;
+	MaxY = MinY + BlocksTall * BLOCK_SIZE - 1;
 	VertexGrid = new TArray<int>[BlocksWide * BlocksTall];
 }
 
@@ -703,10 +697,10 @@ int FNodeBuilder::FVertexMap::InsertVertex (FNodeBuilder::FPrivVert &vert)
 	// If a vertex is near a block boundary, then it will be inserted on
 	// both sides of the boundary so that SelectVertexClose can find
 	// it by checking in only one block.
-	fixed64_t minx = MAX (MinX, fixed64_t(vert.x) - VERTEX_EPSILON);
-	fixed64_t maxx = MIN (MaxX, fixed64_t(vert.x) + VERTEX_EPSILON);
-	fixed64_t miny = MAX (MinY, fixed64_t(vert.y) - VERTEX_EPSILON);
-	fixed64_t maxy = MIN (MaxY, fixed64_t(vert.y) + VERTEX_EPSILON);
+	fixed_t minx = MAX (MinX, vert.x - VERTEX_EPSILON);
+	fixed_t maxx = MIN (MaxX, vert.x + VERTEX_EPSILON);
+	fixed_t miny = MAX (MinY, vert.y - VERTEX_EPSILON);
+	fixed_t maxy = MIN (MaxY, vert.y + VERTEX_EPSILON);
 
 	int blk[4] =
 	{

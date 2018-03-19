@@ -1,23 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:
 //	Internally used data structures for virtually everything,
@@ -57,24 +52,19 @@ typedef enum
 #endif
 #endif
 
-// Global constants that were defines.
-enum
-{
-	// The maximum number of players, multiplayer/networking.
-	MAXPLAYERS = 8,
+// The maximum number of players, multiplayer/networking.
+#define MAXPLAYERS		8
 
-	// State updates, number of tics / second.
-	TICRATE = 35,
+// State updates, number of tics / second.
+#define TICRATE 		35
 
-	// Amount of damage done by a telefrag.
-	TELEFRAG_DAMAGE = 1000000
-};
-
+// Amount of damage done by a telefrag.
+#define TELEFRAG_DAMAGE	1000000
 
 // The current state of the game: whether we are
 // playing, gazing at the intermission screen,
 // the game final animation, or a demo. 
-enum gamestate_t : int
+typedef enum
 {
 	GS_LEVEL,
 	GS_INTERMISSION,
@@ -89,7 +79,7 @@ enum gamestate_t : int
 	GS_FORCEWIPEFADE = -2,
 	GS_FORCEWIPEBURN = -3,
 	GS_FORCEWIPEMELT = -4
-};
+} gamestate_t;
 
 extern	gamestate_t 	gamestate;
 
@@ -119,7 +109,6 @@ enum ESkillLevels
 // DOOM keyboard definition. Everything below 0x100 matches
 // a mode 1 keyboard scan code.
 //
-
 #define KEY_PAUSE				0xc5	// DIK_PAUSE
 #define KEY_RIGHTARROW			0xcd	// DIK_RIGHT
 #define KEY_LEFTARROW			0xcb	// DIK_LEFT
@@ -313,7 +302,7 @@ enum
 };
 
 // [RH] Compatibility flags.
-enum : unsigned int
+enum
 {
 	COMPATF_SHORTTEX		= 1 << 0,	// Use Doom's shortest texture around behavior?
 	COMPATF_STAIRINDEX		= 1 << 1,	// Don't fix loop index for stair building?
@@ -350,11 +339,6 @@ enum : unsigned int
 
 	COMPATF2_BADANGLES		= 1 << 0,	// It is impossible to face directly NSEW.
 	COMPATF2_FLOORMOVE		= 1 << 1,	// Use the same floor motion behavior as Doom.
-	COMPATF2_SOUNDCUTOFF	= 1 << 2,	// Cut off sounds when an actor vanishes instead of making it owner-less
-	COMPATF2_POINTONLINE	= 1 << 3,	// Use original but buggy P_PointOnLineSide() and P_PointOnDivlineSideCompat()
-	COMPATF2_MULTIEXIT		= 1 << 4,	// Level exit can be triggered multiple times (required by Daedalus's travel tubes, thanks to a faulty script)
-	COMPATF2_TELEPORT		= 1 << 5,	// Don't let indirect teleports trigger sector actions
-	COMPATF2_PUSHWINDOW		= 1 << 6,	// Disable the window check in CheckForPushSpecial()
 };
 
 // Emulate old bugs for select maps. These are not exposed by a cvar
@@ -368,9 +352,7 @@ enum
 	BCOMPATF_BADPORTALS			= 1 << 4,	// Restores the old unstable portal behavior
 	BCOMPATF_REBUILDNODES		= 1 << 5,	// Force node rebuild
 	BCOMPATF_LINKFROZENPROPS	= 1 << 6,	// Clearing PROP_TOTALLYFROZEN or PROP_FROZEN also clears the other
-	BCOMPATF_FLOATBOB			= 1 << 8,	// Use Hexen's original method of preventing floatbobbing items from falling down
-	BCOMPATF_NOSLOPEID			= 1 << 9,	// disable line IDs on slopes.
-	BCOMPATF_CLIPMIDTEX		= 1 << 10,	// Always Clip midtex's in the software renderer (required to run certain GZDoom maps)
+	BCOMPATF_NOWINDOWCHECK		= 1 << 7,	// Disable the window check in CheckForPushSpecial()
 };
 
 // phares 3/20/98:
@@ -379,19 +361,19 @@ enum
 // linedefs. More friction can create mud, sludge,
 // magnetized floors, etc. Less friction can create ice.
 
-#define MORE_FRICTION_VELOCITY	(15000/65536.)	// mud factor based on velocity
-#define ORIG_FRICTION			(0xE800/65536.)	// original value
-#define ORIG_FRICTION_FACTOR	(2048/65536.)	// original value
-#define FRICTION_LOW			(0xf900/65536.)
-#define FRICTION_FLY			(0xeb00/65536.)
+#define MORE_FRICTION_VELOCITY	15000	// mud factor based on velocity
+#define ORIG_FRICTION			0xE800	// original value
+#define ORIG_FRICTION_FACTOR	2048	// original value
+#define FRICTION_LOW			0xf900
+#define FRICTION_FLY			0xeb00
 
 
 #define BLINKTHRESHOLD (4*32)
 
 #ifndef __BIG_ENDIAN__
-#define MAKE_ID(a,b,c,d)	((uint32_t)((a)|((b)<<8)|((c)<<16)|((d)<<24)))
+#define MAKE_ID(a,b,c,d)	((DWORD)((a)|((b)<<8)|((c)<<16)|((d)<<24)))
 #else
-#define MAKE_ID(a,b,c,d)	((uint32_t)((d)|((c)<<8)|((b)<<16)|((a)<<24)))
+#define MAKE_ID(a,b,c,d)	((DWORD)((d)|((c)<<8)|((b)<<16)|((a)<<24)))
 #endif
 
 #endif	// __DOOMDEF_H__

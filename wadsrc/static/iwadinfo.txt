@@ -2,36 +2,9 @@
 
 IWad
 {
-	Name = "Rise Of The Wool Ball"
-	Autoname = "woolball.rotwb"
-	Game = "Doom"
-	Config = "WoolBall"
-	IWADName = "rotwb.wad"
-	Mapinfo = "mapinfo/doom2.txt"
-	MustContain = "E3M6", "B3DED", "WORLDMAP", "NUCLSKYM", "PLANETLE", "MEOWZEKI", "ZEKIINTR", "NOWAYBAC"
-	BannerColors = "32 54 43", "c6 dc d1"
-}
-
-IWad
-{
-	Name = "Delaweare"
-	Autoname = "delaweare"
-	Game = "Doom"
-	Config = "Delaweare"
-	Mapinfo = "mapinfo/doom2.txt"
-	IWADName = "delaweare.wad"
-	MustContain = "TITLEMAP", "ROVEA0", "GRLURD01", "SQOUI01"
-	BannerColors = "00 00 00", "ff ff ff"
-}
-
-IWad
-{
 	Name = "The Adventures of Square"
-	Autoname = "square.square"
 	Game = "Doom"
 	Config = "Square"
-	IWADName = "square.pk3"
-	Mapinfo = "mapinfo/mindefaults.txt"
 	MustContain = "SQU-IWAD", "E1A1"
 	BannerColors = "ff ff ff", "80 00 80"
 }
@@ -39,11 +12,8 @@ IWad
 IWad
 {
 	Name = "The Adventures of Square (Square-ware)"
-	Autoname = "square.squareware"
 	Game = "Doom"
 	Config = "Square"
-	IWADName = "square1.pk3"
-	Mapinfo = "mapinfo/mindefaults.txt"
 	MustContain = "SQU-SWE1", "E1A1"
 	BannerColors = "ff ff ff", "80 00 80"
 }
@@ -51,11 +21,9 @@ IWad
 IWad
 {
 	Name = "Harmony"
-	Autoname = "harmony"
 	Game = "Doom"
 	Config = "Harmony"
-	IWADName = "harm1.wad"
-	Mapinfo = "mapinfo/harmony.txt"
+	Mapinfo = "mapinfo/hacxharm.txt"
 	MustContain = "MAP01", "0HAWK01", "0CARA3", "0NOSE1"
 	BannerColors = "6e b4 d6", "45 4f 7e"
 }
@@ -65,9 +33,7 @@ IWad
 	Name = "Hacx 2.0"
 	Game = "Doom"
 	Config = "Hacx"
-	Autoname = "hacx.hacx2"
-	IWADName = "hacx2.wad"
-	Mapinfo = "mapinfo/hacx.txt"
+	Mapinfo = "mapinfo/hacxharm.txt"
 	MustContain = "MAP01", "HACX-E"
 	BannerColors = "ff ff ff", "00 88 22"
 }
@@ -77,9 +43,7 @@ IWad
 	Name = "Hacx: Twitch'n Kill"
 	Game = "Doom"
 	Config = "Hacx"
-	Autoname = "hacx.hacx1"
-	IWADName = "hacx.wad"
-	Mapinfo = "mapinfo/hacx.txt"
+	Mapinfo = "mapinfo/hacxharm.txt"
 	MustContain = "MAP01", "HACX-R"
 	BannerColors = "00 00 a8", "a8 a8 a8"
 }
@@ -87,10 +51,8 @@ IWad
 IWad
 {
 	Name = "Action Doom 2: Urban Brawl"
-	Autoname = "urbanbrawl"
 	Game = "Doom"
 	Config = "UrbanBrawl"
-	IWADName = "action2.wad"
 	Mapinfo = "mapinfo/urbanbrawl.txt"
 	MustContain = "MAP01", "AD2LIB"
 	BannerColors = "a8 a8 00", "a8 00 00"
@@ -99,10 +61,9 @@ IWad
 IWad
 {
 	Name = "Chex(R) Quest 3"
-	Autoname = "chex.chex3"
+	Autoname = "Chex3"
 	Game = "Chex"
 	Config = "Chex"
-	IWADName = "chex3.wad"
 	Mapinfo = "mapinfo/chex.txt"
 	Compatibility = "NoTextcolor"
 	MustContain = "E1M1", "CYCLA1", "FLMBA1", "MAPINFO"
@@ -112,10 +73,9 @@ IWad
 IWad
 {
 	Name = "Chex(R) Quest"
-	Autoname = "chex.chex1"
+	Autoname = "Chex1"
 	Game = "Chex"
 	Config = "Chex"
-	IWADName = "chex.wad"
 	Mapinfo = "mapinfo/chex.txt"
 	MustContain = "E1M1", "E4M1", "W94_1", "POSSH0M0"
 	BannerColors = "ff ff 00", "00 c0 00"
@@ -123,25 +83,9 @@ IWad
 
 IWad
 {
-	Name = "Strife: Veteran Edition"
-	Autoname = "strife.veteran"
-	Game = "Strife"
-	Config = "Strife"
-	IWADName = "sve.wad"
-	Mapinfo = "mapinfo/strife.txt"
-	MustContain = "MAP35", "I_RELB", "FXAA_F"
-	BannerColors = "f0 f0 f0", "6b 3c 18"
-	Required = "Strife: Quest for the Sigil"
-	Load = "voices.wad"
-}
-
-IWad
-{
 	Name = "Strife: Quest for the Sigil"
-	Autoname = "strife.strife"
 	Game = "Strife"
 	Config = "Strife"
-	IWADName = "strife1.wad"
 	Mapinfo = "mapinfo/strife.txt"
 	MustContain = "MAP01", "MAP33", "ENDSTRF"
 	BannerColors = "d0 ad 99", "00 6b 65"
@@ -153,7 +97,6 @@ IWad
 	Name = "Strife: Teaser (New Version)"
 	Game = "Strife"
 	Config = "Strife"
-	Autoname = "strifeteaser2"
 	Mapinfo = "mapinfo/strife.txt"
 	Compatibility = "Shareware", "Teaser2"
 	MustContain = "MAP33", "ENDSTRF", "INVCURS"
@@ -165,7 +108,6 @@ IWad
 	Name = "Strife: Teaser (Old Version)"
 	Game = "Strife"
 	Config = "Strife"
-	Autoname = "strifeteaser1"
 	Mapinfo = "mapinfo/strife.txt"
 	Compatibility = "Shareware"
 	MustContain = "MAP33", "ENDSTRF"
@@ -177,8 +119,6 @@ IWad
 	Name = "Hexen: Beyond Heretic"
 	Game = "Hexen"
 	Config = "Hexen"
-	Autoname = "hexen.hexen"
-	IWADName = "hexen.wad"
 	Mapinfo = "mapinfo/hexen.txt"
 	Compatibility = "Poly1"
 	MustContain = "TITLE", "MAP01", "MAP40", "WINNOWR"
@@ -188,7 +128,7 @@ IWad
 IWad
 {
 	Name = "Hexen: Deathkings of the Dark Citadel"
-	Autoname = "hexen.deathkings"
+	Autoname = "HexenDK"
 	Game = "Hexen"
 	Config = "Hexen"
 	Mapinfo = "mapinfo/hexen.txt"
@@ -212,10 +152,9 @@ IWad
 IWad
 {
 	Name = "Blasphemer"
-	Autoname = "blasphemer"
+	Autoname = "Blasphemer"
 	Game = "Heretic"
 	Config = "Heretic"
-	IWADName = "blasphemer.wad"
 	Mapinfo = "mapinfo/heretic.txt"
 	MustContain = "E1M1", "E2M1", "TITLE", "BLASPHEM"
 	BannerColors = "73 00 00", "00 00 00"
@@ -224,10 +163,9 @@ IWad
 IWad
 {
 	Name = "Heretic: Shadow of the Serpent Riders"
-	Autoname = "heretic.shadow"
+	Autoname = "Heretic1"
 	Game = "Heretic"
 	Config = "Heretic"
-	IWADName = "heretic.wad"
 	Mapinfo = "mapinfo/heretic.txt"
 	Compatibility = "Extended"
 	MustContain = "E1M1", "E2M1", "TITLE", "MUS_E1M1", "EXTENDED"
@@ -237,10 +175,9 @@ IWad
 IWad
 {
 	Name = "Heretic"
+	Autoname = "Heretic1"
 	Game = "Heretic"
 	Config = "Heretic"
-	IWADName = "heretic.wad"
-	Autoname = "heretic.heretic"
 	Mapinfo = "mapinfo/heretic.txt"
 	MustContain = "E1M1", "E2M1", "TITLE", "MUS_E1M1"
 	BannerColors = "fc fc 00", "a8 00 00"
@@ -260,10 +197,9 @@ IWad
 IWad
 {
 	Name = "FreeDM"
-	Autoname = "doom.freedoom.freedm"
+	Autoname = "FreeDM"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "freedm.wad"
 	Mapinfo = "mapinfo/doom2.txt"
 	MustContain = "MAP01", "FREEDM"
 	BannerColors = "32 54 43", "c6 dc d1"
@@ -272,10 +208,9 @@ IWad
 IWad
 {
 	Name = "Freedoom: Phase 2"
-	Autoname = "doom.freedoom.phase2"
+	Autoname = "Freedoom"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "freedoom2.wad"
 	Mapinfo = "mapinfo/doom2.txt"
 	MustContain = "MAP01", "FREEDOOM"
 	BannerColors = "32 54 43", "c6 dc d1"
@@ -284,10 +219,9 @@ IWad
 IWad
 {
 	Name = "Freedoom: Phase 1"
-	Autoname = "doom.freedoom.phase1"
+	Autoname = "Freedoom1"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "freedoom1.wad"
 	Mapinfo = "mapinfo/doom1.txt"
 	MustContain = "E1M1", "E2M1", "E3M1", "FREEDOOM"
 	BannerColors = "32 54 43", "c6 dc d1"
@@ -295,8 +229,8 @@ IWad
 	
 IWad
 {
-	Name = "Freedoom: Demo Version"
-	Autoname = "doom.freedoom.demo"
+	Name = "Freedoom 'Demo'"
+	Autoname = "Freedoom1"
 	Game = "Doom"
 	Config = "Doom"
 	Mapinfo = "mapinfo/doom1.txt"
@@ -306,11 +240,10 @@ IWad
 	
 IWad
 {
-	Name = "DOOM: BFG Edition"
-	Autoname = "doom.doom1.bfg"
+	Name = "DOOM 1: BFG Edition"
+	Autoname = "Doom1"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "doom.wad", 2
 	Mapinfo = "mapinfo/ultdoom.txt"
 	Compatibility = "Shorttex"
 	MustContain = "E1M1","E2M1","E2M2","E2M3","E2M4","E2M5","E2M6","E2M7","E2M8","E2M9",
@@ -322,23 +255,10 @@ IWad
 
 IWad
 {
-	Name = "DOOM: Complete: WadSmoosh"
-	Autoname = "doom.doom2.wadsmoosh"
-	Game = "Doom"
-	Config = "Doom"
-	Mapinfo = "mapinfo/doom2.txt"
-	Compatibility = "Shorttex"
-	MustContain = "SMOOSHED", "ANIMDEFS", "LANGUAGE", "MAPINFO", "ENDOOM", "M_DOOM", "TITLEPIC", "TEXTURES"
-	BannerColors = "a8 00 00", "a8 a8 a8"
-}
-
-IWad
-{
 	Name = "The Ultimate DOOM"
-	Autoname = "doom.doom1.ultimate"
+	Autoname = "Doom1"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "doom.wad"
 	Mapinfo = "mapinfo/ultdoom.txt"
 	Compatibility = "Shorttex"
 	MustContain = "E1M1","E2M1","E2M2","E2M3","E2M4","E2M5","E2M6","E2M7","E2M8","E2M9",
@@ -350,10 +270,9 @@ IWad
 IWad
 {
 	Name = "DOOM Registered"
-	Autoname = "doom.doom1.registered"
+	Autoname = "Doom1"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "doom.wad", 1
 	Mapinfo = "mapinfo/doom1.txt"
 	Compatibility = "Shorttex"
 	MustContain = "E1M1","E2M1","E2M2","E2M3","E2M4","E2M5","E2M6","E2M7","E2M8","E2M9",
@@ -376,10 +295,9 @@ IWad
 IWad
 {
 	Name = "Final Doom: TNT - Evilution"
-	Autoname = "doom.doom2.tnt"
+	Autoname = "TNT"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "tnt.wad"
 	Mapinfo = "mapinfo/tnt.txt"
 	Compatibility = "Shorttex", "Stairs"
 	MustContain = "MAP01", "REDTNT2"
@@ -389,10 +307,9 @@ IWad
 IWad
 {
 	Name = "Final Doom: Plutonia Experiment"
-	Autoname = "doom.doom2.plutonia"
+	Autoname = "Plutonia"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "plutonia.wad"
 	Mapinfo = "mapinfo/plutonia.txt"
 	Compatibility = "Shorttex"
 	MustContain = "MAP01", "CAMO1"
@@ -402,10 +319,9 @@ IWad
 IWad
 {
 	Name = "DOOM 2: BFG Edition"
-	Autoname = "doom.doom2.bfg"
+	Autoname = "Doom2BFG"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "doom2.wad"
 	Mapinfo = "mapinfo/doom2bfg.txt"
 	Compatibility = "Shorttex"
 	MustContain = "MAP01", "DMENUPIC", "M_ACPT", "M_CAN", "M_EXITO", "M_CHG"
@@ -417,10 +333,9 @@ IWad
 IWad
 {
 	Name = "DOOM 2: Hell on Earth"
-	Autoname = "doom.doom2.commercial"
+	Autoname = "Doom2"
 	Game = "Doom"
 	Config = "Doom"
-	IWADName = "doom2.wad", 1
 	Mapinfo = "mapinfo/doom2.txt"
 	Compatibility = "Shorttex"
 	MustContain = "MAP01"
@@ -428,36 +343,34 @@ IWad
 }
 	
 
+
 Names
 {	
-	"doom_complete.pk3"
+	"bfgdoom2.wad"
+	"doom2bfg.wad"
+	"doom2f.wad"
 	"doom2.wad"
 	"plutonia.wad"
 	"tnt.wad"
+	"bfgdoom.wad"
+	"doombfg.wad"
 	"doomu.wad"
 	"doom.wad"
 	"doom1.wad"
-	"bfgdoom2.wad"
-	"doom2bfg.wad"
-	"bfgdoom.wad"
-	"doombfg.wad"
-	"doom2f.wad"
-	"freedoom1.wad"
-	"freedoom2.wad"
-	"freedoomu.wad"
-	"freedoom.wad"
-	"freedm.wad"
 	"heretic.wad"
-	"hereticsr.wad"
 	"heretic1.wad"
 	"hexen.wad"
 	"hexdd.wad"
 	"hexendemo.wad"
 	"hexdemo.wad"
 	"strife1.wad"
-	"sve.wad"
 	"strife0.wad"
 	"strife.wad"
+	"freedoom1.wad"
+	"freedoom2.wad"
+	"freedoomu.wad"
+	"freedoom.wad"
+	"freedm.wad"
 	"blasphem.wad"
 	"blasphemer.wad"
 	"chex.wad"
@@ -467,43 +380,4 @@ Names
 	"hacx.wad"
 	"hacx2.wad"
 	"square1.pk3"
-	"delaweare.wad"
-	"rotwb.wad"
-}
-
-Order	// Order in the IWAD selection box
-{
-	"DOOM: Complete: WadSmoosh"
-	"DOOM 2: Hell on Earth"
-	"Final Doom: Plutonia Experiment"
-	"Final Doom: TNT - Evilution"
-	"The Ultimate DOOM"
-	"DOOM Registered"
-	"DOOM Shareware"
-	"DOOM 2: BFG Edition"
-	"DOOM: BFG Edition"
-	"Freedoom: Phase 1"
-	"Freedoom: Phase 2"
-	"FreeDM"
-	"Heretic"
-	"Heretic: Shadow of the Serpent Riders"
-	"Heretic Shareware"
-	"Hexen: Beyond Heretic"
-	"Hexen: Deathkings of the Dark Citadel"
-	"Hexen: Demo Version"
-	"Strife: Quest for the Sigil"
-	"Strife: Veteran Edition"
-	"Strife: Teaser (Old Version)"
-	"Strife: Teaser (New Version)"
-	"Blasphemer"
-	"Chex(R) Quest"
-	"Chex(R) Quest 3"
-	"Action Doom 2: Urban Brawl"
-	"Harmony"
-	"Hacx: Twitch'n Kill"
-	"Hacx 2.0"
-	"The Adventures of Square"
-	"The Adventures of Square (Square-ware)"
-	"Delaweare"
-	"Rise Of The Wool Ball"
 }

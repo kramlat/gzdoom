@@ -1,39 +1,25 @@
-/*
-**
-**
-**---------------------------------------------------------------------------
-** Copyright 1999-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
+// Emacs style mode select	 -*- C++ -*- 
+//-----------------------------------------------------------------------------
+//
+// $Id:$
+//
+// Copyright (C) 1993-1996 by id Software, Inc.
+//
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
+//
+// $Log:$
+//
 // DESCRIPTION:
 //		Cheat sequence checking.
 //
+//-----------------------------------------------------------------------------
 
 
 #include <stdlib.h>
@@ -44,6 +30,7 @@
 #include "doomstat.h"
 #include "gstrings.h"
 #include "p_local.h"
+#include "a_strifeglobal.h"
 #include "gi.h"
 #include "p_enemy.h"
 #include "sbar.h"
@@ -58,37 +45,15 @@
 #include "d_net.h"
 #include "d_dehacked.h"
 #include "gi.h"
-#include "serializer.h"
-#include "r_utility.h"
-#include "a_morph.h"
-#include "g_levellocals.h"
-#include "vm.h"
-#include "events.h"
-#include "p_acs.h"
+#include "farchive.h"
 
 // [RH] Actually handle the cheat. The cheat code in st_stuff.c now just
 // writes some bytes to the network data stream, and the network code
 // later calls us.
 
-void cht_DoMDK(player_t *player, const char *mod)
-{
-	if (player->mo == NULL)
-	{
-		Printf("What do you want to kill outside of a game?\n");
-	}
-	else if (!deathmatch)
-	{
-		// Don't allow this in deathmatch even with cheats enabled, because it's
-		// a very very cheap kill.
-		P_LineAttack(player->mo, player->mo->Angles.Yaw, PLAYERMISSILERANGE,
-			P_AimLineAttack(player->mo, player->mo->Angles.Yaw, PLAYERMISSILERANGE), TELEFRAG_DAMAGE,
-			mod, NAME_BulletPuff);
-	}
-}
-
 void cht_DoCheat (player_t *player, int cheat)
 {
-	static const char * const BeholdPowers[9] =
+	static const char * BeholdPowers[9] =
 	{
 		"PowerInvulnerable",
 		"PowerStrength",
@@ -100,7 +65,7 @@ void cht_DoCheat (player_t *player, int cheat)
 		"PowerMask",
 		"PowerTargeter",
 	};
-	PClassActor *type;
+	const PClass *type;
 	AInventory *item;
 	const char *msg = "";
 	char msgbuild[32];
@@ -123,6 +88,7 @@ void cht_DoCheat (player_t *player, int cheat)
 			msg = GStrings("STSTR_DQDON");
 		else
 			msg = GStrings("STSTR_DQDOFF");
+		ST_SetNeedRefresh();
 		break;
 
 	case CHT_BUDDHA:
@@ -131,22 +97,6 @@ void cht_DoCheat (player_t *player, int cheat)
 			msg = GStrings("TXT_BUDDHAON");
 		else
 			msg = GStrings("TXT_BUDDHAOFF");
-		break;
-
-	case CHT_GOD2:
-		player->cheats ^= CF_GODMODE2;
-		if (player->cheats & CF_GODMODE2)
-			msg = GStrings("STSTR_DQD2ON");
-		else
-			msg = GStrings("STSTR_DQD2OFF");
-		break;
-
-	case CHT_BUDDHA2:
-		player->cheats ^= CF_BUDDHA2;
-		if (player->cheats & CF_BUDDHA2)
-			msg = GStrings("TXT_BUDDHA2ON");
-		else
-			msg = GStrings("TXT_BUDDHA2OFF");
 		break;
 
 	case CHT_NOCLIP:
@@ -169,7 +119,6 @@ void cht_DoCheat (player_t *player, int cheat)
 			player->cheats &= ~CF_NOCLIP;
 			msg = GStrings("STSTR_NCOFF");
 		}
-		if (player->mo->Vel.X == 0) player->mo->Vel.X = MinVel;	// force some lateral movement so that internal variables are up to date
 		break;
 
 	case CHT_NOVELOCITY:
@@ -183,8 +132,8 @@ void cht_DoCheat (player_t *player, int cheat)
 	case CHT_FLY:
 		if (player->mo != NULL)
 		{
-			player->mo->flags7 ^= MF7_FLYCHEAT;
-			if (player->mo->flags7 & MF7_FLYCHEAT)
+			player->cheats ^= CF_FLY;
+			if (player->cheats & CF_FLY)
 			{
 				player->mo->flags |= MF_NOGRAVITY;
 				player->mo->flags2 |= MF2_FLY;
@@ -200,7 +149,7 @@ void cht_DoCheat (player_t *player, int cheat)
 		break;
 
 	case CHT_MORPH:
-		msg = cht_Morph (player, PClass::FindActor (gameinfo.gametype == GAME_Heretic ? NAME_ChickenPlayer : NAME_PigPlayer), true);
+		msg = cht_Morph (player, PClass::FindClass (gameinfo.gametype == GAME_Heretic ? NAME_ChickenPlayer : NAME_PigPlayer), true);
 		break;
 
 	case CHT_NOTARGET:
@@ -231,7 +180,7 @@ void cht_DoCheat (player_t *player, int cheat)
 	case CHT_CHAINSAW:
 		if (player->mo != NULL && player->health >= 0)
 		{
-			type = PClass::FindActor("Chainsaw");
+			type = PClass::FindClass ("Chainsaw");
 			if (player->mo->FindInventory (type) == NULL)
 			{
 				player->mo->GiveInventoryType (type);
@@ -247,7 +196,7 @@ void cht_DoCheat (player_t *player, int cheat)
 	case CHT_POWER:
 		if (player->mo != NULL && player->health >= 0)
 		{
-			item = player->mo->FindInventory (PClass::FindActor(NAME_PowerWeaponLevel2), true);
+			item = player->mo->FindInventory (RUNTIME_CLASS(APowerWeaponLevel2), true);
 			if (item != NULL)
 			{
 				item->Destroy ();
@@ -255,7 +204,7 @@ void cht_DoCheat (player_t *player, int cheat)
 			}
 			else
 			{
-				player->mo->GiveInventoryType (PClass::FindActor(NAME_PowerWeaponLevel2));
+				player->mo->GiveInventoryType (RUNTIME_CLASS(APowerWeaponLevel2));
 				msg = GStrings("TXT_CHEATPOWERON");
 			}
 		}
@@ -295,7 +244,7 @@ void cht_DoCheat (player_t *player, int cheat)
 		}
 		else if (player->mo != NULL && player->health >= 0)
 		{
-			item = player->mo->FindInventory(BeholdPowers[i]);
+			item = player->mo->FindInventory (BeholdPowers[i]);
 			if (item == NULL)
 			{
 				if (i != 0)
@@ -321,13 +270,11 @@ void cht_DoCheat (player_t *player, int cheat)
 		break;
 
 	case CHT_MASSACRE:
-	case CHT_MASSACRE2:
 		{
-			int killcount = P_Massacre (cheat == CHT_MASSACRE2);
+			int killcount = P_Massacre ();
 			// killough 3/22/98: make more intelligent about plural
 			// Ty 03/27/98 - string(s) *not* externalized
-			mysnprintf (msgbuild, countof(msgbuild), "%d %s%s Killed", killcount,
-				cheat==CHT_MASSACRE2 ? "Baddie" : "Monster", killcount==1 ? "" : "s");
+			mysnprintf (msgbuild, countof(msgbuild), "%d Monster%s Killed", killcount, killcount==1 ? "" : "s");
 			msg = msgbuild;
 		}
 		break;
@@ -347,15 +294,45 @@ void cht_DoCheat (player_t *player, int cheat)
 
 	// [GRB]
 	case CHT_RESSURECT:
-		if (player->playerstate != PST_LIVE && player->mo != nullptr)
+		if (player->playerstate != PST_LIVE && player->mo != NULL)
 		{
-			if (player->mo->IsKindOf("PlayerChunk"))
+			if (player->mo->IsKindOf(RUNTIME_CLASS(APlayerChunk)))
 			{
 				Printf("Unable to resurrect. Player is no longer connected to its body.\n");
 			}
 			else
 			{
-				player->Resurrect();
+				player->playerstate = PST_LIVE;
+				player->health = player->mo->health = player->mo->GetDefault()->health;
+				player->viewheight = ((APlayerPawn *)player->mo->GetDefault())->ViewHeight;
+				player->mo->flags = player->mo->GetDefault()->flags;
+				player->mo->flags2 = player->mo->GetDefault()->flags2;
+				player->mo->flags3 = player->mo->GetDefault()->flags3;
+				player->mo->flags4 = player->mo->GetDefault()->flags4;
+				player->mo->flags5 = player->mo->GetDefault()->flags5;
+				player->mo->flags6 = player->mo->GetDefault()->flags6;
+				player->mo->flags7 = player->mo->GetDefault()->flags7;
+				player->mo->renderflags &= ~RF_INVISIBLE;
+				player->mo->height = player->mo->GetDefault()->height;
+				player->mo->radius = player->mo->GetDefault()->radius;
+				player->mo->special1 = 0;	// required for the Hexen fighter's fist attack. 
+											// This gets set by AActor::Die as flag for the wimpy death and must be reset here.
+				player->mo->SetState (player->mo->SpawnState);
+				if (!(player->mo->flags2 & MF2_DONTTRANSLATE))
+				{
+					player->mo->Translation = TRANSLATION(TRANSLATION_Players, BYTE(player-players));
+				}
+				player->mo->DamageType = NAME_None;
+//				player->mo->GiveDefaultInventory();
+				if (player->ReadyWeapon != NULL)
+				{
+					P_SetPsprite(player, ps_weapon, player->ReadyWeapon->GetUpState());
+				}
+
+				if (player->morphTics > 0)
+				{
+					P_UndoPlayerMorph(player, player);
+				}
 
 			}
 		}
@@ -431,7 +408,7 @@ void cht_DoCheat (player_t *player, int cheat)
 			{
 				lastinvp = invp;
 				invp = &(*invp)->Inventory;
-				if (item->IsKindOf(NAME_Weapon))
+				if (item->IsKindOf (RUNTIME_CLASS(AWeapon)))
 				{
 					AWeapon *weap = static_cast<AWeapon *> (item);
 					if (!(weap->WeaponFlags & WIF_WIMPY_WEAPON) ||
@@ -473,8 +450,8 @@ void cht_DoCheat (player_t *player, int cheat)
 		{
 			// Don't allow this in deathmatch even with cheats enabled, because it's
 			// a very very cheap kill.
-			P_LineAttack (player->mo, player->mo->Angles.Yaw, PLAYERMISSILERANGE,
-				P_AimLineAttack (player->mo, player->mo->Angles.Yaw, PLAYERMISSILERANGE), TELEFRAG_DAMAGE,
+			P_LineAttack (player->mo, player->mo->angle, PLAYERMISSILERANGE,
+				P_AimLineAttack (player->mo, player->mo->angle, PLAYERMISSILERANGE), TELEFRAG_DAMAGE,
 				NAME_MDK, NAME_BulletPuff);
 		}
 		break;
@@ -487,27 +464,18 @@ void cht_DoCheat (player_t *player, int cheat)
 	case CHT_LEGO:
 		if (player->mo != NULL && player->health >= 0)
 		{
-			static VMFunction *gsp = nullptr;
-			if (gsp == nullptr) PClass::FindFunction(&gsp, NAME_Sigil, NAME_GiveSigilPiece);
-			if (gsp)
-			{
-				VMValue params[1] = { player->mo };
-				VMReturn ret;
-				int oldpieces = 1;
-				ret.IntAt(&oldpieces);
-				VMCall(gsp, params, 1, &ret, 1);
-				item = player->mo->FindInventory(NAME_Sigil);
+			int oldpieces = ASigil::GiveSigilPiece (player->mo);
+			item = player->mo->FindInventory (RUNTIME_CLASS(ASigil));
 
-				if (item != NULL)
+			if (item != NULL)
+			{
+				if (oldpieces == 5)
 				{
-					if (oldpieces == 5)
-					{
-						item->Destroy();
-					}
-					else
-					{
-						player->PendingWeapon = static_cast<AWeapon *> (item);
-					}
+					item->Destroy ();
+				}
+				else
+				{
+					player->PendingWeapon = static_cast<AWeapon *> (item);
 				}
 			}
 		}
@@ -558,13 +526,13 @@ void cht_DoCheat (player_t *player, int cheat)
 		Printf ("%s cheats: %s\n", player->userinfo.GetName(), msg);
 }
 
-const char *cht_Morph (player_t *player, PClassActor *morphclass, bool quickundo)
+const char *cht_Morph (player_t *player, const PClass *morphclass, bool quickundo)
 {
 	if (player->mo == NULL)
 	{
 		return "";
 	}
-	auto oldclass = player->mo->GetClass();
+	PClass *oldclass = player->mo->GetClass();
 
 	// Set the standard morph style for the current game
 	int style = MORPH_UNDOBYTOMEOFPOWER;
@@ -588,52 +556,507 @@ const char *cht_Morph (player_t *player, PClassActor *morphclass, bool quickundo
 	return "";
 }
 
-void cht_SetInv(player_t *player, const char *string, int amount, bool beyond)
+void GiveSpawner (player_t *player, const PClass *type, int amount)
 {
-	if (!stricmp(string, "health"))
+	if (player->mo == NULL || player->health <= 0)
 	{
-		if (amount <= 0)
-		{
-			cht_Suicide(player);
-			return;
-		}
-		if (!beyond) amount = MIN(amount, player->mo->GetMaxHealth(true));
-		player->health = player->mo->health = amount;
+		return;
 	}
-	else
+
+	AInventory *item = static_cast<AInventory *>
+		(Spawn (type, player->mo->x, player->mo->y, player->mo->z, NO_REPLACE));
+	if (item != NULL)
 	{
-		auto item = PClass::FindActor(string);
-		if (item != nullptr && item->IsDescendantOf(RUNTIME_CLASS(AInventory)))
+		if (amount > 0)
 		{
-			player->mo->SetInventory(item, amount, beyond);
-			return;
+			if (type->IsDescendantOf (RUNTIME_CLASS(ABasicArmorPickup)))
+			{
+				if (static_cast<ABasicArmorPickup*>(item)->SaveAmount != 0)
+				{
+					static_cast<ABasicArmorPickup*>(item)->SaveAmount *= amount;
+				}
+				else
+				{
+					static_cast<ABasicArmorPickup*>(item)->SaveAmount *= amount;
+				}
+			}
+			else if (type->IsDescendantOf (RUNTIME_CLASS(ABasicArmorBonus)))
+			{
+				static_cast<ABasicArmorBonus*>(item)->SaveAmount *= amount;
+			}
+			else
+			{
+				item->Amount = MIN (amount, item->MaxAmount);
+			}
 		}
-		Printf("Unknown item \"%s\"\n", string);
+		item->ClearCounters();
+		if (!item->CallTryPickup (player->mo))
+		{
+			item->Destroy ();
+		}
 	}
 }
 
 void cht_Give (player_t *player, const char *name, int amount)
 {
-	if (player->mo == nullptr)	return;
+	enum { ALL_NO, ALL_YES, ALL_YESYES } giveall;
+	int i;
+	const PClass *type;
 
-	IFVIRTUALPTR(player->mo, APlayerPawn, CheatGive)
+	if (player != &players[consoleplayer])
+		Printf ("%s is a cheater: give %s\n", player->userinfo.GetName(), name);
+
+	if (player->mo == NULL || player->health <= 0)
 	{
-		FString namestr = name;
-		VMValue params[3] = { player->mo, &namestr, amount };
-		VMCall(func, params, 3, nullptr, 0);
+		return;
 	}
+
+	giveall = ALL_NO;
+	if (stricmp (name, "all") == 0)
+	{
+		giveall = ALL_YES;
+	}
+	else if (stricmp (name, "everything") == 0)
+	{
+		giveall = ALL_YESYES;
+	}
+
+	if (stricmp (name, "health") == 0)
+	{
+		if (amount > 0)
+		{
+			if (player->mo)
+			{
+				player->mo->health += amount;
+	  			player->health = player->mo->health;
+			}
+			else
+			{
+				player->health += amount;
+			}
+		}
+		else
+		{
+			if (player->mo != NULL)
+			{
+				player->health = player->mo->health = player->mo->GetMaxHealth();
+			}
+			else
+			{
+				player->health = deh.GodHealth;
+			}
+		}
+	}
+
+	if (giveall || stricmp (name, "backpack") == 0)
+	{
+		// Select the correct type of backpack based on the game
+		type = PClass::FindClass(gameinfo.backpacktype);
+		if (type != NULL)
+		{
+			GiveSpawner (player, type, 1);
+		}
+
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "ammo") == 0)
+	{
+		// Find every unique type of ammo. Give it to the player if
+		// he doesn't have it already, and set each to its maximum.
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			const PClass *type = PClass::m_Types[i];
+
+			if (type->ParentClass == RUNTIME_CLASS(AAmmo))
+			{
+				AInventory *ammo = player->mo->FindInventory (type);
+				if (ammo == NULL)
+				{
+					ammo = static_cast<AInventory *>(Spawn (type, 0, 0, 0, NO_REPLACE));
+					ammo->AttachToOwner (player->mo);
+					ammo->Amount = ammo->MaxAmount;
+				}
+				else if (ammo->Amount < ammo->MaxAmount)
+				{
+					ammo->Amount = ammo->MaxAmount;
+				}
+			}
+		}
+
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "armor") == 0)
+	{
+		if (gameinfo.gametype != GAME_Hexen)
+		{
+			ABasicArmorPickup *armor = Spawn<ABasicArmorPickup> (0,0,0, NO_REPLACE);
+			armor->SaveAmount = 100*deh.BlueAC;
+			armor->SavePercent = gameinfo.Armor2Percent > 0? gameinfo.Armor2Percent : FRACUNIT/2;
+			if (!armor->CallTryPickup (player->mo))
+			{
+				armor->Destroy ();
+			}
+		}
+		else
+		{
+			for (i = 0; i < 4; ++i)
+			{
+				AHexenArmor *armor = Spawn<AHexenArmor> (0,0,0, NO_REPLACE);
+				armor->health = i;
+				armor->Amount = 0;
+				if (!armor->CallTryPickup (player->mo))
+				{
+					armor->Destroy ();
+				}
+			}
+		}
+
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "keys") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			if (PClass::m_Types[i]->IsDescendantOf (RUNTIME_CLASS(AKey)))
+			{
+				AKey *key = (AKey *)GetDefaultByType (PClass::m_Types[i]);
+				if (key->KeyNumber != 0)
+				{
+					key = static_cast<AKey *>(Spawn (PClass::m_Types[i], 0,0,0, NO_REPLACE));
+					if (!key->CallTryPickup (player->mo))
+					{
+						key->Destroy ();
+					}
+				}
+			}
+		}
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "weapons") == 0)
+	{
+		AWeapon *savedpending = player->PendingWeapon;
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+			// Don't give replaced weapons unless the replacement was done by Dehacked.
+			if (type != RUNTIME_CLASS(AWeapon) &&
+				type->IsDescendantOf (RUNTIME_CLASS(AWeapon)) &&
+				(type->GetReplacement() == type ||
+				 type->GetReplacement()->IsDescendantOf(RUNTIME_CLASS(ADehackedPickup))))
+
+			{
+				// Give the weapon only if it belongs to the current game or
+				// is in a weapon slot. 
+				if (type->ActorInfo->GameFilter == GAME_Any || 
+					(type->ActorInfo->GameFilter & gameinfo.gametype) ||	
+					player->weapons.LocateWeapon(type, NULL, NULL))
+				{
+					AWeapon *def = (AWeapon*)GetDefaultByType (type);
+					if (giveall == ALL_YESYES || !(def->WeaponFlags & WIF_CHEATNOTWEAPON))
+					{
+						GiveSpawner (player, type, 1);
+					}
+				}
+			}
+		}
+		player->PendingWeapon = savedpending;
+
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "artifacts") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+			if (type->IsDescendantOf (RUNTIME_CLASS(AInventory)))
+			{
+				AInventory *def = (AInventory*)GetDefaultByType (type);
+				if (def->Icon.isValid() && def->MaxAmount > 1 &&
+					!type->IsDescendantOf (RUNTIME_CLASS(APuzzleItem)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS(APowerup)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS(AArmor)))
+				{
+					// Do not give replaced items unless using "give everything"
+					if (giveall == ALL_YESYES || type->GetReplacement() == type)
+					{
+						GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					}
+				}
+			}
+		}
+		if (!giveall)
+			return;
+	}
+
+	if (giveall || stricmp (name, "puzzlepieces") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+			if (type->IsDescendantOf (RUNTIME_CLASS(APuzzleItem)))
+			{
+				AInventory *def = (AInventory*)GetDefaultByType (type);
+				if (def->Icon.isValid())
+				{
+					// Do not give replaced items unless using "give everything"
+					if (giveall == ALL_YESYES || type->GetReplacement() == type)
+					{
+						GiveSpawner (player, type, amount <= 0 ? def->MaxAmount : amount);
+					}
+				}
+			}
+		}
+		if (!giveall)
+			return;
+	}
+
+	if (giveall)
+		return;
+
+	type = PClass::FindClass (name);
+	if (type == NULL || !type->IsDescendantOf (RUNTIME_CLASS(AInventory)))
+	{
+		if (player == &players[consoleplayer])
+			Printf ("Unknown item \"%s\"\n", name);
+	}
+	else
+	{
+		GiveSpawner (player, type, amount);
+	}
+	return;
 }
 
 void cht_Take (player_t *player, const char *name, int amount)
 {
-	if (player->mo == nullptr) return;
+	bool takeall;
+	const PClass *type;
 
-	IFVIRTUALPTR(player->mo, APlayerPawn, CheatTake)
+	if (player->mo == NULL || player->health <= 0)
 	{
-		FString namestr = name;
-		VMValue params[3] = { player->mo, &namestr, amount };
-		VMCall(func, params, 3, nullptr, 0);
+		return;
 	}
+
+	takeall = (stricmp (name, "all") == 0);
+
+	if (!takeall && stricmp (name, "health") == 0)
+	{
+		if (player->mo->health - amount <= 0
+			|| player->health - amount <= 0
+			|| amount == 0)
+		{
+
+			cht_Suicide (player);
+
+			if (player == &players[consoleplayer])
+				C_HideConsole ();
+
+			return;
+		}
+
+		if (amount > 0)
+		{
+			if (player->mo)
+			{
+				player->mo->health -= amount;
+	  			player->health = player->mo->health;
+			}
+			else
+			{
+				player->health -= amount;
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "backpack") == 0)
+	{
+		// Take away all types of backpacks the player might own.
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			const PClass *type = PClass::m_Types[i];
+
+			if (type->IsDescendantOf(RUNTIME_CLASS (ABackpackItem)))
+			{
+				AInventory *pack = player->mo->FindInventory (type);
+
+				if (pack) pack->Destroy();
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "ammo") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			const PClass *type = PClass::m_Types[i];
+
+			if (type->ParentClass == RUNTIME_CLASS (AAmmo))
+			{
+				AInventory *ammo = player->mo->FindInventory (type);
+
+				if (ammo)
+					ammo->Amount = 0;
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "armor") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+
+			if (type->IsDescendantOf (RUNTIME_CLASS (AArmor)))
+			{
+				AActor *armor = player->mo->FindInventory (type);
+
+				if (armor)
+					armor->Destroy ();
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "keys") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+
+			if (type->IsDescendantOf (RUNTIME_CLASS (AKey)))
+			{
+				AActor *key = player->mo->FindInventory (type);
+
+				if (key)
+					key->Destroy ();
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "weapons") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+
+			if (type != RUNTIME_CLASS(AWeapon) &&
+				type->IsDescendantOf (RUNTIME_CLASS (AWeapon)))
+			{
+				AActor *weapon = player->mo->FindInventory (type);
+
+				if (weapon)
+					weapon->Destroy ();
+
+				player->ReadyWeapon = NULL;
+				player->PendingWeapon = WP_NOCHANGE;
+				player->psprites[ps_weapon].state = NULL;
+				player->psprites[ps_flash].state = NULL;
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "artifacts") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+
+			if (type->IsDescendantOf (RUNTIME_CLASS (AInventory)))
+			{
+				if (!type->IsDescendantOf (RUNTIME_CLASS (APuzzleItem)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS (APowerup)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS (AArmor)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS (AWeapon)) &&
+					!type->IsDescendantOf (RUNTIME_CLASS (AKey)))
+				{
+					AActor *artifact = player->mo->FindInventory (type);
+
+					if (artifact)
+						artifact->Destroy ();
+				}
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall || stricmp (name, "puzzlepieces") == 0)
+	{
+		for (unsigned int i = 0; i < PClass::m_Types.Size(); ++i)
+		{
+			type = PClass::m_Types[i];
+
+			if (type->IsDescendantOf (RUNTIME_CLASS (APuzzleItem)))
+			{
+				AActor *puzzlepiece = player->mo->FindInventory (type);
+
+				if (puzzlepiece)
+					puzzlepiece->Destroy ();
+			}
+		}
+
+		if (!takeall)
+			return;
+	}
+
+	if (takeall)
+		return;
+
+	type = PClass::FindClass (name);
+	if (type == NULL || !type->IsDescendantOf (RUNTIME_CLASS (AInventory)))
+	{
+		if (player == &players[consoleplayer])
+			Printf ("Unknown item \"%s\"\n", name);
+	}
+	else
+	{
+		AInventory *inventory = player->mo->FindInventory (type);
+
+		if (inventory != NULL)
+		{
+			inventory->Amount -= amount ? amount : 1;
+
+			if (inventory->Amount <= 0)
+			{
+				if (inventory->ItemFlags & IF_KEEPDEPLETED)
+				{
+					inventory->Amount = 0;
+				}
+				else
+				{
+					inventory->Destroy ();
+				}
+			}
+		}
+	}
+	return;
 }
 
 class DSuicider : public DThinker
@@ -641,15 +1064,15 @@ class DSuicider : public DThinker
 	DECLARE_CLASS(DSuicider, DThinker)
 	HAS_OBJECT_POINTERS;
 public:
-	TObjPtr<APlayerPawn*> Pawn;
+	TObjPtr<APlayerPawn> Pawn;
 
 	void Tick()
 	{
 		Pawn->flags |= MF_SHOOTABLE;
 		Pawn->flags2 &= ~MF2_INVULNERABLE;
 		// Store the player's current damage factor, to restore it later.
-		double plyrdmgfact = Pawn->DamageFactor;
-		Pawn->DamageFactor = 1.;
+		fixed_t plyrdmgfact = Pawn->DamageFactor;
+		Pawn->DamageFactor = 65536;
 		P_DamageMobj (Pawn, Pawn, Pawn, TELEFRAG_DAMAGE, NAME_Suicide);
 		Pawn->DamageFactor = plyrdmgfact;
 		if (Pawn->health <= 0)
@@ -660,18 +1083,16 @@ public:
 	}
 	// You'll probably never be able to catch this in a save game, but
 	// just in case, add a proper serializer.
-	void Serialize(FSerializer &arc)
+	void Serialize(FArchive &arc)
 	{ 
 		Super::Serialize(arc);
-		arc("pawn", Pawn);
+		arc << Pawn;
 	}
 };
 
-IMPLEMENT_CLASS(DSuicider, false, true)
-
-IMPLEMENT_POINTERS_START(DSuicider)
-	IMPLEMENT_POINTER(Pawn)
-IMPLEMENT_POINTERS_END
+IMPLEMENT_POINTY_CLASS(DSuicider)
+ DECLARE_POINTER(Pawn)
+END_POINTERS
 
 void cht_Suicide (player_t *plyr)
 {
@@ -682,25 +1103,18 @@ void cht_Suicide (player_t *plyr)
 	// the initial tick.
 	if (plyr->mo != NULL)
 	{
-		DSuicider *suicide = Create<DSuicider>();
+		DSuicider *suicide = new DSuicider;
 		suicide->Pawn = plyr->mo;
 		GC::WriteBarrier(suicide, suicide->Pawn);
 	}
 }
 
-DEFINE_ACTION_FUNCTION(APlayerPawn, CheatSuicide)
-{
-	PARAM_SELF_PROLOGUE(APlayerPawn);
-	cht_Suicide(self->player);
-	return 0;
-}
 
 CCMD (mdk)
 {
 	if (CheckCheatmode ())
 		return;
 
-	const char *name = argv.argc() > 1 ? argv[1] : "";
-	Net_WriteByte (DEM_MDK);
-	Net_WriteString(name);
+	Net_WriteByte (DEM_GENERICCHEAT);
+	Net_WriteByte (CHT_MDK);
 }

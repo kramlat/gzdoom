@@ -1,37 +1,3 @@
-/*
-**
-**
-**---------------------------------------------------------------------------
-** Copyright 1999 Martin Colberg
-** Copyright 1999-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
-** All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-**
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. The name of the author may not be used to endorse or promote products
-**    derived from this software without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-** OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-** IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
-** INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-** NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**---------------------------------------------------------------------------
-**
-*/
 /*******************************************
 * B_game.h                                 *
 * Description:                             *
@@ -93,10 +59,6 @@ Everything that is changed is marked (maybe commented) with "Added by MC"
 #include "i_system.h"
 #include "d_net.h"
 #include "d_netinf.h"
-#include "d_player.h"
-#include "doomerrors.h"
-#include "events.h"
-#include "vm.h"
 
 static FRandom pr_botspawn ("BotSpawn");
 
@@ -127,56 +89,81 @@ enum
 	BOTCFG_TEAM
 };
 
+static bool waitingforspawn[MAXPLAYERS];
+
 FCajunMaster::~FCajunMaster()
 {
 	ForgetBots();
 }
 
-//This function is called every tick (from g_game.c).
-void FCajunMaster::Main ()
+//This function is called every tick (from g_game.c),
+//send bots into thinking (+more).
+void FCajunMaster::Main (int buf)
 {
+	int i;
+
 	BotThinkCycles.Reset();
 
-	if (demoplayback || gamestate != GS_LEVEL || consoleplayer != Net_Arbitrator)
+	if (consoleplayer != Net_Arbitrator || demoplayback)
 		return;
+
+	if (gamestate != GS_LEVEL)
+		return;
+
+	m_Thinking = true;
+
+	//Think for bots.
+	if (botnum)
+	{
+		BotThinkCycles.Clock();
+		for (i = 0; i < MAXPLAYERS; i++)
+		{
+			if (playeringame[i] && players[i].mo && !freeze && players[i].isbot)
+				Think (players[i].mo, &netcmds[i][buf]);
+		}
+		BotThinkCycles.Unclock();
+	}
 
 	//Add new bots?
 	if (wanted_botnum > botnum && !freeze)
 	{
 		if (t_join == ((wanted_botnum - botnum) * SPAWN_DELAY))
 		{
-			if (!SpawnBot (getspawned[spawn_tries]))
+            if (!SpawnBot (getspawned[spawn_tries]))
 				wanted_botnum--;
-			spawn_tries++;
+            spawn_tries++;
 		}
 
 		t_join--;
 	}
 
 	//Check if player should go observer. Or un observe
-	FLinkContext ctx;
 	if (bot_observer && !observer && !netgame)
 	{
 		Printf ("%s is now observer\n", players[consoleplayer].userinfo.GetName());
 		observer = true;
-		players[consoleplayer].mo->UnlinkFromWorld (&ctx);
+		players[consoleplayer].mo->UnlinkFromWorld ();
 		players[consoleplayer].mo->flags = MF_DROPOFF|MF_NOBLOCKMAP|MF_NOCLIP|MF_NOTDMATCH|MF_NOGRAVITY|MF_FRIENDLY;
 		players[consoleplayer].mo->flags2 |= MF2_FLY;
-		players[consoleplayer].mo->LinkToWorld (&ctx);
+		players[consoleplayer].mo->LinkToWorld ();
 	}
 	else if (!bot_observer && observer && !netgame) //Go back
 	{
 		Printf ("%s returned to the fray\n", players[consoleplayer].userinfo.GetName());
 		observer = false;
-		players[consoleplayer].mo->UnlinkFromWorld (&ctx);
+		players[consoleplayer].mo->UnlinkFromWorld ();
 		players[consoleplayer].mo->flags = MF_SOLID|MF_SHOOTABLE|MF_DROPOFF|MF_PICKUP|MF_NOTDMATCH|MF_FRIENDLY;
 		players[consoleplayer].mo->flags2 &= ~MF2_FLY;
-		players[consoleplayer].mo->LinkToWorld (&ctx);
+		players[consoleplayer].mo->LinkToWorld ();
 	}
+
+	m_Thinking = false;
 }
 
 void FCajunMaster::Init ()
 {
+	int i;
+
 	botnum = 0;
 	firstthing = NULL;
 	spawn_tries = 0;
@@ -184,6 +171,18 @@ void FCajunMaster::Init ()
 	observer = false;
 	body1 = NULL;
 	body2 = NULL;
+
+	//Remove all bots upon each level start, they'll get spawned instead.
+	for (i = 0; i < MAXPLAYERS; i++)
+	{
+		waitingforspawn[i] = false;
+		if (playeringame[i] && players[i].isbot)
+		{
+			CleanBotstuff (&players[i]);
+			players[i].isbot = false;
+			botingame[i] = false;
+		}
+	}
 
 	if (ctf && teamplay == false)
 		teamplay = true; //Need teamplay for ctf. (which is not done yet)
@@ -200,7 +199,7 @@ void FCajunMaster::Init ()
 
 		while (thebot != NULL)
 		{
-			thebot->inuse = BOTINUSE_No;
+			thebot->inuse = false;
 			thebot = thebot->next;
 		}
 	}
@@ -213,16 +212,19 @@ void FCajunMaster::End ()
 
 	//Arrange wanted botnum and their names, so they can be spawned next level.
 	getspawned.Clear();
-	if (deathmatch)
+	for (i = 0; i < MAXPLAYERS; i++)
 	{
-		for (i = 0; i < MAXPLAYERS; i++)
+		if (playeringame[i] && players[i].isbot)
 		{
-			if (players[i].Bot != NULL)
+			if (deathmatch)
 			{
 				getspawned.Push(players[i].userinfo.GetName());
 			}
+			CleanBotstuff (&players[i]);
 		}
-
+	}
+	if (deathmatch)
+	{
 		wanted_botnum = botnum;
 	}
 }
@@ -238,10 +240,12 @@ void FCajunMaster::End ()
 //The color parameter can be either a
 //color (range from 0-10), or = NOCOLOR.
 //The color parameter overides bots
-//individual colors if not = NOCOLOR.
+//induvidual colors if not = NOCOLOR.
 
 bool FCajunMaster::SpawnBot (const char *name, int color)
 {
+	int playernumber;
+
 	//COLORS
 	static const char colors[11][17] =
 	{
@@ -258,69 +262,64 @@ bool FCajunMaster::SpawnBot (const char *name, int color)
 		"\\color\\cf df 90"		//10 = Bleached Bone
 	};
 
-	botinfo_t *thebot = botinfo;
-	int botshift = 0;
+	for (playernumber = 0; playernumber < MAXPLAYERS; playernumber++)
+	{
+		if (!playeringame[playernumber] && !waitingforspawn[playernumber])
+		{
+			break;
+		}
+	}
+
+	if (playernumber == MAXPLAYERS)
+	{
+		Printf ("The maximum of %d players/bots has been reached\n", MAXPLAYERS);
+		return false;
+	}
+
+	botinfo_t *thebot;
 
 	if (name)
 	{
+		thebot = botinfo;
+
 		// Check if exist or already in the game.
 		while (thebot && stricmp (name, thebot->name))
-		{
-			botshift++;
 			thebot = thebot->next;
-		}
 
 		if (thebot == NULL)
 		{
    		 	Printf ("couldn't find %s in %s\n", name, BOTFILENAME);
 			return false;
 		}
-		else if (thebot->inuse == BOTINUSE_Waiting)
-		{
-			return false;
-		}
-		else if (thebot->inuse == BOTINUSE_Yes)
+		else if (thebot->inuse)
 		{
    		 	Printf ("%s is already in the thick\n", name);
 			return false;
 		}
 	}
-	else
+	else if (botnum < loaded_bots)
 	{
-		//Spawn a random bot from bots.cfg if no name given.
-		TArray<botinfo_t *> BotInfoAvailable;
-
-		while (thebot)
+		bool vacant = false;  //Spawn a random bot from bots.cfg if no name given.
+		while (!vacant)
 		{
-			if (thebot->inuse == BOTINUSE_No)
-				BotInfoAvailable.Push (thebot);
-
-			thebot = thebot->next;
-		}
-
-		if (BotInfoAvailable.Size () == 0)
-		{
-			Printf ("Couldn't spawn bot; no bot left in %s\n", BOTFILENAME);
-			return false;
-		}
-
-		thebot = BotInfoAvailable[pr_botspawn() % BotInfoAvailable.Size ()];
-
-		botinfo_t *thebot2 = botinfo;
-		while (thebot2)
-		{
-			if (thebot == thebot2)
-				break;
-
-			botshift++;
-			thebot2 = thebot2->next;
+			int rnum = (pr_botspawn() % loaded_bots);
+			thebot = botinfo;
+			while (rnum)
+				--rnum, thebot = thebot->next;
+			if (!thebot->inuse)
+				vacant = true;
 		}
 	}
+	else
+	{
+		Printf ("Couldn't spawn bot; no bot left in %s\n", BOTFILENAME);
+		return false;
+	}
 
-	thebot->inuse = BOTINUSE_Waiting;
+	waitingforspawn[playernumber] = true;
 
 	Net_WriteByte (DEM_ADDBOT);
-	Net_WriteByte (botshift);
+	Net_WriteByte (playernumber);
 	{
 		//Set color.
 		char concat[512];
@@ -336,93 +335,52 @@ bool FCajunMaster::SpawnBot (const char *name, int color)
 		}
 		Net_WriteString (concat);
 	}
-	Net_WriteByte(thebot->skill.aiming);
-	Net_WriteByte(thebot->skill.perfection);
-	Net_WriteByte(thebot->skill.reaction);
-	Net_WriteByte(thebot->skill.isp);
+
+	players[playernumber].skill = thebot->skill;
+
+	thebot->inuse = true;
+
+	//Increment this.
+	botnum++;
 
 	return true;
 }
 
-void FCajunMaster::TryAddBot (uint8_t **stream, int player)
+void FCajunMaster::DoAddBot (int bnum, char *info)
 {
-	int botshift = ReadByte (stream);
-	char *info = ReadString (stream);
-	botskill_t skill;
-	skill.aiming = ReadByte (stream);
-	skill.perfection = ReadByte (stream);
-	skill.reaction = ReadByte (stream);
-	skill.isp = ReadByte (stream);
-
-	botinfo_t *thebot = NULL;
-
-	if (consoleplayer == player)
+	BYTE *infob = (BYTE *)info;
+	D_ReadUserInfoStrings (bnum, &infob, false);
+	if (!deathmatch && playerstarts[bnum].type == 0)
 	{
-		thebot = botinfo;
-
-		while (botshift > 0)
+		Printf ("%s tried to join, but there was no player %d start\n",
+			players[bnum].userinfo.GetName(), bnum+1);
+		ClearPlayer (bnum, false);	// Make the bot inactive again
+		if (botnum > 0)
 		{
-			thebot = thebot->next;
-			botshift--;
-		}
-	}
-
-	if (DoAddBot ((uint8_t *)info, skill))
-	{
-		//Increment this.
-		botnum++;
-
-		if (thebot != NULL)
-		{
-			thebot->inuse = BOTINUSE_Yes;
+			botnum--;
 		}
 	}
 	else
 	{
-		if (thebot != NULL)
+		multiplayer = true; //Prevents cheating and so on; emulates real netgame (almost).
+		players[bnum].isbot = true;
+		playeringame[bnum] = true;
+		players[bnum].mo = NULL;
+		players[bnum].playerstate = PST_ENTER;
+		botingame[bnum] = true;
+
+		if (teamplay)
+			Printf ("%s joined the %s team\n", players[bnum].userinfo.GetName(), Teams[players[bnum].userinfo.GetTeam()].GetName());
+		else
+			Printf ("%s joined the game\n", players[bnum].userinfo.GetName());
+
+		G_DoReborn (bnum, true);
+		if (StatusBar != NULL)
 		{
-			thebot->inuse = BOTINUSE_No;
+			StatusBar->MultiplayerChanged ();
 		}
 	}
-
-	delete[] info;
-}
-
-bool FCajunMaster::DoAddBot (uint8_t *info, botskill_t skill)
-{
-	int bnum;
-
-	for (bnum = 0; bnum < MAXPLAYERS; bnum++)
-	{
-		if (!playeringame[bnum])
-		{
-			break;
-		}
-	}
-
-	if (bnum == MAXPLAYERS)
-	{
-		Printf ("The maximum of %d players/bots has been reached\n", MAXPLAYERS);
-		return false;
-	}
-
-	D_ReadUserInfoStrings (bnum, &info, false);
-
-	multiplayer = true; //Prevents cheating and so on; emulates real netgame (almost).
-	players[bnum].Bot = Create<DBot>();
-	players[bnum].Bot->player = &players[bnum];
-	players[bnum].Bot->skill = skill;
-	playeringame[bnum] = true;
-	players[bnum].mo = NULL;
-	players[bnum].playerstate = PST_ENTER;
-
-	if (teamplay)
-		Printf ("%s joined the %s team\n", players[bnum].userinfo.GetName(), Teams[players[bnum].userinfo.GetTeam()].GetName());
-	else
-		Printf ("%s joined the game\n", players[bnum].userinfo.GetName());
-
-	G_DoReborn (bnum, true);
-	return true;
+	waitingforspawn[bnum] = false;
 }
 
 void FCajunMaster::RemoveAllBots (bool fromlist)
@@ -431,13 +389,13 @@ void FCajunMaster::RemoveAllBots (bool fromlist)
 
 	for (i = 0; i < MAXPLAYERS; ++i)
 	{
-		if (players[i].Bot != NULL)
+		if (playeringame[i] && botingame[i])
 		{
 			// If a player is looking through this bot's eyes, make him
 			// look through his own eyes instead.
 			for (j = 0; j < MAXPLAYERS; ++j)
 			{
-				if (i != j && playeringame[j] && players[j].Bot == NULL)
+				if (i != j && playeringame[j] && !botingame[j])
 				{
 					if (players[j].camera == players[i].mo)
 					{
@@ -449,19 +407,40 @@ void FCajunMaster::RemoveAllBots (bool fromlist)
 					}
 				}
 			}
-			// [ZZ] run event hook
-			E_PlayerDisconnected(i);
-			//
-			FBehavior::StaticStartTypedScripts (SCRIPT_Disconnect, players[i].mo, true, i, true);
 			ClearPlayer (i, !fromlist);
+			FBehavior::StaticStartTypedScripts (SCRIPT_Disconnect, NULL, true, i);
 		}
 	}
 
 	if (fromlist)
 	{
 		wanted_botnum = 0;
+		for (i = 0; i < MAXPLAYERS; i++)
+			waitingforspawn[i] = false;
 	}
 	botnum = 0;
+}
+
+//Clean the bot part of the player_t
+//Used when bots are respawned or at level starts.
+void FCajunMaster::CleanBotstuff (player_t *p)
+{
+	p->angle = ANG45;
+	p->dest = NULL;
+	p->enemy = NULL; //The dead meat.
+	p->missile = NULL; //A threatening missile that needs to be avoided.
+	p->mate = NULL;    //Friend (used for grouping in templay or coop.
+	p->last_mate = NULL; //If bot's mate dissapeared (not if died) that mate is pointed to by this. Allows bot to roam to it if necessary.
+	//Tickers
+	p->t_active = 0; //Open door, lower lift stuff, door must open and lift must go down before bot does anything radical like try a stuckmove
+	p->t_respawn = 0;
+	p->t_strafe = 0;
+	p->t_react = 0;
+	//Misc bools
+	p->isbot = true; //Important.
+	p->first_shot = true; //Used for reaction skill.
+	p->sleft = false; //If false, strafe is right.
+	p->allround = false;
 }
 
 
@@ -516,6 +495,7 @@ void FCajunMaster::ForgetBots ()
 	}
 
 	botinfo = NULL;
+	loaded_bots = 0;
 }
 
 bool FCajunMaster::LoadBots ()
@@ -523,20 +503,15 @@ bool FCajunMaster::LoadBots ()
 	FScanner sc;
 	FString tmp;
 	bool gotteam = false;
-	int loaded_bots = 0;
 
 	bglobal.ForgetBots ();
 	tmp = M_GetCajunPath(BOTFILENAME);
 	if (tmp.IsEmpty())
 	{
-		DPrintf (DMSG_ERROR, "No " BOTFILENAME ", so no bots\n");
+		DPrintf ("No " BOTFILENAME ", so no bots\n");
 		return false;
 	}
-	if (!sc.OpenFile(tmp))
-	{
-		Printf("Unable to open %s. So no bots\n", tmp.GetChars());
-		return false;
-	}
+	sc.OpenFile(tmp);
 
 	while (sc.GetString ())
 	{
@@ -590,7 +565,7 @@ bool FCajunMaster::LoadBots ()
 			case BOTCFG_TEAM:
 				{
 					char teamstr[16];
-					uint8_t teamnum;
+					BYTE teamnum;
 
 					sc.MustGetString ();
 					if (IsNum (sc.String))
@@ -644,9 +619,9 @@ bool FCajunMaster::LoadBots ()
 		newinfo->next = bglobal.botinfo;
 		newinfo->lastteam = TEAM_NONE;
 		bglobal.botinfo = newinfo;
-		loaded_bots++;
+		bglobal.loaded_bots++;
 	}
-	Printf ("%d bots read from %s\n", loaded_bots, BOTFILENAME);
+	Printf ("%d bots read from %s\n", bglobal.loaded_bots, BOTFILENAME);
 	return true;
 }
 
@@ -657,12 +632,4 @@ ADD_STAT (bots)
 		BotThinkCycles.TimeMS(), BotSupportCycles.TimeMS(),
 		BotWTG);
 	return out;
-}
-
-DEFINE_ACTION_FUNCTION(FLevelLocals, RemoveAllBots)
-{
-	PARAM_PROLOGUE;
-	PARAM_BOOL(fromlist);
-	bglobal.RemoveAllBots(fromlist);
-	return 0;
 }

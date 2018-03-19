@@ -50,20 +50,23 @@
 #define NETD_ID		BIGE_ID('N','E','T','D')
 #define WEAP_ID		BIGE_ID('W','E','A','P')
 
+#define	ANGLE2SHORT(x)	((((x)/360) & 65535)
+#define	SHORT2ANGLE(x)	((x)*360)
+
 
 struct zdemoheader_s {
-	uint8_t	demovermajor;
-	uint8_t	demoverminor;
-	uint8_t	minvermajor;
-	uint8_t	minverminor;
-	uint8_t	map[8];
+	BYTE	demovermajor;
+	BYTE	demoverminor;
+	BYTE	minvermajor;
+	BYTE	minverminor;
+	BYTE	map[8];
 	unsigned int rngseed;
-	uint8_t	consoleplayer;
+	BYTE	consoleplayer;
 };
 
 struct usercmd_t
 {
-	uint32_t	buttons;
+	DWORD	buttons;
 	short	pitch;			// up/down
 	short	yaw;			// left/right
 	short	roll;			// "tilt"
@@ -71,6 +74,10 @@ struct usercmd_t
 	short	sidemove;
 	short	upmove;
 };
+
+class FArchive;
+
+FArchive &operator<< (FArchive &arc, usercmd_t &cmd);
 
 // When transmitted, the above message is preceded by a byte
 // indicating which fields are actually present in the message.
@@ -105,7 +112,7 @@ enum EDemoCommand
 	DEM_DROPPLAYER,		// 13 Not implemented, takes a byte
 	DEM_CHANGEMAP,		// 14 Name of map to change to
 	DEM_SUICIDE,		// 15 Player wants to die
-	DEM_ADDBOT,			// 16 Byte: botshift, String: userinfo for bot, 4 Bytes: skill (aiming, perfection, reaction, isp)
+	DEM_ADDBOT,			// 16 Byte: player#, String: userinfo for bot
 	DEM_KILLBOTS,		// 17 Remove all bots from the world
 	DEM_INVUSEALL,		// 18 Use every item (panic!)
 	DEM_INVUSE,			// 19 4 bytes: ID of item to use
@@ -116,8 +123,8 @@ enum EDemoCommand
 	DEM_UNDONE5,		// 24
 	DEM_UNDONE6,		// 25
 	DEM_SUMMON,			// 26 String: Thing to fabricate
-	DEM_FOV,			// 27 Float: New FOV for all players
-	DEM_MYFOV,			// 28 Float: New FOV for this player
+	DEM_FOV,			// 27 Byte: New FOV for all players
+	DEM_MYFOV,			// 28 Byte: New FOV for this player
 	DEM_CHANGEMAP2,		// 29 Byte: Position in new map, String: name of new map
 	DEM_UNDONE7,		// 30
 	DEM_UNDONE8,		// 31
@@ -141,7 +148,7 @@ enum EDemoCommand
 	DEM_DELCONTROLLER,	// 49 Player to remove from the controller list.
 	DEM_KILLCLASSCHEAT,	// 50 String: Class to kill.
 	DEM_UNDONE11,		// 51
-	DEM_SUMMON2,		// 52 String: Thing to fabricate, uint16_t: angle offset
+	DEM_SUMMON2,		// 52 String: Thing to fabricate, WORD: angle offset
 	DEM_SUMMONFRIEND2,	// 53
 	DEM_SUMMONFOE2,		// 54
 	DEM_ADDSLOTDEFAULT,	// 55
@@ -151,17 +158,12 @@ enum EDemoCommand
 	DEM_CONVREPLY,		// 59 Word: Dialogue node, Byte: Reply number
 	DEM_CONVCLOSE,		// 60
 	DEM_CONVNULL,		// 61
-	DEM_RUNSPECIAL,		// 62 Word: Special number, Byte: Arg count, Ints: Args
+	DEM_RUNSPECIAL,		// 62 Byte: Special number, Byte: Arg count, Ints: Args
 	DEM_SETPITCHLIMIT,	// 63 Byte: Up limit, Byte: Down limit (in degrees)
 	DEM_ADVANCEINTER,	// 64 Advance intermission screen state
 	DEM_RUNNAMEDSCRIPT,	// 65 String: Script name, Byte: Arg count + Always flag; each arg is a 4-byte int
 	DEM_REVERTCAMERA,	// 66
 	DEM_SETSLOTPNUM,	// 67 Byte: player number, the rest is the same as DEM_SETSLOT
-	DEM_REMOVE,			// 68
-	DEM_FINISHGAME,		// 69
-	DEM_NETEVENT,		// 70 String: Event name, Byte: Arg count; each arg is a 4-byte int
-	DEM_MDK,			// 71 String: Damage type
-	DEM_SETINV,			// 72 SetInventory
 };
 
 // The following are implemented by cht_DoCheat in m_cheat.cpp
@@ -217,44 +219,33 @@ enum ECheatCommand
 	CHT_GIMMIEJ,
 	CHT_GIMMIEZ,
 	CHT_BUDDHA,
-	CHT_NOCLIP2,
-	CHT_BUDDHA2,
-	CHT_GOD2,
-	CHT_MASSACRE2
+	CHT_NOCLIP2
 };
 
-void StartChunk (int id, uint8_t **stream);
-void FinishChunk (uint8_t **stream);
-void SkipChunk (uint8_t **stream);
+void StartChunk (int id, BYTE **stream);
+void FinishChunk (BYTE **stream);
+void SkipChunk (BYTE **stream);
 
-int UnpackUserCmd (usercmd_t *ucmd, const usercmd_t *basis, uint8_t **stream);
-int PackUserCmd (const usercmd_t *ucmd, const usercmd_t *basis, uint8_t **stream);
-int WriteUserCmdMessage (usercmd_t *ucmd, const usercmd_t *basis, uint8_t **stream);
+int UnpackUserCmd (usercmd_t *ucmd, const usercmd_t *basis, BYTE **stream);
+int PackUserCmd (const usercmd_t *ucmd, const usercmd_t *basis, BYTE **stream);
+int WriteUserCmdMessage (usercmd_t *ucmd, const usercmd_t *basis, BYTE **stream);
 
-// The data sampled per tick (single player)
-// and transmitted to other peers (multiplayer).
-// Mainly movements/button commands per game tick,
-// plus a checksum for internal state consistency.
-struct ticcmd_t
-{
-	usercmd_t	ucmd;
-	int16_t		consistancy;	// checks for net game
-};
+struct ticcmd_t;
 
-int SkipTicCmd (uint8_t **stream, int count);
-void ReadTicCmd (uint8_t **stream, int player, int tic);
+int SkipTicCmd (BYTE **stream, int count);
+void ReadTicCmd (BYTE **stream, int player, int tic);
 void RunNetSpecs (int player, int buf);
 
-int ReadByte (uint8_t **stream);
-int ReadWord (uint8_t **stream);
-int ReadLong (uint8_t **stream);
-float ReadFloat (uint8_t **stream);
-char *ReadString (uint8_t **stream);
-const char *ReadStringConst(uint8_t **stream);
-void WriteByte (uint8_t val, uint8_t **stream);
-void WriteWord (short val, uint8_t **stream);
-void WriteLong (int val, uint8_t **stream);
-void WriteFloat (float val, uint8_t **stream);
-void WriteString (const char *string, uint8_t **stream);
+int ReadByte (BYTE **stream);
+int ReadWord (BYTE **stream);
+int ReadLong (BYTE **stream);
+float ReadFloat (BYTE **stream);
+char *ReadString (BYTE **stream);
+const char *ReadStringConst(BYTE **stream);
+void WriteByte (BYTE val, BYTE **stream);
+void WriteWord (short val, BYTE **stream);
+void WriteLong (int val, BYTE **stream);
+void WriteFloat (float val, BYTE **stream);
+void WriteString (const char *string, BYTE **stream);
 
 #endif //__D_PROTOCOL_H__

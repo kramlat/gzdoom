@@ -46,12 +46,6 @@
 #include "r_state.h"
 #include "r_data/colormaps.h"
 #include "w_wad.h"
-#include "p_tags.h"
-#include "p_terrain.h"
-#include "p_spec.h"
-#include "g_levellocals.h"
-#include "info.h"
-#include "vm.h"
 
 //===========================================================================
 //
@@ -107,7 +101,7 @@ static char HexenSectorSpecialOk[256]={
 static inline bool P_IsThingSpecial(int specnum)
 {
 	return (specnum >= Thing_Projectile && specnum <= Thing_SpawnNoFog) ||
-			specnum == Thing_SpawnFacing || specnum == Thing_ProjectileIntercept || specnum == Thing_ProjectileAimed;
+			specnum == Thing_SpawnFacing || Thing_ProjectileIntercept || Thing_ProjectileAimed;
 }
 
 enum
@@ -151,7 +145,7 @@ extern TArray<int>		linemap;
 
 void UDMFParserBase::Skip()
 {
-	if (developer >= DMSG_WARNING) sc.ScriptMessage("Ignoring unknown UDMF key \"%s\".", sc.String);
+	if (developer) sc.ScriptMessage("Ignoring unknown key \"%s\".", sc.String);
 	if(sc.CheckToken('{'))
 	{
 		int level = 1;
@@ -256,23 +250,14 @@ double UDMFParserBase::CheckFloat(const char *key)
 	return sc.Float;
 }
 
-double UDMFParserBase::CheckCoordinate(const char *key)
+fixed_t UDMFParserBase::CheckFixed(const char *key)
 {
-	if (sc.TokenType != TK_IntConst && sc.TokenType != TK_FloatConst)
-	{
-		sc.ScriptMessage("Floating point value expected for key '%s'", key);
-	}
-	if (sc.Float < -32768 || sc.Float > 32768)
-	{
-		sc.ScriptMessage("Value %f out of range for a coordinate '%s'. Valid range is ]-32768 .. 32768]", sc.Float, key);
-		BadCoordinates = true;	// If this happens the map must not allowed to be started.
-	}
-	return sc.Float;
+	return FLOAT2FIXED(CheckFloat(key));
 }
 
-DAngle UDMFParserBase::CheckAngle(const char *key)
+angle_t UDMFParserBase::CheckAngle(const char *key)
 {
-	return DAngle(CheckFloat(key)).Normalized360();
+	return angle_t(CheckFloat(key) * ANGLE_90 / 90.);
 }
 
 bool UDMFParserBase::CheckBool(const char *key)
@@ -312,7 +297,7 @@ void P_ClearUDMFKeys()
 	}
 }
 
-static int udmfcmp(const void *a, const void *b)
+static int STACK_ARGS udmfcmp(const void *a, const void *b)
 {
 	FUDMFKey *A = (FUDMFKey*)a;
 	FUDMFKey *B = (FUDMFKey*)b;
@@ -327,11 +312,6 @@ void FUDMFKeys::Sort()
 
 FUDMFKey *FUDMFKeys::Find(FName key)
 {
-	if (!mSorted)
-	{
-		mSorted = true;
-		Sort();
-	}
 	int min = 0, max = Size()-1;
 
 	while (min <= max)
@@ -359,82 +339,44 @@ FUDMFKey *FUDMFKeys::Find(FName key)
 //
 //===========================================================================
 
-int GetUDMFInt(int type, int index, FName key)
+int GetUDMFInt(int type, int index, const char *key)
 {
 	assert(type >=0 && type <=3);
 
-	FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
-
-	if (pKeys != NULL)
+	if (index > 0)
 	{
-		FUDMFKey *pKey = pKeys->Find(key);
-		if (pKey != NULL)
+		FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
+
+		if (pKeys != NULL)
 		{
-			return pKey->IntVal;
+			FUDMFKey *pKey = pKeys->Find(key);
+			if (pKey != NULL)
+			{
+				return pKey->IntVal;
+			}
 		}
 	}
 	return 0;
 }
 
-DEFINE_ACTION_FUNCTION(FLevelLocals, GetUDMFInt)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FLevelLocals);
-	PARAM_INT(type);
-	PARAM_INT(index);
-	PARAM_NAME(key);
-	ACTION_RETURN_INT(GetUDMFInt(type, index, key));
-}
-
-double GetUDMFFloat(int type, int index, FName key)
+fixed_t GetUDMFFixed(int type, int index, const char *key)
 {
 	assert(type >=0 && type <=3);
 
-	FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
-
-	if (pKeys != NULL)
+	if (index > 0)
 	{
-		FUDMFKey *pKey = pKeys->Find(key);
-		if (pKey != NULL)
+		FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
+
+		if (pKeys != NULL)
 		{
-			return pKey->FloatVal;
+			FUDMFKey *pKey = pKeys->Find(key);
+			if (pKey != NULL)
+			{
+				return FLOAT2FIXED(pKey->FloatVal);
+			}
 		}
 	}
 	return 0;
-}
-
-DEFINE_ACTION_FUNCTION(FLevelLocals, GetUDMFFloat)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FLevelLocals);
-	PARAM_INT(type);
-	PARAM_INT(index);
-	PARAM_NAME(key);
-	ACTION_RETURN_FLOAT(GetUDMFFloat(type, index, key));
-}
-
-FString GetUDMFString(int type, int index, FName key)
-{
-	assert(type >= 0 && type <= 3);
-
-	FUDMFKeys *pKeys = UDMFKeys[type].CheckKey(index);
-
-	if (pKeys != NULL)
-	{
-		FUDMFKey *pKey = pKeys->Find(key);
-		if (pKey != NULL)
-		{
-			return pKey->StringVal;
-		}
-	}
-	return "";
-}
-
-DEFINE_ACTION_FUNCTION(FLevelLocals, GetUDMFString)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FLevelLocals);
-	PARAM_INT(type);
-	PARAM_INT(index);
-	PARAM_NAME(key);
-	ACTION_RETURN_STRING(GetUDMFString(type, index, key));
 }
 
 
@@ -443,14 +385,6 @@ DEFINE_ACTION_FUNCTION(FLevelLocals, GetUDMFString)
 // UDMF parser
 //
 //===========================================================================
-
-struct UDMFScroll
-{
-	bool ceiling;
-	int index;
-	double x, y;
-	FName type;
-};
 
 class UDMFParser : public UDMFParserBase
 {
@@ -463,7 +397,7 @@ class UDMFParser : public UDMFParserBase
 	TArray<intmapsidedef_t> ParsedSideTextures;
 	TArray<sector_t> ParsedSectors;
 	TArray<vertex_t> ParsedVertices;
-	TArray<UDMFScroll> UDMFScrollers;
+	TArray<vertexdata_t> ParsedVertexDatas;
 
 	FDynamicColormap	*fogMap, *normMap;
 	FMissingTextureTracker &missingTex;
@@ -541,11 +475,10 @@ public:
 		FString arg0str, arg1str;
 
 		memset(th, 0, sizeof(*th));
-		th->Gravity = 1;
+		th->gravity = FRACUNIT;
 		th->RenderStyle = STYLE_Count;
-		th->Alpha = -1;
-		th->Health = 1;
-		th->FloatbobPhase = -1;
+		th->alpha = -1;
+		th->health = 1;
 		sc.MustGetToken('{');
 		while (!sc.CheckToken('}'))
 		{
@@ -557,15 +490,15 @@ public:
 				break;
 
 			case NAME_X:
-				th->pos.X = CheckCoordinate(key);
+				th->x = CheckFixed(key);
 				break;
 
 			case NAME_Y:
-				th->pos.Y = CheckCoordinate(key);
+				th->y = CheckFixed(key);
 				break;
 
 			case NAME_Height:
-				th->pos.Z = CheckCoordinate(key);
+				th->z = CheckFixed(key);
 				break;
 
 			case NAME_Angle:
@@ -573,8 +506,7 @@ public:
 				break;
 
 			case NAME_Type:
-				th->EdNum = (short)CheckInt(key);
-				th->info = DoomEdMap.CheckKey(th->EdNum);
+				th->type = (short)CheckInt(key);
 				break;
 
 			case NAME_Conversation:
@@ -589,7 +521,7 @@ public:
 
 			case NAME_Gravity:
 				CHECK_N(Zd | Zdt)
-				th->Gravity = CheckFloat(key);
+				th->gravity = CheckFixed(key);
 				break;
 
 			case NAME_Arg0:
@@ -604,7 +536,6 @@ public:
 			case NAME_Arg0Str:
 				CHECK_N(Zd);
 				arg0str = CheckString(key);
-				th->arg0str = arg0str;
 				break;
 
 			case NAME_Arg1Str:
@@ -704,11 +635,6 @@ public:
 				Flag(th->flags, MTF_SECRET, key); 
 				break;
 
-			case NAME_Floatbobphase:
-				CHECK_N(Zd | Zdt)
-				th->FloatbobPhase = CheckInt(key);
-				break;
-
 			case NAME_Renderstyle:
 				{
 				FName style = CheckString(key);
@@ -765,15 +691,14 @@ public:
 				break;
 
 			case NAME_Alpha:
-				th->Alpha = CheckFloat(key);
+				th->alpha = CheckFixed(key);
 				break;
 
 			case NAME_FillColor:
 				th->fillcolor = CheckInt(key);
-				break;
 
 			case NAME_Health:
-				th->Health = CheckFloat(key);
+				th->health = CheckInt(key);
 				break;
 
 			case NAME_Score:
@@ -789,24 +714,18 @@ public:
 				break;
 
 			case NAME_ScaleX:
-				th->Scale.X = CheckFloat(key);
+				th->scaleX = CheckFixed(key);
 				break;
 
 			case NAME_ScaleY:
-				th->Scale.Y = CheckFloat(key);
+				th->scaleY = CheckFixed(key);
 				break;
 
 			case NAME_Scale:
-				th->Scale.X = th->Scale.Y = CheckFloat(key);
-				break;
-
-			case NAME_FriendlySeeBlocks:
-				CHECK_N(Zd | Zdt)
-				th->friendlyseeblocks = CheckInt(key);
+				th->scaleX = th->scaleY = CheckFixed(key);
 				break;
 
 			default:
-				CHECK_N(Zd | Zdt)
 				if (0 == strnicmp("user_", key.GetChars(), 5))
 				{ // Custom user key - Sets an actor's user variable directly
 					FMapThingUserData ud;
@@ -862,13 +781,10 @@ public:
 		bool strifetrans = false;
 		bool strifetrans2 = false;
 		FString arg0str, arg1str;
-		int lineid = -1;	// forZDoomTranslated namespace
-		FString tagstring;
 
 		memset(ld, 0, sizeof(*ld));
-		ld->alpha = 1.;
-		ld->portalindex = UINT_MAX;
-		ld->portaltransferred = UINT_MAX;
+		ld->Alpha = FRACUNIT;
+		ld->id = -1;
 		ld->sidedef[0] = ld->sidedef[1] = NULL;
 		if (level.flags2 & LEVEL2_CLIPMIDTEX) ld->flags |= ML_CLIP_MIDTEX;
 		if (level.flags2 & LEVEL2_WRAPMIDTEX) ld->flags |= ML_WRAP_MIDTEX;
@@ -901,8 +817,7 @@ public:
 				continue;
 
 			case NAME_Id:
-				lineid = CheckInt(key);
-				tagManager.AddLineID(index, lineid);
+				ld->id = CheckInt(key);
 				continue;
 
 			case NAME_Sidefront:
@@ -1047,7 +962,7 @@ public:
 			if (namespace_bits & (Zd|Zdt|Va)) switch(key)
 			{
 			case NAME_Alpha:
-				ld->setAlpha(CheckFloat(key));
+				ld->Alpha = CheckFixed(key);
 				continue;
 
 			case NAME_Renderstyle:
@@ -1115,42 +1030,18 @@ public:
 				Flag(ld->flags, ML_BLOCKHITSCAN, key); 
 				continue;
 			
-			// [TP] Locks the special with a key
+			// [Dusk] lock number
 			case NAME_Locknumber:
 				ld->locknumber = CheckInt(key);
 				continue;
-
-			// [TP] Causes a 3d midtex to behave like an impassible line
-			case NAME_Midtex3dimpassible:
-				Flag(ld->flags, ML_3DMIDTEX_IMPASS, key);
-				continue;
-
-			case NAME_MoreIds:
-				// delay parsing of the tag string until parsing of the sector is complete
-				// This ensures that the ID is always the first tag in the list.
-				tagstring = CheckString(key);
-				break;
-
 
 			default:
 				break;
 			}
 
-
-			if ((namespace_bits & (Zd | Zdt)) && !strnicmp("user_", key.GetChars(), 5))
+			if (!strnicmp("user_", key.GetChars(), 5))
 			{
 				AddUserKey(key, UDMF_Line, index);
-			}
-		}
-
-		if (tagstring.IsNotEmpty())
-		{
-			FScanner sc;
-			sc.OpenString("tagstring", tagstring);
-			// scan the string as long as valid numbers can be found
-			while (sc.CheckNumber())
-			{
-				if (sc.Number != 0)	tagManager.AddLineID(index, sc.Number);
 			}
 		}
 
@@ -1161,7 +1052,7 @@ public:
 			maplinedef_t mld;
 			memset(&mld, 0, sizeof(mld));
 			mld.special = ld->special;
-			mld.tag = ld->args[0];
+			mld.tag = ld->id;
 			P_TranslateLineDef(ld, &mld);
 			ld->flags = saved | (ld->flags&(ML_MONSTERSCANACTIVATE|ML_REPEAT_SPECIAL|ML_FIRSTSIDEONLY));
 		}
@@ -1169,13 +1060,13 @@ public:
 		{
 			ld->activation = (ld->activation & ~SPAC_Use) | SPAC_UseThrough;
 		}
-		if (strifetrans && ld->alpha == 1.)
+		if (strifetrans && ld->Alpha == FRACUNIT)
 		{
-			ld->alpha = 0.75;
+			ld->Alpha = FRACUNIT * 3/4;
 		}
-		if (strifetrans2 && ld->alpha == 1.)
+		if (strifetrans2 && ld->Alpha == FRACUNIT)
 		{
-			ld->alpha = 0.25;
+			ld->Alpha = FRACUNIT * 1/4;
 		}
 		if (ld->sidedef[0] == NULL)
 		{
@@ -1190,10 +1081,6 @@ public:
 		{
 			ld->args[1] = -FName(arg1str);
 		}
-		if ((ld->flags & ML_3DMIDTEX_IMPASS) && !(ld->flags & ML_3DMIDTEX)) // [TP]
-		{
-			Printf ("Line %d has midtex3dimpassible without midtex3d.\n", index);
-		}
 	}
 
 	//===========================================================================
@@ -1204,15 +1091,14 @@ public:
 
 	void ParseSidedef(side_t *sd, intmapsidedef_t *sdt, int index)
 	{
-		double texOfs[2]={0,0};
+		fixed_t texofs[2]={0,0};
 
 		memset(sd, 0, sizeof(*sd));
 		sdt->bottomtexture = "-";
 		sdt->toptexture = "-";
 		sdt->midtexture = "-";
-		sd->SetTextureXScale(1.);
-		sd->SetTextureYScale(1.);
-		sd->UDMFIndex = index;
+		sd->SetTextureXScale(FRACUNIT);
+		sd->SetTextureYScale(FRACUNIT);
 
 		sc.MustGetToken('{');
 		while (!sc.CheckToken('}'))
@@ -1221,11 +1107,11 @@ public:
 			switch(key)
 			{
 			case NAME_Offsetx:
-				texOfs[0] = CheckInt(key);
+				texofs[0] = CheckInt(key) << FRACBITS;
 				continue;
 
 			case NAME_Offsety:
-				texOfs[1] = CheckInt(key);
+				texofs[1] = CheckInt(key) << FRACBITS;
 				continue;
 
 			case NAME_Texturetop:
@@ -1251,51 +1137,51 @@ public:
 			if (namespace_bits & (Zd|Zdt|Va)) switch(key)
 			{
 			case NAME_offsetx_top:
-				sd->SetTextureXOffset(side_t::top, CheckFloat(key));
+				sd->SetTextureXOffset(side_t::top, CheckFixed(key));
 				continue;
 
 			case NAME_offsety_top:
-				sd->SetTextureYOffset(side_t::top, CheckFloat(key));
+				sd->SetTextureYOffset(side_t::top, CheckFixed(key));
 				continue;
 
 			case NAME_offsetx_mid:
-				sd->SetTextureXOffset(side_t::mid, CheckFloat(key));
+				sd->SetTextureXOffset(side_t::mid, CheckFixed(key));
 				continue;
 
 			case NAME_offsety_mid:
-				sd->SetTextureYOffset(side_t::mid, CheckFloat(key));
+				sd->SetTextureYOffset(side_t::mid, CheckFixed(key));
 				continue;
 
 			case NAME_offsetx_bottom:
-				sd->SetTextureXOffset(side_t::bottom, CheckFloat(key));
+				sd->SetTextureXOffset(side_t::bottom, CheckFixed(key));
 				continue;
 
 			case NAME_offsety_bottom:
-				sd->SetTextureYOffset(side_t::bottom, CheckFloat(key));
+				sd->SetTextureYOffset(side_t::bottom, CheckFixed(key));
 				continue;
 
 			case NAME_scalex_top:
-				sd->SetTextureXScale(side_t::top, CheckFloat(key));
+				sd->SetTextureXScale(side_t::top, CheckFixed(key));
 				continue;
 
 			case NAME_scaley_top:
-				sd->SetTextureYScale(side_t::top, CheckFloat(key));
+				sd->SetTextureYScale(side_t::top, CheckFixed(key));
 				continue;
 
 			case NAME_scalex_mid:
-				sd->SetTextureXScale(side_t::mid, CheckFloat(key));
+				sd->SetTextureXScale(side_t::mid, CheckFixed(key));
 				continue;
 
 			case NAME_scaley_mid:
-				sd->SetTextureYScale(side_t::mid, CheckFloat(key));
+				sd->SetTextureYScale(side_t::mid, CheckFixed(key));
 				continue;
 
 			case NAME_scalex_bottom:
-				sd->SetTextureXScale(side_t::bottom, CheckFloat(key));
+				sd->SetTextureXScale(side_t::bottom, CheckFixed(key));
 				continue;
 
 			case NAME_scaley_bottom:
-				sd->SetTextureYScale(side_t::bottom, CheckFloat(key));
+				sd->SetTextureYScale(side_t::bottom, CheckFixed(key));
 				continue;
 
 			case NAME_light:
@@ -1334,18 +1220,18 @@ public:
 				break;
 
 			}
-			if ((namespace_bits & (Zd | Zdt)) && !strnicmp("user_", key.GetChars(), 5))
+			if (!strnicmp("user_", key.GetChars(), 5))
 			{
 				AddUserKey(key, UDMF_Side, index);
 			}
 		}
 		// initialization of these is delayed to allow separate offsets and add them with the global ones.
-		sd->AddTextureXOffset(side_t::top, texOfs[0]);
-		sd->AddTextureXOffset(side_t::mid, texOfs[0]);
-		sd->AddTextureXOffset(side_t::bottom, texOfs[0]);
-		sd->AddTextureYOffset(side_t::top, texOfs[1]);
-		sd->AddTextureYOffset(side_t::mid, texOfs[1]);
-		sd->AddTextureYOffset(side_t::bottom, texOfs[1]);
+		sd->AddTextureXOffset(side_t::top, texofs[0]);
+		sd->AddTextureXOffset(side_t::mid, texofs[0]);
+		sd->AddTextureXOffset(side_t::bottom, texofs[0]);
+		sd->AddTextureYOffset(side_t::top, texofs[1]);
+		sd->AddTextureYOffset(side_t::mid, texofs[1]);
+		sd->AddTextureYOffset(side_t::bottom, texofs[1]);
 	}
 
 	//===========================================================================
@@ -1356,48 +1242,31 @@ public:
 
 	void ParseSector(sector_t *sec, int index)
 	{
-		PalEntry lightcolor = -1;
-		PalEntry fadecolor = -1;
-		int fogdensity = -1;
+		int lightcolor = -1;
+		int fadecolor = -1;
 		int desaturation = -1;
 		int fplaneflags = 0, cplaneflags = 0;
 		double fp[4] = { 0 }, cp[4] = { 0 };
-		FString tagstring;
-
-		// Brand new UDMF scroller properties
-		double scroll_ceil_x = 0;
-		double scroll_ceil_y = 0;
-		FName scroll_ceil_type;
-
-		double scroll_floor_x = 0;
-		double scroll_floor_y = 0;
-		FName scroll_floor_type;
-
 
 		memset(sec, 0, sizeof(*sec));
 		sec->lightlevel = 160;
-		sec->SetXScale(sector_t::floor, 1.);	// [RH] floor and ceiling scaling
-		sec->SetYScale(sector_t::floor, 1.);
-		sec->SetXScale(sector_t::ceiling, 1.);
-		sec->SetYScale(sector_t::ceiling, 1.);
-		sec->SetAlpha(sector_t::floor, 1.);
-		sec->SetAlpha(sector_t::ceiling, 1.);
-		sec->thinglist = nullptr;
-		sec->touching_thinglist = nullptr;		// phares 3/14/98
-		sec->sectorportal_thinglist = nullptr;
-		sec->touching_renderthings = nullptr;
+		sec->SetXScale(sector_t::floor, FRACUNIT);	// [RH] floor and ceiling scaling
+		sec->SetYScale(sector_t::floor, FRACUNIT);
+		sec->SetXScale(sector_t::ceiling, FRACUNIT);
+		sec->SetYScale(sector_t::ceiling, FRACUNIT);
+		sec->SetAlpha(sector_t::floor, FRACUNIT);
+		sec->SetAlpha(sector_t::ceiling, FRACUNIT);
+		sec->thinglist = NULL;
+		sec->touching_thinglist = NULL;		// phares 3/14/98
 		sec->seqType = (level.flags & LEVEL_SNDSEQTOTALCTRL) ? 0 : -1;
 		sec->nextsec = -1;	//jff 2/26/98 add fields to support locking out
 		sec->prevsec = -1;	// stair retriggering until build completes
 		sec->heightsec = NULL;	// sector used to get floor and ceiling height
 		sec->sectornum = index;
-		sec->damageinterval = 32;
-		sec->terrainnum[sector_t::ceiling] = sec->terrainnum[sector_t::floor] = -1;
-		memset(sec->SpecialColors, -1, sizeof(sec->SpecialColors));
 		if (floordrop) sec->Flags = SECF_FLOORDROP;
 		// killough 3/7/98: end changes
 
-		sec->gravity = 1.;	// [RH] Default sector gravity of 1.0
+		sec->gravity = 1.f;	// [RH] Default sector gravity of 1.0
 		sec->ZoneNumber = 0xFFFF;
 
 		// killough 8/28/98: initialize all sectors to normal friction
@@ -1411,11 +1280,11 @@ public:
 			switch(key)
 			{
 			case NAME_Heightfloor:
-				sec->SetPlaneTexZ(sector_t::floor, CheckCoordinate(key));
+				sec->SetPlaneTexZ(sector_t::floor, CheckInt(key) << FRACBITS);
 				continue;
 
 			case NAME_Heightceiling:
-				sec->SetPlaneTexZ(sector_t::ceiling, CheckCoordinate(key));
+				sec->SetPlaneTexZ(sector_t::ceiling, CheckInt(key) << FRACBITS);
 				continue;
 
 			case NAME_Texturefloor:
@@ -1435,13 +1304,13 @@ public:
 				if (isTranslated) sec->special = P_TranslateSectorSpecial(sec->special);
 				else if (namespc == NAME_Hexen)
 				{
-					if (sec->special < 0 || sec->special > 140 || !HexenSectorSpecialOk[sec->special])
+					if (sec->special < 0 || sec->special > 255 || !HexenSectorSpecialOk[sec->special])
 						sec->special = 0;	// NULL all unknown specials
 				}
 				continue;
 
 			case NAME_Id:
-				tagManager.AddSectorTag(index, CheckInt(key));
+				sec->tag = (short)CheckInt(key);
 				continue;
 
 			default:
@@ -1451,35 +1320,35 @@ public:
 			if (namespace_bits & (Zd|Zdt|Va)) switch(key)
 			{
 				case NAME_Xpanningfloor:
-					sec->SetXOffset(sector_t::floor, CheckFloat(key));
+					sec->SetXOffset(sector_t::floor, CheckFixed(key));
 					continue;
 
 				case NAME_Ypanningfloor:
-					sec->SetYOffset(sector_t::floor, CheckFloat(key));
+					sec->SetYOffset(sector_t::floor, CheckFixed(key));
 					continue;
 
 				case NAME_Xpanningceiling:
-					sec->SetXOffset(sector_t::ceiling, CheckFloat(key));
+					sec->SetXOffset(sector_t::ceiling, CheckFixed(key));
 					continue;
 
 				case NAME_Ypanningceiling:
-					sec->SetYOffset(sector_t::ceiling, CheckFloat(key));
+					sec->SetYOffset(sector_t::ceiling, CheckFixed(key));
 					continue;
 
 				case NAME_Xscalefloor:
-					sec->SetXScale(sector_t::floor, CheckFloat(key));
+					sec->SetXScale(sector_t::floor, CheckFixed(key));
 					continue;
 
 				case NAME_Yscalefloor:
-					sec->SetYScale(sector_t::floor, CheckFloat(key));
+					sec->SetYScale(sector_t::floor, CheckFixed(key));
 					continue;
 
 				case NAME_Xscaleceiling:
-					sec->SetXScale(sector_t::ceiling, CheckFloat(key));
+					sec->SetXScale(sector_t::ceiling, CheckFixed(key));
 					continue;
 
 				case NAME_Yscaleceiling:
-					sec->SetYScale(sector_t::ceiling, CheckFloat(key));
+					sec->SetYScale(sector_t::ceiling, CheckFixed(key));
 					continue;
 
 				case NAME_Rotationfloor:
@@ -1499,11 +1368,11 @@ public:
 					continue;
 
 				case NAME_Alphafloor:
-					sec->SetAlpha(sector_t::floor, CheckFloat(key));
+					sec->SetAlpha(sector_t::floor, CheckFixed(key));
 					continue;
 
 				case NAME_Alphaceiling:
-					sec->SetAlpha(sector_t::ceiling, CheckFloat(key));
+					sec->SetAlpha(sector_t::ceiling, CheckFixed(key));
 					continue;
 
 				case NAME_Renderstylefloor:
@@ -1535,7 +1404,7 @@ public:
 					continue;
 
 				case NAME_Gravity:
-					sec->gravity = CheckFloat(key);
+					sec->gravity = float(CheckFloat(key));
 					continue;
 
 				case NAME_Lightcolor:
@@ -1546,33 +1415,9 @@ public:
 					fadecolor = CheckInt(key);
 					continue;
 
-				case NAME_Color_Floor:
-					sec->SpecialColors[sector_t::floor] = CheckInt(key) | 0xff000000;
-					break;
-
-				case NAME_Color_Ceiling:
-					sec->SpecialColors[sector_t::ceiling] = CheckInt(key) | 0xff000000;
-					break;
-
-				case NAME_Color_Walltop:
-					sec->SpecialColors[sector_t::walltop] = CheckInt(key) | 0xff000000;
-					break;
-
-				case NAME_Color_Wallbottom:
-					sec->SpecialColors[sector_t::wallbottom] = CheckInt(key) | 0xff000000;
-					break;
-
-				case NAME_Color_Sprites:
-					sec->SpecialColors[sector_t::sprites] = CheckInt(key) | 0xff000000;
-					break;
-
 				case NAME_Desaturation:
-					desaturation = int(255*CheckFloat(key) + FLT_EPSILON);	// FLT_EPSILON to avoid rounding errors with numbers slightly below a full integer.
+					desaturation = int(255*CheckFloat(key));
 					continue;
-
-				case NAME_fogdensity:
-					fogdensity = CheckInt(key);
-					break;
 
 				case NAME_Silent:
 					Flag(sec->Flags, SECF_SILENT, key);
@@ -1643,232 +1488,86 @@ public:
 					cp[3] = CheckFloat(key);
 					break;
 
-				case NAME_damageamount:
-					sec->damageamount = CheckInt(key);
-					break;
-
-				case NAME_damagetype:
-					sec->damagetype = CheckString(key);
-					break;
-
-				case NAME_damageinterval:
-					sec->damageinterval = CheckInt(key);
-					if (sec->damageinterval < 1) sec->damageinterval = 1;
-					break;
-
-				case NAME_leakiness:
-					sec->leakydamage = CheckInt(key);
-					break;
-
-				case NAME_damageterraineffect:
-					Flag(sec->Flags, SECF_DMGTERRAINFX, key);
-					break;
-
-				case NAME_damagehazard:
-					Flag(sec->Flags, SECF_HAZARD, key);
-					break;
-
-				case NAME_floorterrain:
-					sec->terrainnum[sector_t::floor] = P_FindTerrain(CheckString(key));
-					break;
-
-				case NAME_ceilingterrain:
-					sec->terrainnum[sector_t::ceiling] = P_FindTerrain(CheckString(key));
-					break;
-
-				case NAME_floor_reflect:
-					sec->reflect[sector_t::floor] = (float)CheckFloat(key);
-					break;
-
-				case NAME_ceiling_reflect:
-					sec->reflect[sector_t::ceiling] = (float)CheckFloat(key);
-					break;
-
-				case NAME_floorglowcolor:
-					sec->planes[sector_t::floor].GlowColor = CheckInt(key);
-					break;
-
-				case NAME_floorglowheight:
-					sec->planes[sector_t::floor].GlowHeight = (float)CheckFloat(key);
-					break;
-
-				case NAME_ceilingglowcolor:
-					sec->planes[sector_t::ceiling].GlowColor = CheckInt(key);
-					break;
-
-				case NAME_ceilingglowheight:
-					sec->planes[sector_t::ceiling].GlowHeight = (float)CheckFloat(key);
-					break;
-
-				case NAME_Noattack:
-					Flag(sec->Flags, SECF_NOATTACK, key);
-					break;
-
-				case NAME_MoreIds:
-					// delay parsing of the tag string until parsing of the sector is complete
-					// This ensures that the ID is always the first tag in the list.
-					tagstring = CheckString(key);
-					break;
-
-				case NAME_portal_ceil_blocksound:
-					Flag(sec->planes[sector_t::ceiling].Flags, PLANEF_BLOCKSOUND, key);
-					break;
-
-				case NAME_portal_ceil_disabled:
-					Flag(sec->planes[sector_t::ceiling].Flags, PLANEF_DISABLED, key);
-					break;
-
-				case NAME_portal_ceil_nopass:
-					Flag(sec->planes[sector_t::ceiling].Flags, PLANEF_NOPASS, key);
-					break;
-
-				case NAME_portal_ceil_norender:
-					Flag(sec->planes[sector_t::ceiling].Flags, PLANEF_NORENDER, key);
-					break;
-
-				case NAME_portal_ceil_overlaytype:
-					if (!stricmp(CheckString(key), "translucent")) sec->planes[sector_t::ceiling].Flags &= ~PLANEF_ADDITIVE;
-					else if (!stricmp(CheckString(key), "additive")) sec->planes[sector_t::ceiling].Flags |= PLANEF_ADDITIVE;
-					break;
-				
-				case NAME_portal_floor_blocksound:
-					Flag(sec->planes[sector_t::floor].Flags, PLANEF_BLOCKSOUND, key);
-					break;
-
-				case NAME_portal_floor_disabled:
-					Flag(sec->planes[sector_t::floor].Flags, PLANEF_DISABLED, key);
-					break;
-
-				case NAME_portal_floor_nopass:
-					Flag(sec->planes[sector_t::floor].Flags, PLANEF_NOPASS, key);
-					break;
-
-				case NAME_portal_floor_norender:
-					Flag(sec->planes[sector_t::floor].Flags, PLANEF_NORENDER, key);
-					break;
-
-				case NAME_portal_floor_overlaytype:
-					if (!stricmp(CheckString(key), "translucent")) sec->planes[sector_t::floor].Flags &= ~PLANEF_ADDITIVE;
-					else if (!stricmp(CheckString(key), "additive")) sec->planes[sector_t::floor].Flags |= PLANEF_ADDITIVE;
-					break;
-
-				case NAME_scroll_ceil_x:
-					scroll_ceil_x = CheckFloat(key);
-					break;
-
-				case NAME_scroll_ceil_y:
-					scroll_ceil_y = CheckFloat(key);
-					break;
-
-				case NAME_scroll_ceil_type:
-					scroll_ceil_type = CheckString(key);
-					break;
-
-				case NAME_scroll_floor_x:
-					scroll_floor_x = CheckFloat(key);
-					break;
-
-				case NAME_scroll_floor_y:
-					scroll_floor_y = CheckFloat(key);
-					break;
-
-				case NAME_scroll_floor_type:
-					scroll_floor_type = CheckString(key);
-					break;
-
-				// These two are used by Eternity for something I do not understand.
-				//case NAME_portal_ceil_useglobaltex:
-				//case NAME_portal_floor_useglobaltex:
-					
 				default:
 					break;
 			}
-			if ((namespace_bits & (Zd | Zdt)) && !strnicmp("user_", key.GetChars(), 5))
+				
+			if (!strnicmp("user_", key.GetChars(), 5))
 			{
 				AddUserKey(key, UDMF_Sector, index);
 			}
 		}
 
-		if (tagstring.IsNotEmpty())
-		{
-			FScanner sc;
-			sc.OpenString("tagstring", tagstring);
-			// scan the string as long as valid numbers can be found
-			while (sc.CheckNumber())
-			{
-				if (sc.Number != 0)	tagManager.AddSectorTag(index, sc.Number);
-			}
-		}
-
-		if (sec->damageamount == 0)
-		{
-			// If no damage is set, clear all other related properties so that they do not interfere
-			// with other means of setting them.
-			sec->damagetype = NAME_None;
-			sec->damageinterval = 0;
-			sec->leakydamage = 0;
-			sec->Flags &= ~SECF_DAMAGEFLAGS;
-		}
-
-		// Cannot be initialized yet because they need the final sector array.
-		if (scroll_ceil_type != NAME_None)
-		{
-			UDMFScrollers.Push({ true, index, scroll_ceil_x, scroll_ceil_y, scroll_ceil_type });
-		}
-		if (scroll_floor_type != NAME_None)
-		{
-			UDMFScrollers.Push({ false, index, scroll_floor_x, scroll_floor_y, scroll_floor_type });
-		}
-
+		sec->secretsector = !!(sec->special&SECRET_MASK);
 		
 		// Reset the planes to their defaults if not all of the plane equation's parameters were found.
 		if (fplaneflags != 15)
 		{
-			sec->floorplane.SetAtHeight(sec->GetPlaneTexZ(sector_t::floor), sector_t::floor);
+			sec->floorplane.a = sec->floorplane.b = 0;
+			sec->floorplane.d = -sec->GetPlaneTexZ(sector_t::floor);
+			sec->floorplane.c = FRACUNIT;
+			sec->floorplane.ic = FRACUNIT;
 		}
 		else
 		{
+			double ulen = TVector3<double>(fp[0], fp[1], fp[2]).Length();
+
 			// normalize the vector, it must have a length of 1
-			DVector3 n = DVector3(fp[0], fp[1], fp[2]).Unit();
-			sec->floorplane.set(n.X, n.Y, n.Z, fp[3]);
+			sec->floorplane.a = FLOAT2FIXED(fp[0] / ulen);
+			sec->floorplane.b = FLOAT2FIXED(fp[1] / ulen);
+			sec->floorplane.c = FLOAT2FIXED(fp[2] / ulen);
+			sec->floorplane.d = FLOAT2FIXED(fp[3] / ulen);
+			sec->floorplane.ic = FLOAT2FIXED(ulen / fp[2]);
 		}
 		if (cplaneflags != 15)
 		{
-			sec->ceilingplane.SetAtHeight(sec->GetPlaneTexZ(sector_t::ceiling), sector_t::ceiling);
+			sec->ceilingplane.a = sec->ceilingplane.b = 0;
+			sec->ceilingplane.d = sec->GetPlaneTexZ(sector_t::ceiling);
+			sec->ceilingplane.c = -FRACUNIT;
+			sec->ceilingplane.ic = -FRACUNIT;
 		}
 		else
 		{
-			DVector3 n = DVector3(cp[0], cp[1], cp[2]).Unit();
-			sec->ceilingplane.set(n.X, n.Y, n.Z, cp[3]);
+			double ulen = TVector3<double>(cp[0], cp[1], cp[2]).Length();
+
+			// normalize the vector, it must have a length of 1
+			sec->floorplane.a = FLOAT2FIXED(cp[0] / ulen);
+			sec->floorplane.b = FLOAT2FIXED(cp[1] / ulen);
+			sec->floorplane.c = FLOAT2FIXED(cp[2] / ulen);
+			sec->floorplane.d = FLOAT2FIXED(cp[3] / ulen);
+			sec->floorplane.ic = FLOAT2FIXED(ulen / cp[2]);
 		}
 
-		if (lightcolor == ~0u && fadecolor == ~0u && desaturation == -1 && fogdensity == -1)
+		if (lightcolor == -1 && fadecolor == -1 && desaturation == -1)
 		{
 			// [RH] Sectors default to white light with the default fade.
 			//		If they are outside (have a sky ceiling), they use the outside fog.
-			sec->Colormap.LightColor = PalEntry(255, 255, 255);
-			if (level.outsidefog != 0xff000000 && (sec->GetTexture(sector_t::ceiling) == skyflatnum || (sec->special & 0xff) == Sector_Outside))
+			if (level.outsidefog != 0xff000000 && (sec->GetTexture(sector_t::ceiling) == skyflatnum || (sec->special&0xff) == Sector_Outside))
 			{
-				sec->Colormap.FadeColor.SetRGB(level.outsidefog);
+				if (fogMap == NULL)
+					fogMap = GetSpecialLights (PalEntry (255,255,255), level.outsidefog, 0);
+				sec->ColorMap = fogMap;
 			}
 			else
 			{
-				sec->Colormap.FadeColor.SetRGB(level.fadeto);
+				if (normMap == NULL)
+					normMap = GetSpecialLights (PalEntry (255,255,255), level.fadeto, NormalLight.Desaturate);
+				sec->ColorMap = normMap;
 			}
 		}
 		else
 		{
-			sec->Colormap.LightColor.SetRGB(lightcolor);
-			if (fadecolor == ~0u)
+			if (lightcolor == -1) lightcolor = PalEntry(255,255,255);
+			if (fadecolor == -1) 
 			{
-				if (level.outsidefog != 0xff000000 && (sec->GetTexture(sector_t::ceiling) == skyflatnum || (sec->special & 0xff) == Sector_Outside))
+				if (level.outsidefog != 0xff000000 && (sec->GetTexture(sector_t::ceiling) == skyflatnum || (sec->special&0xff) == Sector_Outside))
 					fadecolor = level.outsidefog;
 				else
 					fadecolor = level.fadeto;
 			}
-			sec->Colormap.FadeColor.SetRGB(fadecolor);
-			sec->Colormap.Desaturation = clamp(desaturation, 0, 255);
-			sec->Colormap.FogDensity = clamp(fogdensity, 0, 512) / 2;
+			if (desaturation == -1) desaturation = NormalLight.Desaturate;
+
+			sec->ColorMap = GetSpecialLights (lightcolor, fadecolor, desaturation);
 		}
 	}
 
@@ -1880,31 +1579,34 @@ public:
 
 	void ParseVertex(vertex_t *vt, vertexdata_t *vd)
 	{
-		vt->set(0, 0);
+		vt->x = vt->y = 0;
 		vd->zCeiling = vd->zFloor = vd->flags = 0;
-
-		sc.MustGetToken('{');
-		double x = 0, y = 0;
-		while (!sc.CheckToken('}'))
+		sc.MustGetStringName("{");
+		while (!sc.CheckString("}"))
 		{
-			FName key = ParseKey();
-			switch (key)
+			sc.MustGetString();
+			FName key = sc.String;
+			sc.MustGetStringName("=");
+			sc.MustGetString();
+			FString value = sc.String;
+			sc.MustGetStringName(";");
+			switch(key)
 			{
 			case NAME_X:
-				x = CheckCoordinate(key);
+				vt->x = FLOAT2FIXED(strtod(value, NULL));
 				break;
 
 			case NAME_Y:
-				y = CheckCoordinate(key);
+				vt->y = FLOAT2FIXED(strtod(value, NULL));
 				break;
 
 			case NAME_ZCeiling:
-				vd->zCeiling = CheckCoordinate(key);
+				vd->zCeiling = FLOAT2FIXED(strtod(value, NULL));
 				vd->flags |= VERTEXFLAG_ZCeilingEnabled;
 				break;
 
 			case NAME_ZFloor:
-				vd->zFloor = CheckCoordinate(key);
+				vd->zFloor = FLOAT2FIXED(strtod(value, NULL));
 				vd->flags |= VERTEXFLAG_ZFloorEnabled;
 				break;
 
@@ -1912,7 +1614,6 @@ public:
 				break;
 			}
 		}
-		vt->set(x, y);
 	}
 
 	//===========================================================================
@@ -1930,12 +1631,12 @@ public:
 			intptr_t v1i = intptr_t(ParsedLines[i].v1);
 			intptr_t v2i = intptr_t(ParsedLines[i].v2);
 
-			if ((unsigned)v1i >= level.vertexes.Size() || (unsigned)v2i >= level.vertexes.Size())
+			if (v1i >= numvertexes || v2i >= numvertexes || v1i < 0 || v2i < 0)
 			{
-				I_Error ("Line %d has invalid vertices: %zd and/or %zd.\nThe map only contains %u vertices.", i+skipped, v1i, v2i, level.vertexes.Size());
+				I_Error ("Line %d has invalid vertices: %zd and/or %zd.\nThe map only contains %d vertices.", i+skipped, v1i, v2i, numvertexes);
 			}
 			else if (v1i == v2i ||
-				(level.vertexes[v1i].fX() == level.vertexes[v2i].fX() && level.vertexes[v1i].fY() == level.vertexes[v2i].fY()))
+				(vertexes[v1i].x == vertexes[v2i].x && vertexes[v1i].y == vertexes[v2i].y))
 			{
 				Printf ("Removing 0-length line %d\n", i+skipped);
 				ParsedLines.Delete(i);
@@ -1944,8 +1645,8 @@ public:
 			}
 			else
 			{
-				ParsedLines[i].v1 = &level.vertexes[v1i];
-				ParsedLines[i].v2 = &level.vertexes[v2i];
+				ParsedLines[i].v1 = &vertexes[v1i];
+				ParsedLines[i].v2 = &vertexes[v2i];
 
 				if (ParsedLines[i].sidedef[0] != NULL)
 					sidecount++;
@@ -1955,14 +1656,13 @@ public:
 				i++;
 			}
 		}
-		unsigned numlines = ParsedLines.Size();
-		level.sides.Alloc(sidecount);
-		level.lines.Alloc(numlines);
+		numlines = ParsedLines.Size();
+		numsides = sidecount;
+		lines = new line_t[numlines];
+		sides = new side_t[numsides];
 		int line, side;
-		auto lines = &level.lines[0];
-		auto sides = &level.sides[0];
 
-		for(line = 0, side = 0; line < (int)numlines; line++)
+		for(line = 0, side = 0; line < numlines; line++)
 		{
 			short tempalpha[2] = { SHRT_MIN, SHRT_MIN };
 
@@ -1977,7 +1677,7 @@ public:
 					{
 						sides[side] = ParsedSides[mapside];
 						sides[side].linedef = &lines[line];
-						sides[side].sector = &level.sectors[intptr_t(sides[side].sector)];
+						sides[side].sector = &sectors[intptr_t(sides[side].sector)];
 						lines[line].sidedef[sd] = &sides[side];
 
 						P_ProcessSideTextures(!isExtended, &sides[side], sides[side].sector, &ParsedSideTextures[mapside],
@@ -1995,17 +1695,11 @@ public:
 			P_AdjustLine(&lines[line]);
 			P_FinishLoadingLineDef(&lines[line], tempalpha[0]);
 		}
-
-		const int sideDelta = level.sides.Size() - side;
-		assert(sideDelta >= 0);
-
-		if (sideDelta < 0)
+		assert(side <= numsides);
+		if (side < numsides)
 		{
-			Printf("Map had %d invalid side references\n", abs(sideDelta));
-		}
-		else if (sideDelta > 0)
-		{
-			level.sides.Resize(side);
+			Printf("Map had %d invalid side references\n", numsides - side);
+			numsides = side;
 		}
 	}
 
@@ -2134,7 +1828,6 @@ public:
 			else if (sc.Compare("sector"))
 			{
 				sector_t sec;
-				memset(&sec, 0, sizeof(sector_t));
 				ParseSector(&sec, ParsedSectors.Size());
 				ParsedSectors.Push(sec);
 			}
@@ -2144,7 +1837,7 @@ public:
 				vertexdata_t vd;
 				ParseVertex(&vt, &vd);
 				ParsedVertices.Push(vt);
-				vertexdatas.Push(vd);
+				ParsedVertexDatas.Push(vd);
 			}
 			else
 			{
@@ -2153,37 +1846,29 @@ public:
 		}
 
 		// Catch bogus maps here rather than during nodebuilding
-		if (ParsedVertices.Size() == 0)	I_Error("Map has no vertices.");
-		if (ParsedSectors.Size() == 0)	I_Error("Map has no sectors. ");
-		if (ParsedLines.Size() == 0)	I_Error("Map has no linedefs.");
-		if (ParsedSides.Size() == 0)	I_Error("Map has no sidedefs.");
-		if (BadCoordinates)				I_Error("Map has out of range coordinates");
+		if (ParsedVertices.Size() == 0)	I_Error("Map has no vertices.\n");
+		if (ParsedSectors.Size() == 0)	I_Error("Map has no sectors. \n");
+		if (ParsedLines.Size() == 0)	I_Error("Map has no linedefs.\n");
+		if (ParsedSides.Size() == 0)	I_Error("Map has no sidedefs.\n");
 
 		// Create the real vertices
-		level.vertexes.Alloc(ParsedVertices.Size());
-		memcpy(&level.vertexes[0], &ParsedVertices[0], level.vertexes.Size() * sizeof(vertex_t));
+		numvertexes = ParsedVertices.Size();
+		vertexes = new vertex_t[numvertexes];
+		memcpy(vertexes, &ParsedVertices[0], numvertexes * sizeof(*vertexes));
+
+		// Create the real vertex datas
+		numvertexdatas = ParsedVertexDatas.Size();
+		vertexdatas = new vertexdata_t[numvertexdatas];
+		memcpy(vertexdatas, &ParsedVertexDatas[0], numvertexdatas * sizeof(*vertexdatas));
 
 		// Create the real sectors
-		level.sectors.Alloc(ParsedSectors.Size());
-		memcpy(&level.sectors[0], &ParsedSectors[0], level.sectors.Size() * sizeof(sector_t));
-		level.sectors[0].e = new extsector_t[level.sectors.Size()];
-		for(unsigned i = 0; i < level.sectors.Size(); i++)
+		numsectors = ParsedSectors.Size();
+		sectors = new sector_t[numsectors];
+		memcpy(sectors, &ParsedSectors[0], numsectors * sizeof(*sectors));
+		sectors[0].e = new extsector_t[numsectors];
+		for(int i = 0; i < numsectors; i++)
 		{
-			level.sectors[i].e = &level.sectors[0].e[i];
-		}
-		// Now create the scrollers.
-		for (auto &scroll : UDMFScrollers)
-		{
-			const double scrollfactor = 1 / 3.2;	// I hope this is correct, it's just a guess taken from Eternity's code.
-			if (scroll.type == NAME_Both || scroll.type == NAME_Visual)
-			{
-				P_CreateScroller(scroll.ceiling ? EScroll::sc_ceiling : EScroll::sc_floor, scroll.x * scrollfactor, scroll.y * scrollfactor, -1, scroll.index, 0);
-			}
-			if (scroll.type == NAME_Both || scroll.type == NAME_Physical)
-			{
-				// sc_carry_ceiling doesn't do anything yet.
-				P_CreateScroller(scroll.ceiling ? EScroll::sc_carry_ceiling : EScroll::sc_carry, scroll.x * scrollfactor, scroll.y * scrollfactor, -1, scroll.index, 0);
-			}
+			sectors[i].e = &sectors[0].e[i];
 		}
 
 		// Create the real linedefs and decompress the sidedefs

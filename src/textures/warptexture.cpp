@@ -38,89 +38,187 @@
 #include "templates.h"
 #include "r_utility.h"
 #include "textures/textures.h"
-#include "warpbuffer.h"
-#include "v_palette.h"
-#include "v_video.h"
 
 
-FWarpTexture::FWarpTexture (FTexture *source, int warptype)
-	: SourcePic (source)
+FWarpTexture::FWarpTexture (FTexture *source)
+: GenTime (0), SourcePic (source), Pixels (0), Spans (0), Speed (1.f)
 {
 	CopyInfo(source);
-	if (warptype == 2) SetupMultipliers(256, 128); 
-	SetupMultipliers(128, 128); // [mxd]
-	bWarped = warptype;
+	bWarped = 1;
 }
 
 FWarpTexture::~FWarpTexture ()
 {
 	Unload ();
+	if (Spans != NULL)
+	{
+		FreeSpans (Spans);
+		Spans = NULL;
+	}
 	delete SourcePic;
 }
 
 void FWarpTexture::Unload ()
 {
-	SourcePic->Unload ();
-	FWorldTexture::Unload();
-	FreeAllSpans();
-}
-
-bool FWarpTexture::CheckModified (FRenderStyle style)
-{
-	return screen->FrameTime != GenTime[!!(style.Flags & STYLEF_RedIsAlpha)];
-}
-
-const uint32_t *FWarpTexture::GetPixelsBgra()
-{
-	auto Pixels = GetPixels(DefaultRenderStyle());
-	if (PixelsBgra.empty() || GenTime[0] != GenTimeBgra)
+	if (Pixels != NULL)
 	{
-		CreatePixelsBgraWithMipmaps();
-		for (int i = 0; i < Width * Height; i++)
-		{
-			if (Pixels[i] != 0)
-				PixelsBgra[i] = 0xff000000 | GPalette.BaseColors[Pixels[i]].d;
-			else
-				PixelsBgra[i] = 0;
-		}
-		GenerateBgraMipmapsFast();
-		GenTimeBgra = GenTime[0];
+		delete[] Pixels;
+		Pixels = NULL;
 	}
-	return PixelsBgra.data();
+	if (Spans != NULL)
+	{
+		FreeSpans (Spans);
+		Spans = NULL;
+	}
+	SourcePic->Unload ();
 }
 
-
-uint8_t *FWarpTexture::MakeTexture(FRenderStyle style)
+bool FWarpTexture::CheckModified ()
 {
-	uint64_t time = screen->FrameTime;
-	const uint8_t *otherpix = SourcePic->GetPixels(style);
-	auto Pixels = new uint8_t[Width * Height];
-	WarpBuffer(Pixels, otherpix, Width, Height, WidthOffsetMultiplier, HeightOffsetMultiplier, time, Speed, bWarped);
-	FreeAllSpans();
-	GenTime[!!(style.Flags & STYLEF_RedIsAlpha)] = time;
+	return r_FrameTime != GenTime;
+}
+
+const BYTE *FWarpTexture::GetPixels ()
+{
+	DWORD time = r_FrameTime;
+
+	if (Pixels == NULL || time != GenTime)
+	{
+		MakeTexture (time);
+	}
 	return Pixels;
 }
 
-// [mxd] Non power of 2 textures need different offset multipliers, otherwise warp animation won't sync across texture
-void FWarpTexture::SetupMultipliers (int width, int height)
+const BYTE *FWarpTexture::GetColumn (unsigned int column, const Span **spans_out)
 {
-	WidthOffsetMultiplier = width;
-	HeightOffsetMultiplier = height;
-	int widthpo2 = NextPo2(Width);
-	int heightpo2 = NextPo2(Height);
-	if(widthpo2 != Width) WidthOffsetMultiplier = (int)(WidthOffsetMultiplier * ((float)widthpo2 / Width));
-	if(heightpo2 != Height) HeightOffsetMultiplier = (int)(HeightOffsetMultiplier * ((float)heightpo2 / Height));
+	DWORD time = r_FrameTime;
+
+	if (Pixels == NULL || time != GenTime)
+	{
+		MakeTexture (time);
+	}
+	if ((unsigned)column >= (unsigned)Width)
+	{
+		if (WidthMask + 1 == Width)
+		{
+			column &= WidthMask;
+		}
+		else
+		{
+			column %= Width;
+		}
+	}
+	if (spans_out != NULL)
+	{
+		if (Spans == NULL)
+		{
+			Spans = CreateSpans (Pixels);
+		}
+		*spans_out = Spans[column];
+	}
+	return Pixels + column*Height;
 }
 
-int FWarpTexture::NextPo2 (int v)
+void FWarpTexture::MakeTexture (DWORD time)
 {
-	v--;
-	v |= v >> 1;
-	v |= v >> 2;
-	v |= v >> 4;
-	v |= v >> 8;
-	v |= v >> 16;
-	return ++v;
+	const BYTE *otherpix = SourcePic->GetPixels ();
+
+	if (Pixels == NULL)
+	{
+		Pixels = new BYTE[Width * Height];
+	}
+	if (Spans != NULL)
+	{
+		FreeSpans (Spans);
+		Spans = NULL;
+	}
+
+	GenTime = time;
+
+	BYTE *buffer = (BYTE *)alloca (MAX (Width, Height));
+	int xsize = Width;
+	int ysize = Height;
+	int xmask = WidthMask;
+	int ymask = Height - 1;
+	int ybits = HeightBits;
+	int x, y;
+
+	if ((1 << ybits) > Height)
+	{
+		ybits--;
+	}
+
+	DWORD timebase = DWORD(time * Speed * 32 / 28);
+	for (y = ysize-1; y >= 0; y--)
+	{
+		int xt, xf = (finesine[(timebase+y*128)&FINEMASK]>>13) & xmask;
+		const BYTE *source = otherpix + y;
+		BYTE *dest = Pixels + y;
+		for (xt = xsize; xt; xt--, xf = (xf+1)&xmask, dest += ysize)
+			*dest = source[xf << ybits];
+	}
+	timebase = DWORD(time * Speed * 23 / 28);
+	for (x = xsize-1; x >= 0; x--)
+	{
+		int yt, yf = (finesine[(time+(x+17)*128)&FINEMASK]>>13) & ymask;
+		const BYTE *source = Pixels + (x << ybits);
+		BYTE *dest = buffer;
+		for (yt = ysize; yt; yt--, yf = (yf+1)&ymask)
+			*dest++ = source[yf];
+		memcpy (Pixels+(x<<ybits), buffer, ysize);
+	}
+}
+
+// [GRB] Eternity-like warping
+FWarp2Texture::FWarp2Texture (FTexture *source)
+: FWarpTexture (source)
+{
+	bWarped = 2;
+}
+
+void FWarp2Texture::MakeTexture (DWORD time)
+{
+	const BYTE *otherpix = SourcePic->GetPixels ();
+
+	if (Pixels == NULL)
+	{
+		Pixels = new BYTE[Width * Height];
+	}
+	if (Spans != NULL)
+	{
+		FreeSpans (Spans);
+		Spans = NULL;
+	}
+
+	GenTime = time;
+
+	int xsize = Width;
+	int ysize = Height;
+	int xmask = WidthMask;
+	int ymask = Height - 1;
+	int ybits = HeightBits;
+	int x, y;
+
+	if ((1 << ybits) > Height)
+	{
+		ybits--;
+	}
+
+	DWORD timebase = DWORD(time * Speed * 40 / 28);
+	for (x = 0; x < xsize; ++x)
+	{
+		BYTE *dest = Pixels + (x << ybits);
+		for (y = 0; y < ysize; ++y)
+		{
+			int xt = (x + 128
+				+ ((finesine[(y*128 + timebase*5 + 900) & FINEMASK]*2)>>FRACBITS)
+				+ ((finesine[(x*256 + timebase*4 + 300) & FINEMASK]*2)>>FRACBITS)) & xmask;
+			int yt = (y + 128
+				+ ((finesine[(y*128 + timebase*3 + 700) & FINEMASK]*2)>>FRACBITS)
+				+ ((finesine[(x*256 + timebase*4 + 1200) & FINEMASK]*2)>>FRACBITS)) & ymask;
+			*dest++ = otherpix[(xt << ybits) + yt];
+		}
+	}
 }
 
 //==========================================================================

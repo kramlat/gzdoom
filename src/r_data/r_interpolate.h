@@ -13,26 +13,23 @@ class DInterpolation : public DObject
 	friend struct FInterpolator;
 
 	DECLARE_ABSTRACT_CLASS(DInterpolation, DObject)
-	HAS_OBJECT_POINTERS
 
-	TObjPtr<DInterpolation*> Next;
-	TObjPtr<DInterpolation*> Prev;
-
-protected:
+	DInterpolation *Next;
+	DInterpolation **Prev;
 	int refcount;
 
+protected:
 	DInterpolation();
 
 public:
 	int AddRef();
-	int DelRef(bool force = false);
+	int DelRef();
 
-	void OnDestroy() override;
+	virtual void Destroy();
 	virtual void UpdateInterpolation() = 0;
 	virtual void Restore() = 0;
-	virtual void Interpolate(double smoothratio) = 0;
-	
-	virtual void Serialize(FSerializer &arc);
+	virtual void Interpolate(fixed_t smoothratio) = 0;
+	virtual void Serialize(FArchive &arc);
 };
 
 //==========================================================================
@@ -43,7 +40,7 @@ public:
 
 struct FInterpolator
 {
-	TObjPtr<DInterpolation*> Head;
+	DInterpolation *Head;
 	bool didInterp;
 	int count;
 
@@ -59,7 +56,7 @@ public:
 	void UpdateInterpolations();
 	void AddInterpolation(DInterpolation *);
 	void RemoveInterpolation(DInterpolation *);
-	void DoInterpolations(double smoothratio);
+	void DoInterpolations(fixed_t smoothratio);
 	void RestoreInterpolations();
 	void ClearInterpolations();
 };

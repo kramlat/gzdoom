@@ -43,14 +43,157 @@
 #include "configfile.h"
 #include "i_system.h"
 #include "d_event.h"
-#include "w_wad.h"
-#include "templates.h"
-#include "dobject.h"
-#include "vm.h"
-#include "i_time.h"
 
 #include <math.h>
 #include <stdlib.h>
+
+/* Default keybindings for Doom (and all other games)
+ */
+static const FBinding DefBindings[] =
+{
+	{ "`", "toggleconsole" },
+	{ "1", "slot 1" },
+	{ "2", "slot 2" },
+	{ "3", "slot 3" },
+	{ "4", "slot 4" },
+	{ "5", "slot 5" },
+	{ "6", "slot 6" },
+	{ "7", "slot 7" },
+	{ "8", "slot 8" },
+	{ "9", "slot 9" },
+	{ "0", "slot 0" },
+	{ "[", "invprev" },
+	{ "]", "invnext" },
+	{ "mwheelleft", "invprev" },
+	{ "mwheelright", "invnext" },
+	{ "enter", "invuse" },
+	{ "-", "sizedown" },
+	{ "=", "sizeup" },
+	{ "ctrl", "+attack" },
+	{ "alt", "+strafe" },
+	{ "shift", "+speed" },
+	{ "space", "+use" },
+	{ "rightarrow", "+right" },
+	{ "leftarrow", "+left" },
+	{ "uparrow", "+forward" },
+	{ "downarrow", "+back" },
+	{ ",", "+moveleft" },
+	{ ".", "+moveright" },
+	{ "mouse1", "+attack" },
+	{ "mouse2", "+strafe" },
+	{ "mouse3", "+forward" },
+	{ "mouse4", "+speed" },
+	{ "capslock", "toggle cl_run" },
+	{ "f1", "menu_help" },
+	{ "f2", "menu_save" },
+	{ "f3", "menu_load" },
+	{ "f4", "menu_options" },
+	{ "f5", "menu_display" },
+	{ "f6", "quicksave" },
+	{ "f7", "menu_endgame" },
+	{ "f8", "togglemessages" },
+	{ "f9", "quickload" },
+	{ "f11", "bumpgamma" },
+	{ "f10", "menu_quit" },
+	{ "tab", "togglemap" },
+	{ "pause", "pause" },
+	{ "sysrq", "screenshot" },
+	{ "t", "messagemode" },
+	{ "\\", "+showscores" },
+	{ "f12", "spynext" },
+	{ "mwheeldown", "weapnext" },
+	{ "mwheelup", "weapprev" },
+
+	// Generic joystick buttons
+	{ "joy1", "+attack" },
+	{ "joy2", "+strafe" },
+	{ "joy3", "+speed" },
+	{ "joy4", "+use" },
+
+	// Xbox 360 / PS2 controllers
+	{ "pad_a", "+use" },
+	{ "pad_y", "+jump" },
+	{ "rtrigger", "+attack" },
+	{ "ltrigger", "+altattack" },
+	{ "lshoulder", "weapprev" },
+	{ "rshoulder", "weapnext" },
+	{ "dpadleft", "invprev" },
+	{ "dpadright", "invnext" },
+	{ "dpaddown", "invuse" },
+	{ "dpadup", "togglemap" },
+	{ "pad_start", "pause" },
+	{ "pad_back", "menu_main" },
+	{ "lthumb", "crouch" },
+	{ NULL, NULL }
+};
+
+static const FBinding DefRavenBindings[] =
+{
+	{ "pgup", "+moveup" },
+	{ "insert", "+movedown" },
+	{ "home", "land" },
+	{ "pgdn", "+lookup" },
+	{ "del", "+lookdown" },
+	{ "end", "centerview" },
+	{ NULL, NULL }
+};
+
+static const FBinding DefHereticBindings[] =
+{
+	{ "backspace", "use ArtiTomeOfPower" },
+	{ NULL, NULL }
+};
+
+static const FBinding DefHexenBindings[] =
+{
+	{ "/", "+jump" },
+	{ "backspace", "invuseall" },
+	{ "\\", "use ArtiHealth" },
+	{ "0", "useflechette" },
+	{ "9", "use ArtiBlastRadius" },
+	{ "8", "use ArtiTeleport" },
+	{ "7", "use ArtiTeleportOther" },
+	{ "6", "use ArtiPork" },
+	{ "5", "use ArtiInvulnerability2" },
+	{ "scroll", "+showscores" },
+	{ NULL, NULL }
+};
+
+static const FBinding DefStrifeBindings[] =
+{
+	{ "a", "+jump" },
+	{ "w", "showpop 1" },
+	{ "backspace", "invdrop" },
+	{ "z", "showpop 3" },
+	{ "k", "showpop 2" },
+	{ "q", "invquery" },
+	{ NULL, NULL }
+	// not done
+	// h - use health
+};
+
+static const FBinding DefAutomapBindings[] =
+{
+	{ "f", "am_togglefollow" },
+	{ "g", "am_togglegrid" },
+	{ "p", "am_toggletexture" },
+	{ "m", "am_setmark" },
+	{ "c", "am_clearmarks" },
+	{ "0", "am_gobig" },
+	{ "rightarrow", "+am_panright" },
+	{ "leftarrow", "+am_panleft" },
+	{ "uparrow", "+am_panup" },
+	{ "downarrow", "+am_pandown" },
+	{ "-", "+am_zoomout" },
+	{ "=", "+am_zoomin" },
+	{ "kp-", "+am_zoomout" },
+	{ "kp+", "+am_zoomin" },
+	{ "mwheelup", "am_zoom 1.2" },
+	{ "mwheeldown", "am_zoom -1.2" },
+	{ NULL, NULL }
+};
+
+
 
 const char *KeyNames[NUM_KEYS] =
 {
@@ -87,11 +230,7 @@ const char *KeyNames[NUM_KEYS] =
 	NULL,		NULL,		NULL,		NULL,		NULL,		"pause",	NULL,		"home",		//C0
 	"uparrow",	"pgup",		NULL,		"leftarrow",NULL,		"rightarrow",NULL,		"end",		//C8
 	"downarrow","pgdn",		"ins",		"del",		NULL,		NULL,		NULL,		NULL,		//D0
-#ifdef __APPLE__
-	NULL,		NULL,		NULL,		"command",	NULL,		"apps",		"power",	"sleep",	//D8
-#else // !__APPLE__
 	NULL,		NULL,		NULL,		"lwin",		"rwin",		"apps",		"power",	"sleep",	//D8
-#endif // __APPLE__
 	NULL,		NULL,		NULL,		"wake",		NULL,		"search",	"favorites","refresh",	//E0
 	"webstop",	"webforward","webback",	"mycomputer","mail",	"mediaselect",NULL,		NULL,		//E8
 	NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		NULL,		//F0
@@ -160,11 +299,8 @@ FKeyBindings Bindings;
 FKeyBindings DoubleBindings;
 FKeyBindings AutomapBindings;
 
-DEFINE_GLOBAL(Bindings)
-DEFINE_GLOBAL(AutomapBindings)
-
 static unsigned int DClickTime[NUM_KEYS];
-static uint8_t DClicked[(NUM_KEYS+7)/8];
+static BYTE DClicked[(NUM_KEYS+7)/8];
 
 //=============================================================================
 //
@@ -235,7 +371,7 @@ static const char *KeyName (int key)
 	if (KeyNames[key])
 		return KeyNames[key];
 
-	mysnprintf (name, countof(name), "Key_%d", key);
+	mysnprintf (name, countof(name), "#%d", key);
 	return name;
 }
 
@@ -268,27 +404,11 @@ static const char *ConfigKeyName(int keynum)
 //
 //=============================================================================
 
-DEFINE_ACTION_FUNCTION(FKeyBindings, SetBind)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FKeyBindings);
-	PARAM_INT(k);
-	PARAM_STRING(cmd);
-	self->SetBind(k, cmd);
-	return 0;
-}
-
-//=============================================================================
-//
-//
-//
-//=============================================================================
-
 void C_NameKeys (char *str, int first, int second)
 {
 	int c = 0;
 
 	*str = 0;
-	if (second == first) second = 0;
 	if (first)
 	{
 		c++;
@@ -307,16 +427,6 @@ void C_NameKeys (char *str, int first, int second)
 		*str = '\0';
 }
 
-DEFINE_ACTION_FUNCTION(FKeyBindings, NameKeys)
-{
-	PARAM_PROLOGUE;
-	PARAM_INT(k1);
-	PARAM_INT(k2);
-	char buffer[120];
-	C_NameKeys(buffer, k1, k2);
-	ACTION_RETURN_STRING(buffer);
-}
-
 //=============================================================================
 //
 //
@@ -329,6 +439,21 @@ void FKeyBindings::DoBind (const char *key, const char *bind)
 	if (keynum != 0)
 	{
 		Binds[keynum] = bind;
+	}
+}
+
+//=============================================================================
+//
+//
+//
+//=============================================================================
+
+void FKeyBindings::SetBinds(const FBinding *binds)
+{
+	while (binds->Key)
+	{
+		DoBind (binds->Key, binds->Bind);
+		binds++;
 	}
 }
 
@@ -478,17 +603,6 @@ int FKeyBindings::GetKeysForCommand (const char *cmd, int *first, int *second)
 	return c;
 }
 
-DEFINE_ACTION_FUNCTION(FKeyBindings, GetKeysForCommand)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FKeyBindings);
-	PARAM_STRING(cmd);
-	int k1, k2;
-	self->GetKeysForCommand(cmd.GetChars(), &k1, &k2);
-	if (numret > 0) ret[0].SetInt(k1);
-	if (numret > 1) ret[1].SetInt(k2);
-	return MIN(numret, 2);
-}
-
 //=============================================================================
 //
 //
@@ -506,14 +620,6 @@ void FKeyBindings::UnbindACommand (const char *str)
 			Binds[i] = "";
 		}
 	}
-}
-
-DEFINE_ACTION_FUNCTION(FKeyBindings, UnbindACommand)
-{
-	PARAM_SELF_STRUCT_PROLOGUE(FKeyBindings);
-	PARAM_STRING(cmd);
-	self->UnbindACommand(cmd);
-	return 0;
 }
 
 //=============================================================================
@@ -558,7 +664,7 @@ void C_UnbindAll ()
 	AutomapBindings.UnbindAll();
 }
 
-UNSAFE_CCMD (unbindall)
+CCMD (unbindall)
 {
 	C_UnbindAll ();
 }
@@ -675,37 +781,29 @@ CCMD (rebind)
 
 void C_BindDefaults ()
 {
-	int lump, lastlump = 0;
+	Bindings.SetBinds (DefBindings);
 
-	while ((lump = Wads.FindLump("DEFBINDS", &lastlump)) != -1)
+	if (gameinfo.gametype & (GAME_Raven|GAME_Strife))
 	{
-		FScanner sc(lump);
-
-		while (sc.GetString())
-		{
-			FKeyBindings *dest = &Bindings;
-			int key;
-
-			// bind destination is optional and is the same as the console command
-			if (sc.Compare("bind"))
-			{
-				sc.MustGetString();
-			}
-			else if (sc.Compare("doublebind"))
-			{
-				dest = &DoubleBindings;
-				sc.MustGetString();
-			}
-			else if (sc.Compare("mapbind"))
-			{
-				dest = &AutomapBindings;
-				sc.MustGetString();
-			}
-			key = GetConfigKeyFromName(sc.String);
-			sc.MustGetString();
-			dest->SetBind(key, sc.String);
-		}
+		Bindings.SetBinds (DefRavenBindings);
 	}
+
+	if (gameinfo.gametype == GAME_Heretic)
+	{
+		Bindings.SetBinds (DefHereticBindings);
+	}
+
+	if (gameinfo.gametype == GAME_Hexen)
+	{
+		Bindings.SetBinds (DefHexenBindings);
+	}
+
+	if (gameinfo.gametype == GAME_Strife)
+	{
+		Bindings.SetBinds (DefStrifeBindings);
+	}
+
+	AutomapBindings.SetBinds(DefAutomapBindings);
 }
 
 CCMD(binddefaults)
@@ -730,7 +828,7 @@ bool C_DoKey (event_t *ev, FKeyBindings *binds, FKeyBindings *doublebinds)
 	FString binding;
 	bool dclick;
 	int dclickspot;
-	uint8_t dclickmask;
+	BYTE dclickmask;
 	unsigned int nowtime;
 
 	if (ev->type != EV_KeyDown && ev->type != EV_KeyUp)
@@ -744,8 +842,8 @@ bool C_DoKey (event_t *ev, FKeyBindings *binds, FKeyBindings *doublebinds)
 	dclick = false;
 
 	// This used level.time which didn't work outside a level.
-	nowtime = (unsigned)I_msTime();
-	if (doublebinds != NULL && int(DClickTime[ev->data1] - nowtime) > 0 && ev->type == EV_KeyDown)
+	nowtime = I_MSTime();
+	if (doublebinds != NULL && DClickTime[ev->data1] > nowtime && ev->type == EV_KeyDown)
 	{
 		// Key pressed for a double click
 		binding = doublebinds->GetBinding(ev->data1);

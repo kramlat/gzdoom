@@ -32,6 +32,7 @@
 **
 */
 
+
 // HEADER FILES ------------------------------------------------------------
 
 #define DIRECTDRAW_VERSION 0x0300
@@ -41,6 +42,7 @@
 #include <ddraw.h>
 #include <stdio.h>
 
+#define USE_WINDOWS_DWORD
 #include "doomtype.h"
 
 #include "c_dispatch.h"
@@ -53,12 +55,13 @@
 #include "doomerrors.h"
 
 #include "win32iface.h"
-#include "win32swiface.h"
 #include "v_palette.h"
 
 // MACROS ------------------------------------------------------------------
 
 // TYPES -------------------------------------------------------------------
+
+IMPLEMENT_CLASS(DDrawFB)
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
@@ -87,6 +90,7 @@ extern IDirectDraw2 *DDraw;
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 CVAR (Bool, vid_palettehack, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+CVAR (Bool, vid_attachedsurfaces, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool, vid_noblitter, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Int, vid_displaybits, 8, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CUSTOM_CVAR (Float, rgamma, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -116,7 +120,7 @@ cycle_t BlitCycles;
 // CODE --------------------------------------------------------------------
 
 DDrawFB::DDrawFB (int width, int height, bool fullscreen)
-	: BaseWinFB (width, height, false)
+	: BaseWinFB (width, height)
 {
 	int i;
 
@@ -159,7 +163,7 @@ DDrawFB::DDrawFB (int width, int height, bool fullscreen)
 		PalEntries[i].peRed = GPalette.BaseColors[i].r;
 		PalEntries[i].peGreen = GPalette.BaseColors[i].g;
 		PalEntries[i].peBlue = GPalette.BaseColors[i].b;
-		GammaTable[0][i] = GammaTable[1][i] = GammaTable[2][i] = (uint8_t)i;
+		GammaTable[0][i] = GammaTable[1][i] = GammaTable[2][i] = (BYTE)i;
 	}
 	memcpy (SourcePalette, GPalette.BaseColors, sizeof(PalEntry)*256);
 
@@ -263,8 +267,16 @@ bool DDrawFB::CreateResources ()
 		}
 		LOG3 ("Mode set to %d x %d x %d\n", Width, Height, bits);
 
-		if (!CreateSurfacesComplex ())
-			return false;
+		if (vid_attachedsurfaces && OSPlatform == os_WinNT4)
+		{
+			if (!CreateSurfacesAttached ())
+				return false;
+		}
+		else
+		{
+			if (!CreateSurfacesComplex ())
+				return false;
+		}
 
 		if (UseBlitter)
 		{
@@ -296,10 +308,9 @@ bool DDrawFB::CreateResources ()
 		MaybeCreatePalette ();
 
 		// Resize the window to match desired dimensions
-		RECT rect = { 0, 0, Width << PixelDoubling, Height << PixelDoubling };
-		AdjustWindowRectEx(&rect, WS_VISIBLE|WS_OVERLAPPEDWINDOW, FALSE, WS_EX_APPWINDOW);
-		int sizew = rect.right - rect.left;
-		int sizeh = rect.bottom - rect.top;
+		int sizew = (Width << PixelDoubling) + GetSystemMetrics (SM_CXSIZEFRAME)*2;
+		int sizeh = (Height << PixelDoubling) + GetSystemMetrics (SM_CYSIZEFRAME) * 2 +
+					 GetSystemMetrics (SM_CYCAPTION);
 		LOG2 ("Resize window to %dx%d\n", sizew, sizeh);
 		VidResizing = true;
 		// Make sure the window has a border in windowed mode
@@ -769,7 +780,7 @@ void DDrawFB::RebuildColorTable ()
 		}
 		for (i = 0; i < 256; i++)
 		{
-			GPfxPal.Pal8[i] = (uint8_t)BestColor ((uint32_t *)syspal, PalEntries[i].peRed,
+			GPfxPal.Pal8[i] = (BYTE)BestColor ((uint32 *)syspal, PalEntries[i].peRed,
 				PalEntries[i].peGreen, PalEntries[i].peBlue);
 		}
 	}
@@ -984,7 +995,7 @@ DDrawFB::LockSurfRes DDrawFB::LockSurf (LPRECT lockrect, LPDIRECTDRAWSURFACE toL
 		LOG1 ("Final result after restoration attempts: %08lx\n", hr);
 		return NoGood;
 	}
-	Buffer = (uint8_t *)desc.lpSurface;
+	Buffer = (BYTE *)desc.lpSurface;
 	Pitch = desc.lPitch;
 	BufferingNow = false;
 	return wasLost ? GoodWasLost : Good;
@@ -1120,7 +1131,7 @@ void DDrawFB::Update ()
 		{
 			if (LockSurf (NULL, NULL) != NoGood)
 			{
-				uint8_t *writept = Buffer + (TrueHeight - Height)/2*Pitch;
+				BYTE *writept = Buffer + (TrueHeight - Height)/2*Pitch;
 				LOG3 ("Copy %dx%d (%d)\n", Width, Height, BufferPitch);
 				if (UsePfx)
 				{
@@ -1185,7 +1196,10 @@ void DDrawFB::Update ()
 	LockCount = 0;
 	UpdatePending = false;
 
-	I_FPSLimit();
+	if (FPSLimitEvent != NULL)
+	{
+		WaitForSingleObject(FPSLimitEvent, 1000);
+	}
 	if (!Windowed && AppActive && !SessionState /*&& !UseBlitter && !MustBuffer*/)
 	{
 		HRESULT hr = PrimarySurf->Flip (NULL, FlipFlags);

@@ -1,24 +1,18 @@
+// Emacs style mode select	 -*- C++ -*- 
 //-----------------------------------------------------------------------------
 //
-// Copyright 1993-1996 id Software
-// Copyright 1994-1996 Raven Software
-// Copyright 1999-2016 Randy Heit
-// Copyright 2002-2016 Christoph Oelckers
+// $Id:$
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Copyright (C) 1993-1996 by id Software, Inc.
 //
-// This program is distributed in the hope that it will be useful,
+// This source is available for distribution and/or modification
+// only under the terms of the DOOM Source Code License as
+// published by id Software. All rights reserved.
+//
+// The source is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
+// FITNESS FOR A PARTICULAR PURPOSE. See the DOOM Source Code License
+// for more details.
 //
 // DESCRIPTION:  Head up display
 //
@@ -35,8 +29,8 @@ class player_t;
 //
 // Globally visible constants.
 //
-#define HU_FONTSTART	uint8_t('!')		// the first font characters
-#define HU_FONTEND		uint8_t('\377')	// the last font characters
+#define HU_FONTSTART	BYTE('!')		// the first font characters
+#define HU_FONTEND		BYTE('\377')	// the last font characters
 
 // Calculate # of glyphs in font.
 #define HU_FONTSIZE		(HU_FONTEND - HU_FONTSTART + 1)
@@ -58,11 +52,9 @@ void HU_GetPlayerWidths(int &maxnamewidth, int &maxscorewidth, int &maxiconheigh
 void HU_DrawColorBar(int x, int y, int height, int playernum);
 int HU_GetRowColor(player_t *player, bool hightlight);
 
-extern bool SB_ForceActive;
-
 // Sorting routines
 
-int comparepoints(const void *arg1, const void *arg2);
-int compareteams(const void *arg1, const void *arg2);
+int STACK_ARGS comparepoints(const void *arg1, const void *arg2);
+int STACK_ARGS compareteams(const void *arg1, const void *arg2);
 
 #endif

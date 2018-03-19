@@ -1,25 +1,14 @@
-//-----------------------------------------------------------------------------
-//
-// Copyright 1993-1996 id Software
-// Copyright 1994-1996 Raven Software
-// Copyright 1999-2016 Randy Heit
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see http://www.gnu.org/licenses/
-//
-//-----------------------------------------------------------------------------
-//
 
+//**************************************************************************
+//**
+//** ct_chat.c : Heretic 2 : Raven Software, Corp.
+//**
+//** $RCSfile: ct_chat.c,v $
+//** $Revision: 1.12 $
+//** $Date: 96/01/16 10:35:26 $
+//** $Author: bgokey $
+//**
+//**************************************************************************
 
 #include <string.h>
 #include <ctype.h>
@@ -38,11 +27,10 @@
 #include "v_video.h"
 #include "gi.h"
 #include "d_gui.h"
-#include "g_input.h"
+#include "i_input.h"
 #include "templates.h"
 #include "d_net.h"
 #include "d_event.h"
-#include "sbar.h"
 
 #define QUEUESIZE		128
 #define MESSAGESIZE		128
@@ -58,8 +46,6 @@ EXTERN_CVAR (Bool, sb_cooperative_enable)
 EXTERN_CVAR (Bool, sb_deathmatch_enable)
 EXTERN_CVAR (Bool, sb_teamdeathmatch_enable)
 
-int active_con_scaletext();
-
 // Public data
 
 void CT_Init ();
@@ -73,11 +59,11 @@ int chatmodeon;
 static void CT_ClearChatMessage ();
 static void CT_AddChar (char c);
 static void CT_BackSpace ();
-static void ShoveChatStr (const char *str, uint8_t who);
+static void ShoveChatStr (const char *str, BYTE who);
 static bool DoSubstitution (FString &out, const char *in);
 
 static int len;
-static uint8_t ChatQueue[QUEUESIZE];
+static BYTE ChatQueue[QUEUESIZE];
 
 CVAR (String, chatmacro1, "I'm ready to kick butt!", CVAR_ARCHIVE)
 CVAR (String, chatmacro2, "I'm OK.", CVAR_ARCHIVE)
@@ -159,20 +145,12 @@ bool CT_Responder (event_t *ev)
 				CT_BackSpace ();
 				return true;
 			}
-#ifdef __APPLE__
-			else if (ev->data1 == 'C' && (ev->data3 & GKM_META))
-#else // !__APPLE__
 			else if (ev->data1 == 'C' && (ev->data3 & GKM_CTRL))
-#endif // __APPLE__
 			{
 				I_PutInClipboard ((char *)ChatQueue);
 				return true;
 			}
-#ifdef __APPLE__
-			else if (ev->data1 == 'V' && (ev->data3 & GKM_META))
-#else // !__APPLE__
 			else if (ev->data1 == 'V' && (ev->data3 & GKM_CTRL))
-#endif // __APPLE__
 			{
 				CT_PasteChat(I_GetFromClipboard(false));
 			}
@@ -238,12 +216,19 @@ void CT_Drawer (void)
 		int i, x, scalex, y, promptwidth;
 
 		y = (viewactive || gamestate != GS_LEVEL) ? -10 : -30;
+		if (con_scaletext == 1)
+		{
+			scalex = CleanXfac;
+			y *= CleanYfac;
+		}
+		else
+		{
+			scalex = 1;
+		}
 
-		scalex = 1;
-		int scale = active_con_scaletext();
-		int screen_width = SCREENWIDTH / scale;
-		int screen_height= SCREENHEIGHT / scale;
-		int st_y = StatusBar->GetTopOfStatusbar() / scale;
+		int screen_width = con_scaletext > 1? SCREENWIDTH/2 : SCREENWIDTH;
+		int screen_height = con_scaletext > 1? SCREENHEIGHT/2 : SCREENHEIGHT;
+		int st_y = con_scaletext > 1?  ST_Y/2 : ST_Y;
 
 		y += ((SCREENHEIGHT == viewheight && viewactive) || gamestate != GS_LEVEL) ? screen_height : st_y;
 
@@ -269,10 +254,18 @@ void CT_Drawer (void)
 		// draw the prompt, text, and cursor
 		ChatQueue[len] = SmallFont->GetCursor();
 		ChatQueue[len+1] = '\0';
-		screen->DrawText (SmallFont, CR_GREEN, 0, y, prompt, 
-			DTA_VirtualWidth, screen_width, DTA_VirtualHeight, screen_height, DTA_KeepRatio, true, TAG_DONE);
-		screen->DrawText (SmallFont, CR_GREY, promptwidth, y, (char *)(ChatQueue + i), 
-			DTA_VirtualWidth, screen_width, DTA_VirtualHeight, screen_height, DTA_KeepRatio, true, TAG_DONE);
+		if (con_scaletext < 2)
+		{
+			screen->DrawText (SmallFont, CR_GREEN, 0, y, prompt, DTA_CleanNoMove, *con_scaletext, TAG_DONE);
+			screen->DrawText (SmallFont, CR_GREY, promptwidth, y, (char *)(ChatQueue + i), DTA_CleanNoMove, *con_scaletext, TAG_DONE);
+		}
+		else
+		{
+			screen->DrawText (SmallFont, CR_GREEN, 0, y, prompt, 
+				DTA_VirtualWidth, screen_width, DTA_VirtualHeight, screen_height, DTA_KeepRatio, true, TAG_DONE);
+			screen->DrawText (SmallFont, CR_GREY, promptwidth, y, (char *)(ChatQueue + i), 
+				DTA_VirtualWidth, screen_width, DTA_VirtualHeight, screen_height, DTA_KeepRatio, true, TAG_DONE);
+		}
 		ChatQueue[len] = '\0';
 
 		BorderTopRefresh = screen->GetPageCount ();
@@ -280,8 +273,7 @@ void CT_Drawer (void)
 
 	if (players[consoleplayer].camera != NULL &&
 		(Button_ShowScores.bDown ||
-		 players[consoleplayer].camera->health <= 0 ||
-		 SB_ForceActive) &&
+		 players[consoleplayer].camera->health <= 0) &&
 		 // Don't draw during intermission, since it has its own scoreboard in wi_stuff.cpp.
 		 gamestate != GS_INTERMISSION)
 	{
@@ -340,12 +332,8 @@ static void CT_ClearChatMessage ()
 //
 //===========================================================================
 
-static void ShoveChatStr (const char *str, uint8_t who)
+static void ShoveChatStr (const char *str, BYTE who)
 {
-	// Don't send empty messages
-	if (str == NULL || str[0] == '\0')
-		return;
-
 	FString substBuff;
 
 	if (str[0] == '/' &&
@@ -420,7 +408,7 @@ static bool DoSubstitution (FString &out, const char *in)
 		{
 			if (strnicmp(a, "armor", 5) == 0)
 			{
-				AInventory *armor = player->mo->FindInventory(NAME_BasicArmor);
+				AInventory *armor = player->mo->FindInventory<ABasicArmor>();
 				out.AppendFormat("%d", armor != NULL ? armor->Amount : 0);
 			}
 		}

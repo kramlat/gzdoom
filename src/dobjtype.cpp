@@ -3,8 +3,7 @@
 ** Implements the type information class
 **
 **---------------------------------------------------------------------------
-** Copyright 1998-2016 Randy Heit
-** Copyright 2005-2016 Christoph Oelckers
+** Copyright 1998-2008 Randy Heit
 ** All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
@@ -33,649 +32,262 @@
 **
 */
 
-// HEADER FILES ------------------------------------------------------------
-
-#include <float.h>
-#include <limits>
-
 #include "dobject.h"
 #include "i_system.h"
-#include "serializer.h"
 #include "actor.h"
 #include "templates.h"
 #include "autosegs.h"
 #include "v_text.h"
-#include "a_pickups.h"
-#include "d_player.h"
-#include "doomerrors.h"
-#include "fragglescript/t_fs.h"
-#include "a_keys.h"
-#include "vm.h"
-#include "types.h"
 
-// MACROS ------------------------------------------------------------------
-
-// TYPES -------------------------------------------------------------------
-
-// EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
-
-// PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
-
-// PRIVATE FUNCTION PROTOTYPES ---------------------------------------------
-
-// EXTERNAL DATA DECLARATIONS ----------------------------------------------
-EXTERN_CVAR(Bool, strictdecorate);
-
-// PUBLIC DATA DEFINITIONS -------------------------------------------------
-FMemArena ClassDataAllocator(32768);	// use this for all static class data that can be released in bulk when the type system is shut down.
-
-TArray<PClass *> PClass::AllClasses;
-TMap<FName, PClass*> PClass::ClassMap;
-TArray<VMFunction**> PClass::FunctionPtrList;
+TArray<PClass *> PClass::m_RuntimeActors;
+TArray<PClass *> PClass::m_Types;
+PClass *PClass::TypeHash[PClass::HASH_SIZE];
 bool PClass::bShutdown;
-bool PClass::bVMOperational;
 
-// Originally this was just a bogus pointer, but with the VM performing a read barrier on every object pointer write
-// that does not work anymore. WP_NOCHANGE needs to point to a vaild object to work as intended.
-// This Object does not need to be garbage collected, though, but it needs to provide the proper structure so that the
-// GC can process it.
-AWeapon *WP_NOCHANGE;
-DEFINE_GLOBAL(WP_NOCHANGE);
-
-
-// PRIVATE DATA DEFINITIONS ------------------------------------------------
-
-// A harmless non-nullptr FlatPointer for classes without pointers.
+// A harmless non-NULL FlatPointer for classes without pointers.
 static const size_t TheEnd = ~(size_t)0;
 
-//==========================================================================
-//
-// PClass :: WriteValue
-//
-// Similar to PStruct's version, except it also needs to traverse parent
-// classes.
-//
-//==========================================================================
-
-static void RecurseWriteFields(const PClass *type, FSerializer &ar, const void *addr)
+static int STACK_ARGS cregcmp (const void *a, const void *b)
 {
-	if (type != nullptr)
-	{
-		RecurseWriteFields(type->ParentClass, ar, addr);
-		// Don't write this part if it has no non-transient variables
-		for (unsigned i = 0; i < type->Fields.Size(); ++i)
-		{
-			if (!(type->Fields[i]->Flags & (VARF_Transient|VARF_Meta)))
-			{
-				// Tag this section with the class it came from in case
-				// a more-derived class has variables that shadow a less-
-				// derived class. Whether or not that is a language feature
-				// that will actually be allowed remains to be seen.
-				FString key;
-				key.Format("class:%s", type->TypeName.GetChars());
-				if (ar.BeginObject(key.GetChars()))
-				{
-					type->VMType->Symbols.WriteFields(ar, addr);
-					ar.EndObject();
-				}
-				break;
-			}
-		}
-	}
+	// VC++ introduces NULLs in the sequence. GCC seems to work as expected and not do it.
+	const ClassReg *class1 = *(const ClassReg **)a;
+	const ClassReg *class2 = *(const ClassReg **)b;
+	if (class1 == NULL) return 1;
+	if (class2 == NULL) return -1;
+	return strcmp (class1->Name, class2->Name);
 }
-
-// Same as WriteValue, but does not create a new object in the serializer
-// This is so that user variables do not contain unnecessary subblocks.
-void PClass::WriteAllFields(FSerializer &ar, const void *addr) const
-{
-	RecurseWriteFields(this, ar, addr);
-}
-
-//==========================================================================
-//
-// PClass :: ReadAllFields
-//
-//==========================================================================
-
-bool PClass::ReadAllFields(FSerializer &ar, void *addr) const
-{
-	bool readsomething = false;
-	bool foundsomething = false;
-	const char *key;
-	key = ar.GetKey();
-	if (strcmp(key, "classtype"))
-	{
-		// this does not represent a DObject
-		Printf(TEXTCOLOR_RED "trying to read user variables but got a non-object (first key is '%s')", key);
-		ar.mErrors++;
-		return false;
-	}
-	while ((key = ar.GetKey()))
-	{
-		if (strncmp(key, "class:", 6))
-		{
-			// We have read all user variable blocks.
-			break;
-		}
-		foundsomething = true;
-		PClass *type = PClass::FindClass(key + 6);
-		if (type != nullptr)
-		{
-			// Only read it if the type is related to this one.
-			if (IsDescendantOf(type))
-			{
-				if (ar.BeginObject(nullptr))
-				{
-					readsomething |= type->VMType->Symbols.ReadFields(ar, addr, type->TypeName.GetChars());
-					ar.EndObject();
-				}
-			}
-			else
-			{
-				DPrintf(DMSG_ERROR, "Unknown superclass %s of class %s\n",
-					type->TypeName.GetChars(), TypeName.GetChars());
-			}
-		}
-		else
-		{
-			DPrintf(DMSG_ERROR, "Unknown superclass %s of class %s\n",
-				key+6, TypeName.GetChars());
-		}
-	}
-	return readsomething || !foundsomething;
-}
-
-//==========================================================================
-//
-// cregcmp
-//
-// Sorter to keep built-in types in a deterministic order. (Needed?)
-//
-//==========================================================================
-
-static int cregcmp (const void *a, const void *b) NO_SANITIZE
-{
-	const PClass *class1 = *(const PClass **)a;
-	const PClass *class2 = *(const PClass **)b;
-	return strcmp(class1->TypeName, class2->TypeName);
-}
-
-//==========================================================================
-//
-// PClass :: StaticInit												STATIC
-//
-// Creates class metadata for all built-in types.
-//
-//==========================================================================
 
 void PClass::StaticInit ()
 {
 	atterm (StaticShutdown);
 
-	Namespaces.GlobalNamespace = Namespaces.NewNamespace(0);
+	// Sort classes by name to remove dependance on how the compiler ordered them.
+	REGINFO *head = &CRegHead;
+	REGINFO *tail = &CRegTail;
+
+	// MinGW's linker is linking the object files backwards for me now...
+	if (head > tail)
+	{
+		swapvalues (head, tail);
+	}
+	qsort (head + 1, tail - head - 1, sizeof(REGINFO), cregcmp);
 
 	FAutoSegIterator probe(CRegHead, CRegTail);
 
-	while (*++probe != nullptr)
+	while (*++probe != NULL)
 	{
 		((ClassReg *)*probe)->RegisterClass ();
 	}
-	probe.Reset();
-	for(auto cls : AllClasses)
-	{
-		if (cls->IsDescendantOf(RUNTIME_CLASS(AActor)))
-		{
-			PClassActor::AllActorClasses.Push(static_cast<PClassActor*>(cls));
-		}
-	}
-
-	// Keep built-in classes in consistant order. I did this before, though
-	// I'm not sure if this is really necessary to maintain any sort of sync.
-	qsort(&AllClasses[0], AllClasses.Size(), sizeof(AllClasses[0]), cregcmp);
-
-	// WP_NOCHANGE must point to a valid object, although it does not need to be a weapon.
-	// A simple DObject is enough to give the GC the ability to deal with it, if subjected to it.
-	WP_NOCHANGE = (AWeapon*)Create<DObject>();
-	WP_NOCHANGE->Release();
 }
 
-//==========================================================================
-//
-// PClass :: StaticShutdown											STATIC
-//
-// Frees all static class data.
-//
-//==========================================================================
+void PClass::ClearRuntimeData ()
+{
+	StaticShutdown();
+
+	m_RuntimeActors.Clear();
+	m_Types.Clear();
+	memset(TypeHash, 0, sizeof(TypeHash));
+	bShutdown = false;
+
+	// Immediately reinitialize the internal classes
+	FAutoSegIterator probe(CRegHead, CRegTail);
+
+	while (*++probe != NULL)
+	{
+		((ClassReg *)*probe)->RegisterClass ();
+	}
+}
 
 void PClass::StaticShutdown ()
 {
-	if (WP_NOCHANGE != nullptr)
+	TArray<size_t *> uniqueFPs(64);
+	unsigned int i, j;
+
+	for (i = 0; i < PClass::m_Types.Size(); ++i)
 	{
-		delete WP_NOCHANGE;
-	}
+		PClass *type = PClass::m_Types[i];
+		PClass::m_Types[i] = NULL;
+		if (type->FlatPointers != &TheEnd && type->FlatPointers != type->Pointers)
+		{
+			// FlatPointers are shared by many classes, so we must check for
+			// duplicates and only delete those that are unique.
+			for (j = 0; j < uniqueFPs.Size(); ++j)
+			{
+				if (type->FlatPointers == uniqueFPs[j])
+				{
+					break;
+				}
+			}
+			if (j == uniqueFPs.Size())
+			{
+				uniqueFPs.Push(const_cast<size_t *>(type->FlatPointers));
+			}
+		}
+		type->FlatPointers = NULL;
 
-	// delete all variables containing pointers to script functions.
-	for (auto p : FunctionPtrList)
+		// For runtime classes, this call will also delete the PClass.
+		PClass::StaticFreeData (type);
+	}
+	for (i = 0; i < uniqueFPs.Size(); ++i)
 	{
-		*p = nullptr;
+		delete[] uniqueFPs[i];
 	}
-	FunctionPtrList.Clear();
-	VMFunction::DeleteAll();
-
-	// Make a full garbage collection here so that all destroyed but uncollected higher level objects 
-	// that still exist are properly taken down before the low level data is deleted.
-	GC::FullGC();
-
-	// From this point onward no scripts may be called anymore because the data needed by the VM is getting deleted now.
-	// This flags DObject::Destroy not to call any scripted OnDestroy methods anymore.
-	bVMOperational = false;
-
-	// PendingWeapon must be cleared manually because it is not subjected to the GC if it contains WP_NOCHANGE, which is just RUNTIME_CLASS(AWWeapon).
-	// But that will get cleared here, confusing the GC if the value is left in.
-	for (auto &p : players)
-	{
-		p.PendingWeapon = nullptr;
-	}
-	Namespaces.ReleaseSymbols();
-
-	// This must be done in two steps because the native classes are not ordered by inheritance,
-	// so all meta data must be gone before deleting the actual class objects.
-	for (auto cls : AllClasses)	if (cls->Meta != nullptr) cls->DestroyMeta(cls->Meta);
-	for (auto cls : AllClasses)	delete cls;
-	// Unless something went wrong, anything left here should be class and type objects only, which do not own any scripts.
 	bShutdown = true;
-	TypeTable.Clear();
-	ClassDataAllocator.FreeAllBlocks();
-	AllClasses.Clear();
-	PClassActor::AllActorClasses.Clear();
-	ClassMap.Clear();
-
-	FAutoSegIterator probe(CRegHead, CRegTail);
-
-	while (*++probe != nullptr)
-	{
-		auto cr = ((ClassReg *)*probe);
-		cr->MyClass = nullptr;
-	}
-	
 }
 
-//==========================================================================
-//
-// PClass Constructor
-//
-//==========================================================================
-
-PClass::PClass()
+void PClass::StaticFreeData (PClass *type)
 {
-	PClass::AllClasses.Push(this);
-}
-
-//==========================================================================
-//
-// PClass Destructor
-//
-//==========================================================================
-
-PClass::~PClass()
-{
-	if (Defaults != nullptr)
+	if (type->Defaults != NULL)
 	{
-		M_Free(Defaults);
-		Defaults = nullptr;
+		M_Free(type->Defaults);
+		type->Defaults = NULL;
 	}
-	if (Meta != nullptr)
+	type->FreeStateList ();
+
+	if (type->ActorInfo != NULL)
 	{
-		M_Free(Meta);
-		Meta = nullptr;
+		if (type->ActorInfo->OwnedStates != NULL)
+		{
+			delete[] type->ActorInfo->OwnedStates;
+			type->ActorInfo->OwnedStates = NULL;
+		}
+		if (type->ActorInfo->DamageFactors != NULL)
+		{
+			delete type->ActorInfo->DamageFactors;
+			type->ActorInfo->DamageFactors = NULL;
+		}
+		if (type->ActorInfo->PainChances != NULL)
+		{
+			delete type->ActorInfo->PainChances;
+			type->ActorInfo->PainChances = NULL;
+		}
+		if (type->ActorInfo->ColorSets != NULL)
+		{
+			delete type->ActorInfo->ColorSets;
+			type->ActorInfo->ColorSets = NULL;
+		}
+		delete type->ActorInfo;
+		type->ActorInfo = NULL;
 	}
-}
-
-//==========================================================================
-//
-// ClassReg :: RegisterClass
-//
-// Create metadata describing the built-in class this struct is intended
-// for.
-//
-//==========================================================================
-
-PClass *ClassReg::RegisterClass()
-{
-	// Skip classes that have already been registered
-	if (MyClass != nullptr)
+	if (type->bRuntimeClass)
 	{
-		return MyClass;
-	}
-
-	// Add type to list
-	PClass *cls = new PClass;
-
-	SetupClass(cls);
-	cls->InsertIntoHash(true);
-	if (ParentType != nullptr)
-	{
-		cls->ParentClass = ParentType->RegisterClass();
-	}
-	return cls;
-}
-
-//==========================================================================
-//
-// ClassReg :: SetupClass
-//
-// Copies the class-defining parameters from a ClassReg to the Class object
-// created for it.
-//
-//==========================================================================
-
-void ClassReg::SetupClass(PClass *cls)
-{
-	assert(MyClass == nullptr);
-	MyClass = cls;
-	cls->TypeName = FName(Name+1);
-	cls->Size = SizeOf;
-	cls->Pointers = Pointers;
-	cls->ConstructNative = ConstructNative;
-}
-
-//==========================================================================
-//
-// PClass :: InsertIntoHash
-//
-// Add class to the type table.
-//
-//==========================================================================
-
-void PClass::InsertIntoHash (bool native)
-{
-	auto k = ClassMap.CheckKey(TypeName);
-	if (k != nullptr)
-	{ // This type has already been inserted
-		I_Error("Tried to register class '%s' more than once.\n", TypeName.GetChars());
+		delete type;
 	}
 	else
 	{
-		ClassMap[TypeName] = this;
-	}
-	if (!native && IsDescendantOf(RUNTIME_CLASS(AActor)))
-	{
-		PClassActor::AllActorClasses.Push(static_cast<PClassActor*>(this));
+		type->Symbols.ReleaseSymbols();
 	}
 }
 
-//==========================================================================
-//
-// PClass :: FindParentClass
-//
-// Finds a parent class that matches the given name, including itself.
-//
-//==========================================================================
-
-const PClass *PClass::FindParentClass(FName name) const
+void ClassReg::RegisterClass () const
 {
-	for (const PClass *type = this; type != nullptr; type = type->ParentClass)
+	assert (MyClass != NULL);
+
+	// Add type to list
+	MyClass->ClassIndex = PClass::m_Types.Push (MyClass);
+
+	MyClass->TypeName = FName(Name+1);
+	MyClass->ParentClass = ParentType;
+	MyClass->Size = SizeOf;
+	MyClass->Pointers = Pointers;
+	MyClass->ConstructNative = ConstructNative;
+	MyClass->InsertIntoHash ();
+}
+
+void PClass::InsertIntoHash ()
+{
+	// Add class to hash table. Classes are inserted into each bucket
+	// in ascending order by name index.
+	unsigned int bucket = TypeName % HASH_SIZE;
+	PClass **hashpos = &TypeHash[bucket];
+	while (*hashpos != NULL)
 	{
-		if (type->TypeName == name)
-		{
-			return type;
+		int lexx = int(TypeName) - int((*hashpos)->TypeName);
+
+		if (lexx > 0)
+		{ // This type should come later in the chain
+			hashpos = &((*hashpos)->HashNext);
+		}
+		else if (lexx == 0)
+		{ // This type has already been inserted
+		  // ... but there is no need whatsoever to make it a fatal error!
+			Printf (TEXTCOLOR_RED"Tried to register class '%s' more than once.\n", TypeName.GetChars());
+			break;
+		}
+		else
+		{ // Type comes right here
+			break;
 		}
 	}
-	return nullptr;
+	HashNext = *hashpos;
+	*hashpos = this;
 }
 
-//==========================================================================
-//
-// PClass :: FindClass
-//
-// Find a type, passed the name as a name.
-//
-//==========================================================================
-
-PClass *PClass::FindClass (FName zaname)
+// Find a type, passed the name as a name
+const PClass *PClass::FindClass (FName zaname)
 {
 	if (zaname == NAME_None)
 	{
-		return nullptr;
+		return NULL;
 	}
-	auto k = ClassMap.CheckKey(zaname);
-	return k ? *k : nullptr;
+
+	PClass *cls = TypeHash[zaname % HASH_SIZE];
+
+	while (cls != 0)
+	{
+		int lexx = int(zaname) - int(cls->TypeName);
+		if (lexx > 0)
+		{
+			cls = cls->HashNext;
+		}
+		else if (lexx == 0)
+		{
+			return cls;
+		}
+		else
+		{
+			break;
+		}
+	}
+	return NULL;
 }
 
-//==========================================================================
-//
-// PClass :: CreateNew
-//
 // Create a new object that this class represents
-//
-//==========================================================================
-
-DObject *PClass::CreateNew()
+DObject *PClass::CreateNew () const
 {
-	uint8_t *mem = (uint8_t *)M_Malloc (Size);
-	assert (mem != nullptr);
+	BYTE *mem = (BYTE *)M_Malloc (Size);
+	assert (mem != NULL);
 
 	// Set this object's defaults before constructing it.
-	if (Defaults != nullptr)
+	if (Defaults != NULL)
 		memcpy (mem, Defaults, Size);
 	else
 		memset (mem, 0, Size);
 
-	if (ConstructNative == nullptr)
-	{
-		M_Free(mem);
-		I_Error("Attempt to instantiate abstract class %s.", TypeName.GetChars());
-	}
 	ConstructNative (mem);
 	((DObject *)mem)->SetClass (const_cast<PClass *>(this));
-	InitializeSpecials(mem, Defaults, &PClass::SpecialInits);
 	return (DObject *)mem;
 }
 
-//==========================================================================
-//
-// PClass :: InitializeSpecials
-//
-// Initialize special fields (e.g. strings) of a newly-created instance.
-//
-//==========================================================================
-
-void PClass::InitializeSpecials(void *addr, void *defaults, TArray<FTypeAndOffset> PClass::*Inits)
-{
-	// Once we reach a native class, we can stop going up the family tree,
-	// since native classes handle initialization natively.
-	if ((!bRuntimeClass && Inits == &PClass::SpecialInits) || ParentClass == nullptr)
-	{
-		return;
-	}
-	ParentClass->InitializeSpecials(addr, defaults, Inits);
-	for (auto tao : (this->*Inits))
-	{
-		tao.first->InitializeValue((char*)addr + tao.second, defaults == nullptr? nullptr : ((char*)defaults) + tao.second);
-	}
-}
-
-//==========================================================================
-//
-// PClass :: DestroySpecials
-//
-// Destroy special fields (e.g. strings) of an instance that is about to be
-// deleted.
-//
-//==========================================================================
-
-void PClass::DestroySpecials(void *addr)
-{
-	if (!bRuntimeClass)
-	{
-		return;
-	}
-	assert(ParentClass != nullptr);
-	ParentClass->DestroySpecials(addr);
-	for (auto tao : SpecialInits)
-	{
-		tao.first->DestroyValue((uint8_t *)addr + tao.second);
-	}
-}
-
-//==========================================================================
-//
-// PClass :: DestroyMeta
-//
-// Same for meta data
-//
-//==========================================================================
-
-void PClass::DestroyMeta(void *addr)
-{
-	if (ParentClass != nullptr) ParentClass->DestroyMeta(addr);
-	for (auto tao : MetaInits)
-	{
-		tao.first->DestroyValue((uint8_t *)addr + tao.second);
-	}
-}
-
-//==========================================================================
-//
-// PClass :: Derive
-//
-// Copies inheritable values into the derived class and other miscellaneous setup.
-//
-//==========================================================================
-
-void PClass::Derive(PClass *newclass, FName name)
-{
-	newclass->bRuntimeClass = true;
-	newclass->ParentClass = this;
-	newclass->ConstructNative = ConstructNative;
-	newclass->TypeName = name;
-	newclass->MetaSize = MetaSize;
-
-}
-
-//==========================================================================
-//
-// PClassActor :: InitializeNativeDefaults
-//
-//==========================================================================
-
-void PClass::InitializeDefaults()
-{
-	if (IsDescendantOf(RUNTIME_CLASS(AActor)))
-	{
-		assert(Defaults == nullptr);
-		Defaults = (uint8_t *)M_Malloc(Size);
-
-		// run the constructor on the defaults to set the vtbl pointer which is needed to run class-aware functions on them.
-		// Temporarily setting bSerialOverride prevents linking into the thinker chains.
-		auto s = DThinker::bSerialOverride;
-		DThinker::bSerialOverride = true;
-		ConstructNative(Defaults);
-		DThinker::bSerialOverride = s;
-		// We must unlink the defaults from the class list because it's just a static block of data to the engine.
-		DObject *optr = (DObject*)Defaults;
-		GC::Root = optr->ObjNext;
-		optr->ObjNext = nullptr;
-		optr->SetClass(this);
-
-		// Copy the defaults from the parent but leave the DObject part alone because it contains important data.
-		if (ParentClass->Defaults != nullptr)
-		{
-			memcpy(Defaults + sizeof(DObject), ParentClass->Defaults + sizeof(DObject), ParentClass->Size - sizeof(DObject));
-			if (Size > ParentClass->Size)
-			{
-				memset(Defaults + ParentClass->Size, 0, Size - ParentClass->Size);
-			}
-		}
-		else
-		{
-			memset(Defaults + sizeof(DObject), 0, Size - sizeof(DObject));
-		}
-
-		assert(MetaSize >= ParentClass->MetaSize);
-		if (MetaSize != 0)
-		{
-			Meta = (uint8_t*)M_Malloc(MetaSize);
-
-			// Copy the defaults from the parent but leave the DObject part alone because it contains important data.
-			if (ParentClass->Meta != nullptr)
-			{
-				memcpy(Meta, ParentClass->Meta, ParentClass->MetaSize);
-				if (MetaSize > ParentClass->MetaSize)
-				{
-					memset(Meta + ParentClass->MetaSize, 0, MetaSize - ParentClass->MetaSize);
-				}
-			}
-			else
-			{
-				memset(Meta, 0, MetaSize);
-			}
-
-			if (MetaSize > 0) memcpy(Meta, ParentClass->Meta, ParentClass->MetaSize);
-			else memset(Meta, 0, MetaSize);
-		}
-	}
-
-	if (VMType != nullptr)	// purely internal classes have no symbol table
-	{
-		if (bRuntimeClass)
-		{
-			// Copy parent values from the parent defaults.
-			assert(ParentClass != nullptr);
-			if (Defaults != nullptr) ParentClass->InitializeSpecials(Defaults, ParentClass->Defaults, &PClass::SpecialInits);
-			for (const PField *field : Fields)
-			{
-				if (!(field->Flags & VARF_Native) && !(field->Flags & VARF_Meta))
-				{
-					field->Type->SetDefaultValue(Defaults, unsigned(field->Offset), &SpecialInits);
-				}
-			}
-		}
-		if (Meta != nullptr) ParentClass->InitializeSpecials(Meta, ParentClass->Meta, &PClass::MetaInits);
-		for (const PField *field : Fields)
-		{
-			if (!(field->Flags & VARF_Native) && (field->Flags & VARF_Meta))
-			{
-				field->Type->SetDefaultValue(Meta, unsigned(field->Offset), &MetaInits);
-			}
-		}
-	}
-}
-
-//==========================================================================
-//
-// PClass :: CreateDerivedClass
-//
 // Create a new class based on an existing class
-//
-//==========================================================================
-
-PClass *PClass::CreateDerivedClass(FName name, unsigned int size)
+PClass *PClass::CreateDerivedClass (FName name, unsigned int size)
 {
-	assert(size >= Size);
+	assert (size >= Size);
 	PClass *type;
 	bool notnew;
 
 	const PClass *existclass = FindClass(name);
 
-	if (existclass != nullptr)
+	// This is a placeholder so fill it in
+	if (existclass != NULL && existclass->Size == (unsigned)-1)
 	{
-		// This is a placeholder so fill it in
-		if (existclass->Size == TentativeClass)
+		type = const_cast<PClass*>(existclass);
+		if (!IsDescendantOf(type->ParentClass))
 		{
-			type = const_cast<PClass*>(existclass);
-			if (!IsDescendantOf(type->ParentClass))
-			{
-				I_Error("%s must inherit from %s but doesn't.", name.GetChars(), type->ParentClass->TypeName.GetChars());
-			}
-			DPrintf(DMSG_SPAMMY, "Defining placeholder class %s\n", name.GetChars());
-			notnew = true;
+			I_Error("%s must inherit from %s but doesn't.", name.GetChars(), type->ParentClass->TypeName.GetChars());
 		}
-		else
-		{
-			// a different class with the same name already exists. Let the calling code deal with this.
-			return nullptr;
-		}
+		DPrintf("Defining placeholder class %s\n", name.GetChars());
+		notnew = true;
 	}
 	else
 	{
@@ -684,167 +296,161 @@ PClass *PClass::CreateDerivedClass(FName name, unsigned int size)
 	}
 
 	type->TypeName = name;
-	type->bRuntimeClass = true;
-	Derive(type, name);
+	type->ParentClass = this;
 	type->Size = size;
-	if (size != TentativeClass)
-	{
-		NewClassType(type);
-		type->InitializeDefaults();
-		type->Virtuals = Virtuals;
-	}
-	else
-		type->bOptional = false;
-
+	type->Pointers = NULL;
+	type->ConstructNative = ConstructNative;
 	if (!notnew)
 	{
-		type->InsertIntoHash(false);
+		type->ClassIndex = m_Types.Push (type);
+	}
+	type->Meta = Meta;
+
+	// Set up default instance of the new class.
+	type->Defaults = (BYTE *)M_Malloc(size);
+	memcpy (type->Defaults, Defaults, Size);
+	if (size > Size)
+	{
+		memset (type->Defaults + Size, 0, size - Size);
+	}
+
+	type->FlatPointers = NULL;
+	type->bRuntimeClass = true;
+	type->ActorInfo = NULL;
+	type->Symbols.SetParentTable (&this->Symbols);
+	if (!notnew) type->InsertIntoHash();
+
+	// If this class has an actor info, then any classes derived from it
+	// also need an actor info.
+	if (this->ActorInfo != NULL)
+	{
+		FActorInfo *info = type->ActorInfo = new FActorInfo;
+		info->Class = type;
+		info->GameFilter = GAME_Any;
+		info->SpawnID = 0;
+		info->DoomEdNum = -1;
+		info->OwnedStates = NULL;
+		info->NumOwnedStates = 0;
+		info->Replacement = NULL;
+		info->Replacee = NULL;
+		info->StateList = NULL;
+		info->DamageFactors = NULL;
+		info->PainChances = NULL;
+		info->PainFlashes = NULL;
+		info->ColorSets = NULL;
+		m_RuntimeActors.Push (type);
 	}
 	return type;
 }
 
-//==========================================================================
-//
-// PClass :: AddField
-//
-//==========================================================================
-
-PField *PClass::AddField(FName name, PType *type, uint32_t flags)
+// Add <extension> bytes to the end of this class. Returns the
+// previous size of the class.
+unsigned int PClass::Extend(unsigned int extension)
 {
-	PField *field;
-	if (!(flags & VARF_Meta))
-	{
-		unsigned oldsize = Size;
-		field = VMType->Symbols.AddField(name, type, flags, Size);
+	assert(this->bRuntimeClass);
 
-		// Only initialize the defaults if they have already been created.
-		// For ZScript this is not the case, it will first define all fields before
-		// setting up any defaults for any class.
-		if (field != nullptr && !(flags & VARF_Native) && Defaults != nullptr)
-		{
-			Defaults = (uint8_t *)M_Realloc(Defaults, Size);
-			memset(Defaults + oldsize, 0, Size - oldsize);
-		}
-	}
-	else
-	{
-		// Same as above, but a different data storage.
-		unsigned oldsize = MetaSize;
-		field = VMType->Symbols.AddField(name, type, flags, MetaSize);
-
-		if (field != nullptr && !(flags & VARF_Native) && Meta != nullptr)
-		{
-			Meta = (uint8_t *)M_Realloc(Meta, MetaSize);
-			memset(Meta + oldsize, 0, MetaSize - oldsize);
-		}
-	}
-	if (field != nullptr) Fields.Push(field);
-	return field;
+	unsigned int oldsize = Size;
+	Size += extension;
+	Defaults = (BYTE *)M_Realloc(Defaults, Size);
+	memset(Defaults + oldsize, 0, extension);
+	return oldsize;
 }
 
-//==========================================================================
-//
-// PClass :: FindClassTentative
-//
-// Like FindClass but creates a placeholder if no class is found.
-// This will be filled in when the actual class is constructed.
-//
-//==========================================================================
-
-PClass *PClass::FindClassTentative(FName name)
+// Like FindClass but creates a placeholder if no class
+// is found. CreateDerivedClass will automatically fill
+// in the placeholder when the actual class is defined.
+const PClass *PClass::FindClassTentative (FName name)
 {
 	if (name == NAME_None)
 	{
-		return nullptr;
+		return NULL;
 	}
 
-	PClass *found = FindClass(name);
-	if (found != nullptr) return found;
+	PClass *cls = TypeHash[name % HASH_SIZE];
 
+	while (cls != 0)
+	{
+		int lexx = int(name) - int(cls->TypeName);
+		if (lexx > 0)
+		{
+			cls = cls->HashNext;
+		}
+		else if (lexx == 0)
+		{
+			return cls;
+		}
+		else
+		{
+			break;
+		}
+	}
 	PClass *type = new PClass;
-	DPrintf(DMSG_SPAMMY, "Creating placeholder class %s : %s\n", name.GetChars(), TypeName.GetChars());
+	DPrintf("Creating placeholder class %s : %s\n", name.GetChars(), TypeName.GetChars());
 
-	Derive(type, name);
-	type->Size = TentativeClass;
-
-	type->InsertIntoHash(false);
+	type->TypeName = name;
+	type->ParentClass = this;
+	type->Size = -1;
+	type->Pointers = NULL;
+	type->ConstructNative = NULL;
+	type->ClassIndex = m_Types.Push (type);
+	type->Defaults = NULL;
+	type->FlatPointers = NULL;
+	type->bRuntimeClass = true;
+	type->ActorInfo = NULL;
+	type->InsertIntoHash();
 	return type;
 }
 
-//==========================================================================
-//
-// PClass :: FindVirtualIndex
-//
-// Compares a prototype with the existing list of virtual functions
-// and returns an index if something matching is found.
-//
-//==========================================================================
-
-int PClass::FindVirtualIndex(FName name, PPrototype *proto)
+// This is used by DECORATE to assign ActorInfos to internal classes
+void PClass::InitializeActorInfo ()
 {
-	for (unsigned i = 0; i < Virtuals.Size(); i++)
+	Symbols.SetParentTable (&ParentClass->Symbols);
+	Defaults = (BYTE *)M_Malloc(Size);
+	if (ParentClass->Defaults != NULL) 
 	{
-		if (Virtuals[i]->Name == name)
+		memcpy (Defaults, ParentClass->Defaults, ParentClass->Size);
+		if (Size > ParentClass->Size)
 		{
-			auto vproto = Virtuals[i]->Proto;
-			if (vproto->ReturnTypes.Size() != proto->ReturnTypes.Size() ||
-				vproto->ArgumentTypes.Size() != proto->ArgumentTypes.Size())
-			{
-				continue;	// number of parameters does not match, so it's incompatible
-			}
-			bool fail = false;
-			// The first argument is self and will mismatch so just skip it.
-			for (unsigned a = 1; a < proto->ArgumentTypes.Size(); a++)
-			{
-				if (proto->ArgumentTypes[a] != vproto->ArgumentTypes[a])
-				{
-					fail = true;
-					break;
-				}
-			}
-			if (fail) continue;
-
-			for (unsigned a = 0; a < proto->ReturnTypes.Size(); a++)
-			{
-				if (proto->ReturnTypes[a] != vproto->ReturnTypes[a])
-				{
-					fail = true;
-					break;
-				}
-			}
-			if (!fail) return i;
+			memset (Defaults + ParentClass->Size, 0, Size - ParentClass->Size);
 		}
 	}
-	return -1;
+	else
+	{
+		memset (Defaults, 0, Size);
+	}
+
+	FActorInfo *info = ActorInfo = new FActorInfo;
+	info->Class = this;
+	info->GameFilter = GAME_Any;
+	info->SpawnID = 0;
+	info->DoomEdNum = -1;
+	info->OwnedStates = NULL;
+	info->NumOwnedStates = 0;
+	info->Replacement = NULL;
+	info->Replacee = NULL;
+	info->StateList = NULL;
+	info->DamageFactors = NULL;
+	info->PainChances = NULL;
+	info->PainFlashes = NULL;
+	info->ColorSets = NULL;
+	m_RuntimeActors.Push (this);
 }
 
-PSymbol *PClass::FindSymbol(FName symname, bool searchparents) const
-{
-	if (VMType == nullptr) return nullptr;
-	return VMType->Symbols.FindSymbol(symname, searchparents);
-}
 
-//==========================================================================
-//
-// PClass :: BuildFlatPointers
-//
 // Create the FlatPointers array, if it doesn't exist already.
-// It comprises all the Pointers from superclasses plus this class's own
-// Pointers. If this class does not define any new Pointers, then
-// FlatPointers will be set to the same array as the super class.
-//
-//==========================================================================
-
+// It comprises all the Pointers from superclasses plus this class's own Pointers.
+// If this class does not define any new Pointers, then FlatPointers will be set
+// to the same array as the super class's.
 void PClass::BuildFlatPointers ()
 {
-	if (FlatPointers != nullptr)
+	if (FlatPointers != NULL)
 	{ // Already built: Do nothing.
 		return;
 	}
-	else if (ParentClass == nullptr)
-	{ // No parent (i.e. DObject: FlatPointers is the same as Pointers.
-		if (Pointers == nullptr)
-		{ // No pointers: Make FlatPointers a harmless non-nullptr.
+	else if (ParentClass == NULL)
+	{ // No parent: FlatPointers is the same as Pointers.
+		if (Pointers == NULL)
+		{ // No pointers: Make FlatPointers a harmless non-NULL.
 			FlatPointers = &TheEnd;
 		}
 		else
@@ -855,19 +461,7 @@ void PClass::BuildFlatPointers ()
 	else
 	{
 		ParentClass->BuildFlatPointers ();
-
-		TArray<size_t> ScriptPointers;
-
-		// Collect all pointers in scripted fields. These are not part of the Pointers list.
-		for (auto field : Fields)
-		{
-			if (!(field->Flags & VARF_Native))
-			{
-				field->Type->SetPointer(Defaults, unsigned(field->Offset), &ScriptPointers);
-			}
-		}
-
-		if (Pointers == nullptr && ScriptPointers.Size() == 0)
+		if (Pointers == NULL)
 		{ // No new pointers: Just use the same FlatPointers as the parent.
 			FlatPointers = ParentClass->FlatPointers;
 		}
@@ -875,108 +469,34 @@ void PClass::BuildFlatPointers ()
 		{ // New pointers: Create a new FlatPointers array and add them.
 			int numPointers, numSuperPointers;
 
-			if (Pointers != nullptr)
-			{
-				// Count pointers defined by this class.
-				for (numPointers = 0; Pointers[numPointers] != ~(size_t)0; numPointers++)
-				{
-				}
-			}
-			else numPointers = 0;
-
+			// Count pointers defined by this class.
+			for (numPointers = 0; Pointers[numPointers] != ~(size_t)0; numPointers++)
+			{ }
 			// Count pointers defined by superclasses.
 			for (numSuperPointers = 0; ParentClass->FlatPointers[numSuperPointers] != ~(size_t)0; numSuperPointers++)
 			{ }
 
 			// Concatenate them into a new array
-			size_t *flat = (size_t*)ClassDataAllocator.Alloc(sizeof(size_t) * (numPointers + numSuperPointers + ScriptPointers.Size() + 1));
+			size_t *flat = new size_t[numPointers + numSuperPointers + 1];
 			if (numSuperPointers > 0)
 			{
 				memcpy (flat, ParentClass->FlatPointers, sizeof(size_t)*numSuperPointers);
 			}
-			if (numPointers > 0)
-			{
-				memcpy(flat + numSuperPointers, Pointers, sizeof(size_t)*numPointers);
-			}
-			if (ScriptPointers.Size() > 0)
-			{
-				memcpy(flat + numSuperPointers + numPointers, &ScriptPointers[0], sizeof(size_t) * ScriptPointers.Size());
-			}
-			flat[numSuperPointers + numPointers + ScriptPointers.Size()] = ~(size_t)0;
+			memcpy (flat + numSuperPointers, Pointers, sizeof(size_t)*(numPointers+1));
 			FlatPointers = flat;
 		}
 	}
 }
 
-//==========================================================================
-//
-// PClass :: BuildArrayPointers
-//
-// same as above, but creates a list to dynamic object arrays
-//
-//==========================================================================
-
-void PClass::BuildArrayPointers()
+void PClass::FreeStateList ()
 {
-	if (ArrayPointers != nullptr)
-	{ // Already built: Do nothing.
-		return;
-	}
-	else if (ParentClass == nullptr)
-	{ // No parent (i.e. DObject: FlatPointers is the same as Pointers.
-		ArrayPointers = &TheEnd;
-	}
-	else
+	if (ActorInfo != NULL && ActorInfo->StateList != NULL)
 	{
-		ParentClass->BuildArrayPointers();
-
-		TArray<size_t> ScriptPointers;
-
-		// Collect all arrays to pointers in scripted fields.
-		for (auto field : Fields)
-		{
-			if (!(field->Flags & VARF_Native))
-			{
-				field->Type->SetPointerArray(Defaults, unsigned(field->Offset), &ScriptPointers);
-			}
-		}
-
-		if (ScriptPointers.Size() == 0)
-		{ // No new pointers: Just use the same ArrayPointers as the parent.
-			ArrayPointers = ParentClass->ArrayPointers;
-		}
-		else
-		{ // New pointers: Create a new FlatPointers array and add them.
-			int numSuperPointers;
-
-			// Count pointers defined by superclasses.
-			for (numSuperPointers = 0; ParentClass->ArrayPointers[numSuperPointers] != ~(size_t)0; numSuperPointers++)
-			{
-			}
-
-			// Concatenate them into a new array
-			size_t *flat = (size_t*)ClassDataAllocator.Alloc(sizeof(size_t) * (numSuperPointers + ScriptPointers.Size() + 1));
-			if (numSuperPointers > 0)
-			{
-				memcpy(flat, ParentClass->ArrayPointers, sizeof(size_t)*numSuperPointers);
-			}
-			if (ScriptPointers.Size() > 0)
-			{
-				memcpy(flat + numSuperPointers, &ScriptPointers[0], sizeof(size_t) * ScriptPointers.Size());
-			}
-			flat[numSuperPointers + ScriptPointers.Size()] = ~(size_t)0;
-			ArrayPointers = flat;
-		}
+		ActorInfo->StateList->Destroy();
+		M_Free (ActorInfo->StateList);
+		ActorInfo->StateList = NULL;
 	}
 }
-
-//==========================================================================
-//
-// PClass :: NativeClass
-//
-// Finds the native type underlying this class.
-//
-//==========================================================================
 
 const PClass *PClass::NativeClass() const
 {
@@ -988,31 +508,96 @@ const PClass *PClass::NativeClass() const
 	return cls;
 }
 
-VMFunction *PClass::FindFunction(FName clsname, FName funcname)
+PClass *PClass::GetReplacement() const
 {
-	auto cls = PClass::FindClass(clsname);
-	if (!cls) return nullptr;
-	auto func = dyn_cast<PFunction>(cls->FindSymbol(funcname, true));
-	if (!func) return nullptr;
-	return func->Variants[0].Implementation;
+	return ActorInfo->GetReplacement()->Class;
 }
 
-void PClass::FindFunction(VMFunction **pptr, FName clsname, FName funcname)
+// Symbol tables ------------------------------------------------------------
+
+PSymbol::~PSymbol()
 {
-	auto cls = PClass::FindClass(clsname);
-	if (!cls) return;
-	auto func = dyn_cast<PFunction>(cls->FindSymbol(funcname, true));
-	if (!func) return;
-	*pptr = func->Variants[0].Implementation;
-	FunctionPtrList.Push(pptr);
 }
 
-unsigned GetVirtualIndex(PClass *cls, const char *funcname)
+PSymbolTable::~PSymbolTable ()
 {
-	// Look up the virtual function index in the defining class because this may have gotten overloaded in subclasses with something different than a virtual override.
-	auto sym = dyn_cast<PFunction>(cls->FindSymbol(funcname, false));
-	assert(sym != nullptr);
-	auto VIndex = sym->Variants[0].Implementation->VirtualIndex;
-	return VIndex;
+	ReleaseSymbols();
 }
 
+void PSymbolTable::ReleaseSymbols()
+{
+	for (unsigned int i = 0; i < Symbols.Size(); ++i)
+	{
+		delete Symbols[i];
+	}
+	Symbols.Clear();
+}
+
+void PSymbolTable::SetParentTable (PSymbolTable *parent)
+{
+	ParentSymbolTable = parent;
+}
+
+PSymbol *PSymbolTable::FindSymbol (FName symname, bool searchparents) const
+{
+	int min, max;
+
+	min = 0;
+	max = (int)Symbols.Size() - 1;
+
+	while (min <= max)
+	{
+		unsigned int mid = (min + max) / 2;
+		PSymbol *sym = Symbols[mid];
+
+		if (sym->SymbolName == symname)
+		{
+			return sym;
+		}
+		else if (sym->SymbolName < symname)
+		{
+			min = mid + 1;
+		}
+		else
+		{
+			max = mid - 1;
+		}
+	}
+	if (searchparents && ParentSymbolTable != NULL)
+	{
+		return ParentSymbolTable->FindSymbol (symname, true);
+	}
+	return NULL;
+}
+
+PSymbol *PSymbolTable::AddSymbol (PSymbol *sym)
+{
+	// Insert it in sorted order.
+	int min, max, mid;
+
+	min = 0;
+	max = (int)Symbols.Size() - 1;
+
+	while (min <= max)
+	{
+		mid = (min + max) / 2;
+		PSymbol *tsym = Symbols[mid];
+
+		if (tsym->SymbolName == sym->SymbolName)
+		{ // A symbol with this name already exists in the table
+			return NULL;
+		}
+		else if (tsym->SymbolName < sym->SymbolName)
+		{
+			min = mid + 1;
+		}
+		else
+		{
+			max = mid - 1;
+		}
+	}
+
+	// Good. The symbol is not in the table yet.
+	Symbols.Insert (MAX(min, max), sym);
+	return sym;
+}

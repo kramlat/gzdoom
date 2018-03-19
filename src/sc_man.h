@@ -19,20 +19,13 @@ public:
 	FScanner &operator=(const FScanner &other);
 
 	void Open(const char *lumpname);
-	bool OpenFile(const char *filename);
+	void OpenFile(const char *filename);
 	void OpenMem(const char *name, const char *buffer, int size);
-	void OpenString(const char *name, FString buffer);
 	void OpenLumpNum(int lump);
 	void Close();
-	void SetParseVersion(VersionInfo ver)
-	{
-		ParseVersion = ver;
-	}
 
 	void SetCMode(bool cmode);
 	void SetEscape(bool esc);
-	void SetStateMode(bool stately);
-	void DisableStateOptions();
 	const SavedPos SavePos();
 	void RestorePos(const SavedPos &pos);
 
@@ -57,12 +50,6 @@ public:
 	bool GetFloat();
 	void MustGetFloat();
 	bool CheckFloat();
-	
-	// Token based variant
-	bool CheckValue(bool allowfloat);
-	void MustGetValue(bool allowfloat);
-	bool CheckBoolToken();
-	void MustGetBoolToken();
 
 	void UnGet();
 
@@ -71,8 +58,8 @@ public:
 	int MustMatchString(const char * const *strings, size_t stride = sizeof(char*));
 	int GetMessageLine();
 
-	void ScriptError(const char *message, ...) GCCPRINTF(2,3);
-	void ScriptMessage(const char *message, ...) GCCPRINTF(2,3);
+	void ScriptError(const char *message, ...);
+	void ScriptMessage(const char *message, ...);
 
 	bool isText();
 
@@ -109,13 +96,7 @@ protected:
 	const char *LastGotPtr;
 	int LastGotLine;
 	bool CMode;
-	uint8_t StateMode;
-	bool StateOptions;
 	bool Escape;
-	VersionInfo ParseVersion = { 0, 0, 0 };	// no ZScript extensions by default
-
-
-	bool ScanValue(bool allowfloat);
 };
 
 enum
@@ -138,10 +119,7 @@ enum
 	MSG_WARNING,
 	MSG_FATAL,
 	MSG_ERROR,
-	MSG_OPTERROR,
-	MSG_DEBUGERROR,
-	MSG_DEBUGWARN,
-	MSG_DEBUGMSG,
+	MSG_DEBUG,
 	MSG_LOG,
 	MSG_DEBUGLOG,
 	MSG_MESSAGE
@@ -155,10 +133,7 @@ enum
 
 struct FScriptPosition
 {
-	static int WarnCounter;
 	static int ErrorCounter;
-	static bool StrictErrors;
-	static bool errorout;
 	FString FileName;
 	int ScriptLine;
 
@@ -170,10 +145,9 @@ struct FScriptPosition
 	FScriptPosition(FString fname, int line);
 	FScriptPosition(FScanner &sc);
 	FScriptPosition &operator=(const FScriptPosition &other);
-	void Message(int severity, const char *message,...) const GCCPRINTF(3,4);
+	void Message(int severity, const char *message,...) const;
 	static void ResetErrorCounter()
 	{
-		WarnCounter = 0;
 		ErrorCounter = 0;
 	}
 };
